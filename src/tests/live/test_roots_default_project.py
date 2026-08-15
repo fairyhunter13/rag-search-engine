@@ -13,6 +13,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.types import ListRootsResult, Root
 from pydantic import FileUrl
 
+from tests.live._run import run_tool
 from tests.live._sample_workspace import SampleWorkspace
 
 pytestmark = pytest.mark.live
@@ -37,21 +38,21 @@ async def _graph_no_project_path(advertised_roots: list[str]) -> dict:
         return json.loads(res.content[0].text)
 
 
-async def test_roots_default_resolves_to_client_project(sample_workspace: SampleWorkspace):
+def test_roots_default_resolves_to_client_project(sample_workspace: SampleWorkspace):
     """graph with empty project_path resolves to the project advertised in the client's roots,
     not to projects[0]."""
     from rag_search.core.registry import canonicalize_path
 
     target = sample_workspace.promo
-    data = await _graph_no_project_path([target])
+    data = run_tool(_graph_no_project_path([target]))
     assert data.get("resolved_project") == canonicalize_path(target), (
         f"expected resolution to advertised root {target}, got {data}"
     )
 
 
-async def test_unregistered_root_fails_loud(sample_workspace: SampleWorkspace):
+def test_unregistered_root_fails_loud(sample_workspace: SampleWorkspace):
     """A client root that isn't a registered project must fail loud with candidates — never a
     silent fall-through to the first registry entry."""
-    data = await _graph_no_project_path(["/tmp/rse-not-a-registered-project"])
+    data = run_tool(_graph_no_project_path(["/tmp/rse-not-a-registered-project"]))
     assert "project_path required" in data.get("error", ""), data
     assert isinstance(data.get("candidates"), list) and data["candidates"], data

@@ -7,10 +7,11 @@ rather than simply leaving. That keeps fp1/fp2 discriminating: a variant that ca
 would be caught by _REMOVED, and one that was dropped by mistake by _WHATS.
 """
 from __future__ import annotations
-import asyncio, json, sqlite3
+import json, sqlite3
 from pathlib import Path
 import pytest
 
+from tests.live._run import run_tool
 from tests.live._sample_workspace import SampleWorkspace
 
 pytestmark = pytest.mark.live
@@ -96,7 +97,7 @@ def test_fp3_l1_only_in_all_dbs(sample_workspace):
 
 def test_fp5_service_search(service_path):
     from rag_search.server.mcp import search as t
-    d = json.loads(asyncio.run(t("function definition", project_paths=[service_path])))
+    d = json.loads(run_tool(t("function definition", project_paths=[service_path])))
     assert d.get("total", 0) > 0, f"search 0: {d}"
 
 
@@ -104,14 +105,14 @@ def test_fp6_service_graph(service_path):
     from rag_search.server.mcp import graph as t
     sym = _sym(service_path); assert sym
     for rel in ("callers","callees","impact","definition"):
-        d = json.loads(asyncio.run(t(sym, service_path, rel)))
+        d = json.loads(run_tool(t(sym, service_path, rel)))
         assert isinstance(d, dict)
 
 
 @pytest.mark.parametrize("what", _WHATS)
 def test_fp7_service_overview(what, service_path):
     from rag_search.server.mcp import overview as t
-    d = json.loads(asyncio.run(t(service_path, what)))
+    d = json.loads(run_tool(t(service_path, what)))
     assert isinstance(d, dict) and "error" not in d, f"{what!r}: {d}"
 
 
@@ -122,7 +123,7 @@ def test_fp8_service_status(service_path):
     # pinned the percentage at a permanent 100. `index_state` is what discriminates now, and
     # `hierarchy_quality` (Leiden partition quality — no LLM in it) is unchanged.
     from rag_search.server.mcp import overview as t
-    d = json.loads(asyncio.run(t(service_path, "status")))
+    d = json.loads(run_tool(t(service_path, "status")))
     assert "index_state" in d and "hierarchy_quality" in d
     assert d["index_state"] in ("indexing", "degraded", "ready"), d["index_state"]
     assert "l1_enriched_pct" not in d and "l2_enriched_pct" not in d
@@ -142,7 +143,7 @@ def fed_root(sample_workspace: SampleWorkspace) -> str:
 
 def test_fp10_federation_search(fed_root):
     from rag_search.server.mcp import search as t
-    d = json.loads(asyncio.run(t("function", project_paths=[fed_root])))
+    d = json.loads(run_tool(t("function", project_paths=[fed_root])))
     assert d.get("total", 0) > 0
 
 
@@ -152,7 +153,7 @@ def test_fp11_federation_status(fed_root):
     # unsafe, since BPRE's `federation_discover` and `daemon/federation.py` share a name and
     # nothing else.
     from rag_search.server.mcp import overview as t
-    d = json.loads(asyncio.run(t(fed_root, "status")))
+    d = json.loads(run_tool(t(fed_root, "status")))
     assert "members" in d and d["members"] and "index_state" in d
     assert all("index_state" in m for m in d["members"]), d["members"][:2]
     assert "l1_enriched_pct" not in d and "l2_enriched_pct" not in d

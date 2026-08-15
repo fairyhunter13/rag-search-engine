@@ -9,13 +9,13 @@ Invariant #7: overview(status, root) aggregates counts across members and includ
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import shutil
 
 import pytest
 
 from rag_search.core.config import index_dir
+from tests.live._run import run_tool
 
 pytestmark = pytest.mark.live
 
@@ -66,7 +66,7 @@ def test_inv4_root_scoped_search_fanout(safe_tmp_path):
         _index_project(str(member))       # marker lives only in member
 
         # search scoped to root must reach member's marker
-        data = json.loads(asyncio.run(mcp_search(marker, "code", [str(root)])))
+        data = json.loads(run_tool(mcp_search(marker, "code", [str(root)])))
         files = [r["path"] for r in data.get("results", [])]
         assert any(str(member) in f for f in files), \
             f"member not in root-scoped search results: {files}"
@@ -103,7 +103,7 @@ def test_inv5_graph_definition_fanout(safe_tmp_path):
         _index_project(str(root))
         _index_project(str(member))
 
-        data = json.loads(asyncio.run(mcp_graph(marker, str(root), "definition")))
+        data = json.loads(run_tool(mcp_graph(marker, str(root), "definition")))
         matches = data.get("matches", [])
         member_matches = [m for m in matches if str(member) in m.get("file", "")]
         assert member_matches, (
@@ -134,7 +134,7 @@ def test_inv7_overview_status_aggregates(safe_tmp_path):
         _index_project(str(root))
         _index_project(str(member))
 
-        status = json.loads(asyncio.run(mcp_overview(str(root), "status")))
+        status = json.loads(run_tool(mcp_overview(str(root), "status")))
         # members[] must include the member path
         member_paths = [m["path"] for m in status.get("members", [])]
         assert str(member) in member_paths, \

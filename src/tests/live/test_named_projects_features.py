@@ -10,11 +10,11 @@ who owns them instead).
 """
 from __future__ import annotations
 
-import asyncio
 import json
 
 import pytest
 
+from tests.live._run import run_tool
 from tests.live._sample_workspace import SampleWorkspace
 
 pytestmark = pytest.mark.live
@@ -56,7 +56,7 @@ class TestNamedProjectsSearch:
         from rag_search.server.mcp import search as search_tool
         path = named_projects.get(key, "")
         assert path, f"{key} not in registry — all 3 project roles must be registered"
-        data = json.loads(asyncio.run(search_tool("function", scope=scope, project_paths=[path])))
+        data = json.loads(run_tool(search_tool("function", scope=scope, project_paths=[path])))
         assert "results" in data, f"{key} scope={scope}: missing 'results'"
         assert "total" in data, f"{key} scope={scope}: missing 'total'"
 
@@ -71,7 +71,7 @@ class TestNamedProjectsOverview:
         from rag_search.server.mcp import overview as overview_tool
         path = named_projects.get(key, "")
         assert path, f"{key} not in registry — all 3 project roles must be registered"
-        result = asyncio.run(overview_tool(path, what))
+        result = run_tool(overview_tool(path, what))
         data = json.loads(result)
         assert isinstance(data, dict), f"{key} overview({what!r}) must return JSON object"
 
@@ -82,7 +82,7 @@ class TestNamedProjectsOverview:
         from rag_search.server.mcp import overview as overview_tool
         path = named_projects.get(key, "")
         assert path, f"{key} not in registry — all 3 project roles must be registered"
-        result = asyncio.run(overview_tool(path, what))
+        result = run_tool(overview_tool(path, what))
         data = json.loads(result)
         assert isinstance(data, dict), f"{key} overview({what!r}) must return JSON object"
 
@@ -131,5 +131,5 @@ class TestNamedProjectsGraph:
         row = con.execute("SELECT name FROM symbols LIMIT 1").fetchone()
         con.close()
         assert row, f"{key}: no symbols in graph.db — project must have symbols extracted"
-        data = json.loads(asyncio.run(graph_tool(row[0], path, "definition")))
+        data = json.loads(run_tool(graph_tool(row[0], path, "definition")))
         assert isinstance(data, dict), f"{key}: graph(definition) must return JSON object"

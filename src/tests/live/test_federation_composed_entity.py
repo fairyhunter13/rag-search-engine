@@ -10,10 +10,11 @@ behavior must stay invariant under semantically-neutral transforms. Here:
 """
 from __future__ import annotations
 
-import asyncio
 import json
 
 import pytest
+
+from tests.live._run import run_tool
 
 pytestmark = pytest.mark.live
 
@@ -90,7 +91,7 @@ class TestFederationComposedEntity:
 
         members = expand_federation(fed_root)
         assert len(members) >= 2, "Need ≥2 members for fan-out test"
-        data = json.loads(asyncio.run(mcp_search("function", project_paths=[fed_root])))
+        data = json.loads(run_tool(mcp_search("function", project_paths=[fed_root])))
         searched = data.get("projects_searched", [])
         member_paths = [m for m in members if m != fed_root]
         covered = [m for m in member_paths if m in searched]

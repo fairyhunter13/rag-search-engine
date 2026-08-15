@@ -5,13 +5,13 @@ core/registry.py fix registry-key / index_dir() misses on non-canonical paths.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import shutil
 
 import pytest
 
 from rag_search.core.config import index_dir
+from tests.live._run import run_tool
 
 pytestmark = pytest.mark.live
 
@@ -107,7 +107,7 @@ def test_s3_index_tool_canonicalizes_symlink(safe_tmp_path):
     _clean([root, member])
     try:
         raw = str(root / "link")
-        result = json.loads(asyncio.run(mcp_index(raw, enabled=True)))
+        result = json.loads(run_tool(mcp_index(raw, enabled=True)))
         assert result.get("status") == "flagged", result
         canon = canonicalize_path(raw)
         assert canon == str(member)
@@ -168,7 +168,7 @@ def test_s1_overview_ask_graph_resolve_symlink_subdir_trailing_slash(safe_tmp_pa
         upsert_project(ProjectEntry(path=str(member), enabled=True))
         _index_project(str(member))
         for probe in (str(root / "link"), str(sub), str(member) + "/"):
-            ov = json.loads(asyncio.run(mcp_overview(probe, "status")))
+            ov = json.loads(run_tool(mcp_overview(probe, "status")))
             assert ov.get("resolved_project") == str(member), (probe, ov)
             # Renamed from kb_state with tier 3 (HR7, _overview.py:155-161).
             assert ov.get("index_state") is not None, (probe, ov)
@@ -178,7 +178,7 @@ def test_s1_overview_ask_graph_resolve_symlink_subdir_trailing_slash(safe_tmp_pa
             answer = run_ask(marker, probe, "all")
             assert "not indexed" not in answer.lower(), (probe, answer)
 
-            gd = json.loads(asyncio.run(mcp_graph(marker, probe, "definition", "")))
+            gd = json.loads(run_tool(mcp_graph(marker, probe, "definition", "")))
             assert gd.get("resolved_project") == str(member), (probe, gd)
             assert any(m.get("name") == marker for m in gd.get("matches", [])), (probe, gd)
     finally:
@@ -223,8 +223,8 @@ def test_t1_url_scope_is_read_when_the_client_offers_no_roots(safe_tmp_path):
 
         # The ladder prefers an explicit argument over the URL, so a caller on a scoped
         # connection can still ask about another project.
-        assert asyncio.run(_default_or_error(_UrlCtx(str(member)), "")) == (str(member), None)
-        assert asyncio.run(_default_or_error(_UrlCtx(str(member)), str(root))) == (
+        assert run_tool(_default_or_error(_UrlCtx(str(member)), "")) == (str(member), None)
+        assert run_tool(_default_or_error(_UrlCtx(str(member)), str(root))) == (
             str(root), None), "explicit argument must outrank the URL"
     finally:
         _clean([root, member])
@@ -263,7 +263,7 @@ def test_t2_unscoped_search_fails_loud_instead_of_scanning_the_fleet():
     """
     from rag_search.server.mcp import search as mcp_search
 
-    payload = json.loads(asyncio.run(
+    payload = json.loads(run_tool(
         mcp_search("reconcile loop", "code", None, 8, "compact", _UrlCtx())))  # unscoped-ok
     assert "error" in payload, f"unscoped search still returned results: {str(payload)[:300]}"
     assert "project_path required" in payload["error"]
@@ -286,7 +286,7 @@ def test_s2_search_symlinked_member_does_not_fanout(safe_tmp_path):
         upsert_project(ProjectEntry(path=str(root), enabled=True))
         index_members(str(root))
         _index_project(str(member))
-        data = json.loads(asyncio.run(mcp_search(marker, "code", [str(root / "link")])))
+        data = json.loads(run_tool(mcp_search(marker, "code", [str(root / "link")])))
         assert data.get("projects_searched") == [str(member)], data
         files = [r["path"] for r in data.get("results", [])]
         assert any(str(member) in f for f in files), (marker, files)

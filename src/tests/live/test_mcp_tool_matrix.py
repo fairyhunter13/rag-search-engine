@@ -15,7 +15,6 @@ Requires daemon at :8765 with ≥1 indexed project.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import sqlite3
 
@@ -23,6 +22,7 @@ import pytest
 
 from rag_search.core.config import project_graph_db
 from rag_search.query.search import SCOPES
+from tests.live._run import run_tool
 from tests.live._sample_workspace import SampleWorkspace
 
 pytestmark = pytest.mark.live
@@ -56,13 +56,13 @@ class TestGraphRelations:
     @pytest.mark.parametrize("relation", _GRAPH_RELATIONS_SIMPLE)
     def test_graph_relation_returns_dict(self, graph_proj, any_symbol, relation):
         from rag_search.server.mcp import graph as graph_tool
-        result = asyncio.run(graph_tool(any_symbol, graph_proj, relation))
+        result = run_tool(graph_tool(any_symbol, graph_proj, relation))
         data = json.loads(result)
         assert isinstance(data, dict), f"graph({relation!r}) must return JSON object"
 
     def test_graph_path_without_to_symbol_returns_error_or_empty(self, graph_proj, any_symbol):
         from rag_search.server.mcp import graph as graph_tool
-        result = asyncio.run(graph_tool(any_symbol, graph_proj, "path"))
+        result = run_tool(graph_tool(any_symbol, graph_proj, "path"))
         data = json.loads(result)
         assert "error" in data or "path" in data
 
@@ -74,7 +74,7 @@ class TestGraphRelations:
         that the result was a dict — true of every branch, so it never discriminated.
         """
         from rag_search.server.mcp import graph as graph_tool
-        data = json.loads(asyncio.run(graph_tool(any_symbol, graph_proj, "semantic_trace")))
+        data = json.loads(run_tool(graph_tool(any_symbol, graph_proj, "semantic_trace")))
         assert "error" in data, f"unknown relation must error; got {data}"
         assert "semantic_trace" not in data.get("valid", []), (
             "semantic_trace must not be advertised as valid — it has no implementation"
@@ -82,7 +82,7 @@ class TestGraphRelations:
 
     def test_graph_nonexistent_returns_error(self):
         from rag_search.server.mcp import graph as graph_tool
-        data = json.loads(asyncio.run(graph_tool("foo", "/nonexistent", "definition")))
+        data = json.loads(run_tool(graph_tool("foo", "/nonexistent", "definition")))
         assert "error" in data
 
 
@@ -91,7 +91,7 @@ class TestSearchScopes:
     @pytest.mark.parametrize("scope", SCOPES)
     def test_search_scope(self, indexed_proj, scope):
         from rag_search.server.mcp import search as search_tool
-        data = json.loads(asyncio.run(
+        data = json.loads(run_tool(
             search_tool("function", scope=scope, project_paths=[indexed_proj])
         ))
         assert "total" in data and "results" in data, f"search(scope={scope!r}) missing keys"
@@ -112,7 +112,7 @@ class TestSearchScopes:
         are both present is what makes the reply self-correcting.
         """
         from rag_search.server.mcp import search as search_tool
-        data = json.loads(asyncio.run(
+        data = json.loads(run_tool(
             search_tool("function", scope=indexed_proj, project_paths=[indexed_proj])
         ))
         assert "error" in data, f"unknown scope must error, not answer; got {data}"
@@ -125,7 +125,7 @@ class TestSearchScopes:
 
     def test_search_federated_project_paths(self, indexed_proj):
         from rag_search.server.mcp import search as search_tool
-        data = json.loads(asyncio.run(
+        data = json.loads(run_tool(
             search_tool("function", project_paths=[indexed_proj])
         ))
         assert indexed_proj in data.get("projects_searched", [])
@@ -136,7 +136,7 @@ class TestOverviewNewWhats:
     @pytest.mark.parametrize("what", ["metrics", "projects"])
     def test_overview_what_returns_nonempty_dict(self, indexed_proj, what):
         from rag_search.server.mcp import overview as overview_tool
-        data = json.loads(asyncio.run(overview_tool(indexed_proj, what)))
+        data = json.loads(run_tool(overview_tool(indexed_proj, what)))
         assert isinstance(data, dict), f"overview(what={what!r}) must return JSON object"
         assert data, f"overview(what={what!r}) must not return empty dict"
 
