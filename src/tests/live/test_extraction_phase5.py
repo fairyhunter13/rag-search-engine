@@ -50,7 +50,7 @@ def _graph_for(root):
 
 
 def test_ts8_calls_resolve_within_a_language_family(safe_tmp_path):
-    """S8: a JS call must not bind to a PHP definition of the same name — and must still
+    """TS8: a JS call must not bind to a PHP definition of the same name — and must still
     bind to the JS one. Both halves run off a single extraction of the same tree."""
     root = safe_tmp_path / "s8"
     _write(root, "lib.php", "<?php\nfunction shared_handler() { return 1; }\n")
@@ -108,7 +108,7 @@ def test_ts0_same_file_calls_become_edges(safe_tmp_path):
 
 
 def test_ts10_ambiguous_calls_emit_nothing_and_same_file_wins(safe_tmp_path):
-    """S10: the narrowest scope holding a candidate must hold exactly one, or no edge is emitted.
+    """TS10: the narrowest scope holding a candidate must hold exactly one, or no edge is emitted.
 
     Restoring same-file edges (TS0 above) left the inverse defect: every candidate the family
     held was emitted, so one call site bound to N definitions and `graph()` presented all N with
@@ -178,7 +178,7 @@ def test_ts10_ambiguous_calls_emit_nothing_and_same_file_wins(safe_tmp_path):
 
 
 def test_ts10b_recursion_does_not_fall_through_to_another_file(safe_tmp_path):
-    """S10: drop the caller from the tier that *won*, never before choosing the tier.
+    """TS10b: drop the caller from the tier that *won*, never before choosing the tier.
 
     A recursive call in the only file defining that name has an empty tier once the caller is
     removed. Removing it first instead makes the same-file tier look empty, falls through to the
@@ -211,7 +211,7 @@ def test_ts8b_family_table_only_widens(safe_tmp_path):
 
 
 def test_ts3_extractor_rev_is_part_of_graph_identity(safe_tmp_path):
-    """S3: a stored graph stamped without EXTRACTOR_REV must read as stale.
+    """TS3: a stored graph stamped without EXTRACTOR_REV must read as stale.
 
     Resolution lives in `sweeps._extract_graph`, which no byte fingerprint covers, so without
     the revision in the identity a resolution change would serve stale edges forever. Stamping
@@ -237,7 +237,7 @@ def test_ts3_extractor_rev_is_part_of_graph_identity(safe_tmp_path):
 
 
 def test_ts1_names_are_the_grammar_s_decision_not_python_s():
-    """S1: names their own grammar named must survive; only impossible text is rejected."""
+    """TS1: names their own grammar named must survive; only impossible text is rejected."""
     for name in ("$user", "list-ref", "empty?", "save!", "@media", "kebab-case-fn"):
         assert _is_name_text(name), f"S1: {name!r} is a valid name in some grammar"
     for junk in ("", "a b", "a\nb", "\t"):
@@ -245,7 +245,7 @@ def test_ts1_names_are_the_grammar_s_decision_not_python_s():
 
 
 def test_ts4_call_nodes_matched_by_token_not_substring():
-    """S4: `call`/`invocation` as node-type tokens, and a signature is not a call."""
+    """TS4: `call`/`invocation` as node-type tokens, and a signature is not a call."""
     for kind in ("call", "call_expression", "function_call", "method_invocation",
                  "macro_invocation"):
         assert _is_call_node(kind), f"S4: {kind} is a call node"
@@ -263,7 +263,7 @@ def test_ts4b_signature_nodes_yield_no_calls():
 
 
 def test_ts7_extensionless_shebang_files_get_a_language(safe_tmp_path):
-    """S7: path detection misses extensionless files; the shebang answers for executables."""
+    """TS7: path detection misses extensionless files; the shebang answers for executables."""
     root = safe_tmp_path / "s7"
     root.mkdir(parents=True, exist_ok=True)
     assert detect_language(_write(root, "runner", "#!/usr/bin/env python3\nimport os\n")) == \
