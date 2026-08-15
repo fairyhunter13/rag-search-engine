@@ -857,6 +857,86 @@ def test_e8b_shipped_mcp_configs_advertise_the_registered_tools():
     )
 
 
+def _mcp_call_regions(text: str):
+    """Yield (line_no, snippet) for the parts of a skill body that hold tool calls.
+
+    Two shapes, because the skills use both: an untagged ``` fence, and inline `code` inside a
+    prose bullet. A ```bash fence is neither — its `json.load(...)`/`print(...)` are shell, not
+    MCP, and reading them as tool calls is the false positive that would force an allowlist.
+    """
+    lines = text.splitlines()
+    fence: str | None = None
+    buf: list[str] = []
+    start = 0
+    for i, line in enumerate(lines, 1):
+        m = re.match(r"\s*```(\w*)\s*$", line)
+        if m:
+            if fence is None:
+                fence, buf, start = m.group(1), [], i
+            else:
+                if not fence:
+                    yield start, "\n".join(buf)
+                fence = None
+            continue
+        if fence is not None:
+            buf.append(line)
+            continue
+        inline = " ".join(re.findall(r"`([^`]+)`", line))
+        if inline:
+            yield i, inline
+
+
+def test_e8c_claude_skills_call_only_registered_tools():
+    """E8c: `.claude/skills/*.md` is the fourth mirror, and it drifted like the other three.
+
+    E8b above derives tool names from the registry for two JSON configs and the README, on the
+    reasoning that a mirror nobody derives goes stale. The skills are a mirror nobody derived: they
+    still told Claude to call `ask`, retired in favour of overview(what="communities"), in
+    pre-deploy, status and issue-sweep — and `overview(what=…)` with three values `_VALID` has
+    never held (`graph_diff`, `process_flows`, `service_mesh`). A skill is the path actually taken,
+    so a dead call here is not stale prose; it is an instruction to make a failing call.
+
+    Both vocabularies are derived, names and parameters alike, so this fails in both directions —
+    a tool added and left out of the skills reads the same as one retired and left in.
+
+    The parameter names are what make the scan precise without an allowlist. A region counts as a
+    tool call only if it uses one of them, which is what separates `search(query=…)` from
+    issue-sweep's `scan()`/`fix()` pseudocode and run-all-tests' prose mention of `gpu_temp_c()`.
+    """
+    from rag_search.server._overview import _VALID
+    from rag_search.server.mcp import mcp as _mcp
+
+    tools = asyncio.run(_mcp.list_tools())
+    registered = {t.name for t in tools}
+    params = {p for t in tools for p in t.inputSchema.get("properties", {})}
+    param_used = re.compile(r"\b({})\s*=".format("|".join(sorted(params))))
+    call = re.compile(r"\b([a-z_][a-z_0-9]{2,})\(")
+
+    skills = sorted((Path(__file__).parents[3] / ".claude" / "skills").rglob("SKILL.md"))
+    assert skills, "no .claude/skills/*/SKILL.md found — this guard would pass vacuously"
+
+    violations: list[str] = []
+    for path in skills:
+        for line_no, snippet in _mcp_call_regions(path.read_text(encoding="utf-8")):
+            if not param_used.search(snippet):
+                continue
+            for name in call.findall(snippet):
+                if name not in registered:
+                    violations.append(
+                        f"{path.parent.name}/SKILL.md:{line_no} calls `{name}(` — the server "
+                        f"registers {sorted(registered)}"
+                    )
+            for what in re.findall(r"what\s*=\s*['\"](\w+)['\"]", snippet):
+                if what not in _VALID:
+                    violations.append(
+                        f"{path.parent.name}/SKILL.md:{line_no} calls overview(what={what!r}) — "
+                        f"_overview._VALID accepts {sorted(_VALID)}"
+                    )
+    assert not violations, "skills instruct Claude to make calls the server rejects:\n  " + (
+        "\n  ".join(violations)
+    )
+
+
 # ── Chat quality: comprehensive question coverage ─────────────────────────────
 
 

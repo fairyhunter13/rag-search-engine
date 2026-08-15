@@ -711,16 +711,23 @@ def test_rl2_api_reload_refuses_while_this_suite_holds_the_lease():
                     "— the daemon is now restarting underneath the rest of the run")
 
 
+@pytest.mark.exclusive
 def test_api_reload_returns_reloading():
     """POST /api/reload on the LIVE daemon — handler sends SIGTERM
     to os.getpid() so in-process TestClient would kill the test process.
     Systemd restarts the daemon within ~1s; we wait for readiness before finishing.
 
-    Marked slow: daemon restart un-pauses sweeps (new daemon doesn't inherit
-    pause_sweeps HTTP state), so the fresh process runs a full reconcile walk over the
-    registered fleet. The 37+ min figure was BPRE's rebuild across every federation root
-    and is gone with it; the walk itself still costs minutes on a large fleet, and it
-    still runs unpaused, which is the part that makes this full-suite-only.
+    Marked `exclusive` for the opposite reason CB3/CB4/CB6 are: those need a quiet daemon to
+    measure, this one destroys quiet. A restart un-pauses sweeps (the new process doesn't inherit
+    pause_sweeps HTTP state), so it runs a full reconcile walk over the registered fleet. The 37+
+    min figure was BPRE's rebuild across every federation root and is gone with it; the walk itself
+    still costs minutes on a large fleet, and it still runs unpaused.
+
+    The marker is load-bearing, and it was absent. This said "Marked slow" and `slow` was retired,
+    so nothing enforced the intent and `-m "live and not costly and not exclusive"` collected it —
+    every fast run restarted the daemon underneath itself. Measured 2026-08-15: a fast-lane suite
+    3:58 into its run faced a daemon reporting `uptime_s: 225.8`, i.e. restarted ~12 s in, and any
+    MCP call in flight died with a closed socket. The full suite runs unfiltered and still gets it.
     """
     import time
     import urllib.request
