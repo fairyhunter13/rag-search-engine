@@ -510,7 +510,24 @@ def test_claude_md_stays_an_instruction_file() -> None:
 # Same shape one level up: 8,414 lines of tracked markdown after the 2026-08-14 prune, which
 # removed a duplicated invariant register, a doctrine ladder and three orphaned records. Prose
 # grows back the way it grew the first time — a paragraph at a time, each one defensible.
-_TRACKED_MD_MAX_LINES = 8_800
+# Generated docs are excluded and the ceiling dropped by their 392 lines, leaving the prose budget
+# exactly as tight: a generated table grows one row per guard, so counting it bills a new test to
+# the prose account and fails the build for adding one.
+_TRACKED_MD_MAX_LINES = 8_408
+
+
+def _is_generated(text: str) -> bool:
+    """A doc that names the `scripts/` file that rewrites it, and says it is generated.
+
+    Both halves are required, and the script must exist: the claim alone would be an opt-out any
+    file could write for itself.
+    """
+    head = "\n".join(text.splitlines()[:5])
+    if "enerated" not in head:
+        return False
+    return any(
+        (_REPO_ROOT / m).is_file() for m in re.findall(r"scripts/[\w./-]+\.py", head)
+    )
 
 
 def test_tracked_markdown_stays_within_its_ceiling() -> None:
@@ -519,10 +536,10 @@ def test_tracked_markdown_stays_within_its_ceiling() -> None:
         ["git", "ls-files", "-z", "*.md"],
         cwd=_REPO_ROOT, capture_output=True, text=True, check=True,
     ).stdout.split("\0")
-    total = sum(
-        len((_REPO_ROOT / f).read_text(encoding="utf-8", errors="replace").splitlines())
-        for f in files if f
-    )
+    bodies = [
+        (_REPO_ROOT / f).read_text(encoding="utf-8", errors="replace") for f in files if f
+    ]
+    total = sum(len(b.splitlines()) for b in bodies if not _is_generated(b))
     assert total <= _TRACKED_MD_MAX_LINES, (
         f"tracked markdown is {total} lines (ceiling {_TRACKED_MD_MAX_LINES}). New narrative "
         "belongs in docs/decisions/ as its own dated record, not appended to a doc a reader "
