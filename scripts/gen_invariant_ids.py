@@ -30,6 +30,9 @@ OUT = REPO / "docs" / "reference" / "invariant-ids.md"
 SPEC = REPO / "docs" / "architecture" / "federation-ops-and-invariants.md"
 
 ID = re.compile(r"\b([A-Z]{1,4}\d{1,2}[a-z]?)\b")
+# What may sit immediately before a citation. `[A-Z0-9_]` yields `Z0` and a query plan's `0:=M1`
+# yields `M1`; both were reported as invariants nobody had defined, which is true and useless.
+RANGE = re.compile(r"[A-Z]{1,4}\d{1,2}[a-z]?-$")
 # Two ways a guard claims an id, and the repo uses both. The name is authoritative because it is
 # what `pytest -k cb3` selects and what a failure line prints; the docstring opener is the older
 # convention and survives where a test predates the naming one.
@@ -96,31 +99,64 @@ def _declared_in_spec() -> dict[str, str]:
 
 
 def _comment_declarations() -> dict[str, tuple[str, int, str]]:
-    """id -> (path, line, claim) for the ids a source comment introduces.
+    """id -> (path, line, claim) for the ids introduced in prose rather than by a guard.
 
     Source uses the same opener a test docstring does — `# H1: StructureKind → our canonical kind`,
     `# S8: the host language of a file, cached`. Not scanning for it reported those ids as
     undefined while their definition sat one grep away, which is the confusion this file exists
-    to remove. Only the first site counts: a repeated `# S8:` restates one rule, it does not
-    declare a second.
+    to remove.
+
+    A docstring *body* line counts too, not just the opener: `test_capability_parity.py` introduces
+    A1, A2 and A3 as an enumeration under one summary, which is a list of three declarations and
+    reads as none. Only the first site counts — a repeated `# S8:` restates one rule.
     """
     out: dict[str, tuple[str, int, str]] = {}
+    decl = re.compile(r'\s*(?:#|""")?\s*([A-Z]{1,4}\d{1,2}[a-z]?)\b\s*[:—–-]\s+(\S.*)')
+
+    def take(id_: str, rel: str, line: int, claim: str) -> None:
+        if id_ not in NOT_IDS and id_ not in out:
+            out[id_] = (rel, line, claim.strip().rstrip('"').strip() or "—")
+
     for path in _sources():
-        rel = str(path.relative_to(REPO))
-        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            m = re.match(r'\s*(?:#|""")\s*([A-Z]{1,4}\d{1,2}[a-z]?)\b\s*[:—–-]\s*(.+)', line)
-            if m and m[1] not in NOT_IDS and m[1] not in out:
-                out[m[1]] = (rel, n, m[2].strip().rstrip('"').strip() or "—")
+        rel, text = str(path.relative_to(REPO)), path.read_text(encoding="utf-8")
+        for n, line in enumerate(text.splitlines(), 1):
+            if (m := decl.match(line)) and line.lstrip()[:1] in "#\"":
+                take(m[1], rel, n, m[2])
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            doc = ast.get_docstring(node)
+            if not doc:
+                continue
+            # `node.lineno` is the def, not the docstring; body[0] is the string expression itself.
+            base = node.body[0].lineno if node.body else 1
+            for offset, line in enumerate(doc.splitlines()):
+                if m := decl.fullmatch(line.rstrip()):
+                    take(m[1], rel, base + offset, m[2])
     return out
+
+
+def _cites(text: str, start: int) -> bool:
+    """Is the id at `start` a citation, or an accident of the character before it?"""
+    before = text[max(0, start - 8):start]
+    prev = before[-1:]
+    if prev in (":", "=") or prev.isalnum() or prev == "_":
+        return False
+    # A hyphen carries a citation only in a range — `HQ1-HQ3`, `BPS1-BPS4`. `pre-M1` does not.
+    return bool(RANGE.search(before)) if prev == "-" else True
 
 
 def _referenced() -> dict[str, set[str]]:
     out: dict[str, set[str]] = defaultdict(set)
     for path in _sources():
-        rel = str(path.relative_to(REPO))
-        for tok in set(ID.findall(path.read_text(encoding="utf-8"))):
-            if tok not in NOT_IDS:
-                out[tok].add(rel)
+        rel, text = str(path.relative_to(REPO)), path.read_text(encoding="utf-8")
+        for m in ID.finditer(text):
+            if m[1] not in NOT_IDS and _cites(text, m.start()):
+                out[m[1]].add(rel)
     return out
 
 
