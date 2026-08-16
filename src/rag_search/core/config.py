@@ -88,6 +88,8 @@ IGNORED_DIRS: frozenset[str] = frozenset({
 class ProjectEntry:
     path: str
     enabled: bool = True
+    # Last *full* build. Incremental passes never restamp it, so it is completeness, not
+    # freshness — index age is the store's own `meta.source_mtime` (`_vectors_baseline`).
     indexed_at: str | None = None
     file_count: int = 0
     chunk_count: int = 0

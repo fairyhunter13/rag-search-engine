@@ -388,6 +388,73 @@ def _vectors_content_stale(path: str) -> list:
     return out
 
 
+# Files re-hashed per project per pass, and where the rotation resumes. Sized like
+# `_DRIFT_REPAIR_MAX`: a read+SHA of 500 files is cheap and GPU-free, and only the mismatches
+# reach the embedder. The cursor lives in the store's own meta beside `source_mtime`, so a
+# store carries its own progress and no new file is introduced. A parameter rather than a read of
+# the module global, so a caller wanting a different window says so instead of reaching in.
+_HASH_VERIFY_MAX = 500
+_HASH_CURSOR_KEY = "hash_verify_cursor"
+
+
+def _vectors_hash_drift(path: str, limit: int = _HASH_VERIFY_MAX) -> list:
+    """Indexed files whose stored content hash no longer matches what is on disk.
+
+    Every other freshness trigger here trusts mtime, and mtime is precisely what a history
+    rewrite falsifies: a rewrite stamps files with the operation's time, and once any later
+    write pushes the store watermark past them, `_vectors_content_stale` — which selects on
+    `mtime > baseline` — can never see them again. No set change either, since the paths still
+    exist, so `_index_set_drift` is silent too. The files stay indexed at a revision that is
+    gone, permanently, and every check reports the project converged.
+
+    No live instance: a 10,096-file store re-hashed in full the day this landed came back at
+    zero drift, which is the baseline this is expected to hold. VF2 constructs the state instead,
+    and asserts both halves — the mtime trigger blind to it, this one not.
+
+    Re-hashing is the only check that does not consult the clock, so it is the only one that
+    closes this. Bounded and resumable in `_index_set_drift`'s idiom — one rotating slice per
+    pass — so the cost per pass is fixed and a store is covered over several. Returns the files
+    rather than a bool: `index_files` re-hashes anyway and skips the byte-identical, so a false
+    positive here costs a read, not an embed.
+    """
+    from pathlib import Path
+
+    from rag_search.core.config import project_vector_db
+    from rag_search.index.indexer import _content_hash
+    from rag_search.index.store import VectorStore
+
+    vdb = project_vector_db(path)
+    if not vdb.exists():
+        return []
+    vs = VectorStore(vdb, migrate=False)
+    try:
+        rows = sorted(vs._con.execute("SELECT path, hash FROM file_hashes"))
+        cursor = vs.get_meta(_HASH_CURSOR_KEY) or ""
+    except Exception:
+        vs.close()
+        return []
+    if not rows:
+        vs.close()
+        return []
+    start = next((i for i, (p, _) in enumerate(rows) if p > cursor), 0)
+    # Wrap rather than stop at the end, so the rotation has no resting point at which the tail
+    # of a store is checked less often than its head.
+    window = [rows[(start + i) % len(rows)] for i in range(min(limit, len(rows)))]
+    out = []
+    for p, stored in window:
+        try:
+            content = Path(p).read_text(errors="replace")
+        except OSError:
+            continue  # gone or unreadable: the deletion paths own this, not us
+        if _content_hash(content) != stored:
+            out.append(Path(p))
+    try:
+        vs.set_meta(_HASH_CURSOR_KEY, window[-1][0])
+    finally:
+        vs.close()
+    return out
+
+
 def _index_set_drift(path: str) -> tuple[list, list[str]]:
     """(files discoverable but never processed, processed paths no longer discoverable).
 
@@ -467,7 +534,8 @@ def _purge_paths(project_path: str, paths: list[str]) -> None:
     readable — they are excluded by policy, not gone — so handing them to `index_files` would
     read them straight back in. Only an explicit delete expresses "should not be indexed".
     """
-    from rag_search.core.config import project_vector_db
+    from rag_search.core.config import project_graph_db, project_vector_db
+    from rag_search.graph.store import GraphStore
     from rag_search.index.store import VectorStore
 
     vdb = project_vector_db(project_path)
@@ -480,6 +548,21 @@ def _purge_paths(project_path: str, paths: list[str]) -> None:
         vs.flush()
     finally:
         vs.close()
+    # The graph half. Nothing else removes these: the graph lane is woken by a *code* fingerprint
+    # (HR38), so a deleted doc leaves its symbols behind until an unrelated source file happens to
+    # change, and until then `graph` and `overview(what="communities")` answer from a file that is
+    # gone. HR38's subject is unchanged — this is the purge catching up with a deletion the vector
+    # side already accepted, not a new trigger.
+    gdb = project_graph_db(project_path)
+    if not gdb.exists():
+        return
+    gs = GraphStore(gdb)
+    try:
+        if sum(gs.delete_file_symbols(str(p)) for p in paths):
+            gs.purge_dangling_edges()
+        gs.commit()
+    finally:
+        gs.close()
 
 
 def _graph_needs_full_index(gs) -> bool:  # gs: GraphStore
@@ -1346,6 +1429,23 @@ def reconcile_projects() -> None:
                     _index_files(entry.path, batch)
                 except Exception as exc:
                     log.warning("%s: set-drift reindex failed: %s", entry.path, exc)
+        # The fifth trigger. The three change detectors above all reduce to "mtime is past the
+        # watermark", and mtime is precisely what a history rewrite or a bulk checkout falsifies:
+        # once any later file pushes the watermark past the rewritten ones, nothing can reach them
+        # again, and set drift sees nothing because the paths still exist.
+        if not needs_idx and not needs_vectors:
+            try:
+                drifted_content = _vectors_hash_drift(entry.path)
+            except Exception as exc:
+                drifted_content = []
+                log.warning("%s: content hash check failed: %s", entry.path, exc)
+            if drifted_content:
+                log.info("%s: %d file(s) whose content drifted from the index — re-embedding",
+                         entry.path, len(drifted_content))
+                try:
+                    _index_files(entry.path, drifted_content)
+                except Exception as exc:
+                    log.warning("%s: content-drift reindex failed: %s", entry.path, exc)
         if not needs_idx:
             action = _graph_reconcile_action(entry.path)
             needs_idx = action == "index"
