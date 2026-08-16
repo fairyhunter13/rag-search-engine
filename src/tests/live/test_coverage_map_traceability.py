@@ -12,10 +12,10 @@ other: every id §13b still holds must reach §14, which is what §14's first li
 a claim about a path and a renamed file breaks it while every `def` it holds still resolves.
 GPU-free, daemon-free, import-free.
 
-Retargeted 2026-08-14 from `docs/world-model/model.yaml`'s L3 register, deleted with the world
-model. The mechanism moved rather than retiring with its old subject: the ops doc records at
-§14 that a probe once found **70 names in this table that no longer resolve**, that the L3
-register had a gate and this table did not, and that building one was the standing follow-up.
+Retargeted 2026-08-14 from an L3 register that was deleted with its own subject. The mechanism
+moved rather than retiring: the ops doc records at §14 that a probe once found **70 names in
+this table that no longer resolve**, that the L3 register had a gate and this table did not,
+and that building one was the standing follow-up.
 """
 from __future__ import annotations
 
