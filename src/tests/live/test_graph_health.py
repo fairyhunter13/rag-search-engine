@@ -397,3 +397,102 @@ def test_gh7b_a_root_that_extracted_none_of_its_own_code_is_hollow(safe_tmp_path
             f"still reported healthy — this is the categorical exemption H1 replaced: {member}")
     finally:
         remove_project(proj)
+
+
+def _healthy_root_with_a_degenerate_member(root) -> tuple[str, str]:
+    """Register a root whose own store is fine and one member whose partition is degenerate.
+
+    The member's graph is two symbols in two communities joined by the one edge that crosses
+    between them: coverage 0.0, which is the honest verdict for a stub. The root's own graph is
+    clustered and edge-free, which HR4 makes the normal shape for a root.
+    """
+    from rag_search.core.config import ProjectEntry, project_graph_db, project_vector_db
+    from rag_search.core.registry import upsert_project
+    from rag_search.graph.store import GraphStore
+    from rag_search.index.store import VectorStore
+
+    proj, member = str(root), str(root / "member")
+    (root / "member").mkdir(parents=True, exist_ok=True)
+    for p in (proj, member):
+        VectorStore(project_vector_db(p)).close()  # `ready` requires a vectors.db to exist
+    upsert_project(ProjectEntry(path=proj, enabled=True, indexed_at="2026-01-01T00:00:00+00:00",
+                                federation=[member]))
+    upsert_project(ProjectEntry(path=member, enabled=True,
+                                indexed_at="2026-01-01T00:00:00+00:00"))
+
+    gs = GraphStore(project_graph_db(proj))
+    try:
+        for i in (1, 2):
+            gs.upsert_community(i, level=1, title=f"C{i}", summary="synthesis", member_count=2)
+        for i in range(1, 5):
+            gs._con.execute(
+                "INSERT INTO symbols(sid,name,qualified_name,kind,file,start_line,end_line,"
+                "language,community_id) VALUES (?,?,?,'function','app.py',1,5,'python',?)",
+                (f"r{i}", f"fn{i}", f"pkg.fn{i}", 1 if i < 3 else 2))
+        gs.commit()
+    finally:
+        gs.close()
+
+    gs = GraphStore(project_graph_db(member))
+    try:
+        for i in (1, 2):
+            gs.upsert_community(i, level=1, title=f"M{i}", summary="synthesis", member_count=1)
+        for i in (1, 2):
+            gs._con.execute(
+                "INSERT INTO symbols(sid,name,qualified_name,kind,file,start_line,end_line,"
+                "language,community_id) VALUES (?,?,?,'function','stub.py',1,5,'python',?)",
+                (f"m{i}", f"stub{i}", f"stub.stub{i}", i))
+        gs.upsert_edge("m1", "m2")
+        gs.commit()
+    finally:
+        gs.close()
+    return proj, member
+
+
+def test_gh9_a_stub_member_does_not_condemn_a_healthy_root(safe_tmp_path):
+    """GH9: the root's own health is reported separately from its federation's worst.
+
+    Red before the fix, and this is the defect that started it: a session read `index_state:
+    degraded` on a root whose own store was `ready` with 205,650 symbols, concluded the index was
+    untrustworthy, and fell back to grep. Three stub members it merely federates were driving the
+    headline, and the row that said so was further down the same payload than the reader got.
+    """
+    from rag_search.core.registry import remove_project
+    from rag_search.server.mcp import overview as overview_tool
+
+    proj, member = _healthy_root_with_a_degenerate_member(safe_tmp_path)
+    try:
+        result = json.loads(run_tool(overview_tool(proj, "status")))
+        assert result.get("federation_worst_state") == "degraded", (
+            "GH9: the fixture's degenerate member is not reaching the rollup, so the arm below "
+            f"would pass on any code at all: {result}")
+        assert result.get("own_index_state") == "ready", (
+            f"GH9: a healthy root reported its worst member's state as its own: {result}")
+        assert result.get("own_hierarchy_quality", {}).get("degenerate") is False, (
+            f"GH9: the member's degenerate partition was attributed to the root: {result}")
+        assert result.get("own_symbol_hollow") is False, f"GH9: root wrongly hollow: {result}"
+    finally:
+        remove_project(member)
+        remove_project(proj)
+
+
+def test_gh10_the_own_fields_agree_with_the_roots_own_member_row(safe_tmp_path):
+    """GH10: `own_*` is the root's row in `members`, not a second derivation of it.
+
+    Two independent computations of one fact drift; this pins them to the same source, so a
+    future change to the per-member block cannot leave the summary describing the old one.
+    """
+    from rag_search.core.registry import remove_project
+    from rag_search.server.mcp import overview as overview_tool
+
+    proj, member = _healthy_root_with_a_degenerate_member(safe_tmp_path)
+    try:
+        result = json.loads(run_tool(overview_tool(proj, "status")))
+        own = next((m for m in result.get("members", []) if m["path"] == proj), None)
+        assert own, f"GH10: the root is missing from its own federation members: {result}"
+        assert result.get("own_index_state") == own["index_state"]
+        assert result.get("own_symbol_hollow") == own["symbol_hollow"]
+        assert result.get("own_hierarchy_quality") == own["hierarchy_quality"]
+    finally:
+        remove_project(member)
+        remove_project(proj)

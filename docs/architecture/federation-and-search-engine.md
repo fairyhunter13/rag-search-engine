@@ -67,6 +67,9 @@ refuse: `docs/decisions/2026-08-14-the-register-was-a-sixth-copy.md` records wha
 - **Registry** (`core/registry.py`): `~/.local/share/rag-search/projects.json`,
   atomically written under `fcntl` lock. Each row: `ProjectEntry` with
   `path, enabled, indexed_at, file_count, chunk_count, federation: list[str], …`.
+  `indexed_at` stamps the last *full* build and incremental passes never move it, so it is
+  completeness, not freshness — index age is `vectors_current_through` in `overview(what="status")`,
+  off the store's own `meta.source_mtime`.
 - **Vector store**: sqlite-vec flat `vec0`, `FLOAT[768]`, exact recall.
 - **Graph store**: SQLite `symbols / edges (caller_sid, callee_sid) / communities`.
 - **Enrichment LLM**: ***none — retired 2026-07-28 with tier 3.*** There is no enrichment lane and no cloud generative client in the repo; `DEEPSEEK_API_KEY` has no reader, so a keyless box is now the *normal* configuration rather than a crash. The dashboard chat LLM (**claude-haiku-4-5** via Claude Code CLI only, **no fallback engine** — emits SSE error when CLI unavailable) is **dashboard-chat only**, is the system's whole generative surface, and is never called by MCP tools.

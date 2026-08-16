@@ -229,6 +229,42 @@ def test_sd7b_a_genuinely_empty_store_is_left_to_needs_index(safe_tmp_path):
     )
 
 
+def test_sd8_the_purge_takes_the_graph_rows_too(safe_tmp_path, embedder):
+    """SD8: an orphaned path's symbols leave the graph, not just the vectors.
+
+    The purge was vector-only, and nothing else removes a deleted file's symbols: the graph lane
+    is woken by a *code* fingerprint (HR38), so a deleted document waits for an unrelated source
+    file to change before its rows go. Until it does, `graph` and `overview(what="communities")`
+    answer from a file the vector side already pruned in the same pass.
+    """
+    from rag_search.core.config import project_graph_db
+    from rag_search.graph.store import GraphStore
+
+    _seed(safe_tmp_path, embedder)
+    doomed = safe_tmp_path / "b.py"
+    gs = GraphStore(project_graph_db(str(safe_tmp_path)))
+    try:
+        gs.upsert_symbol("g1", "beta", "b.beta", "function", str(doomed), 1, 2, "python")
+        gs.commit()
+        assert gs.symbol_count() == 1
+    finally:
+        gs.close()
+
+    doomed.unlink()
+    sweeps._code_fingerprint_cache.pop(str(safe_tmp_path), None)
+    _, orphaned = sweeps._index_set_drift(str(safe_tmp_path))
+    assert [os.path.basename(p) for p in orphaned] == ["b.py"], orphaned
+    sweeps._purge_paths(str(safe_tmp_path), orphaned)
+
+    gs = GraphStore(project_graph_db(str(safe_tmp_path)))
+    try:
+        assert gs.symbol_count() == 0, (
+            "the purge dropped the chunks and left the symbols — `graph` still answers from a "
+            "file that is gone")
+    finally:
+        gs.close()
+
+
 def test_sd4_scan_sees_a_change_nested_below_the_root(safe_tmp_path):
     """SD4: the walk's memo must not be keyed on the root directory's mtime.
 
