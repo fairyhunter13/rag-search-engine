@@ -52,8 +52,8 @@ _LEGACY_TOKEN_PATTERNS = [
 ]
 
 # Files exempt from the legacy-token ban entirely. Only this guard file, which has to spell the
-# banned tokens out to ban them. The two generated skills that used to sit here left with the
-# world model on 2026-08-14; nothing else has ever needed an exemption, and each one added
+# banned tokens out to ban them. The two generated skills that used to sit here were deleted
+# 2026-08-14; nothing else has ever needed an exemption, and each one added
 # narrows the guard by exactly one file.
 _LEGACY_TOKEN_ALLOWLIST_FILES = {
     f"src/tests/live/{_THIS_FILE}",

@@ -106,5 +106,6 @@ just usage staying low — the canonical cgroup-v2 enforcement signal — cross-
 
 Bounded separately and later — see [giving the GPU back before idle](2026-07-29-vram-starvation.md).
 
-See also `docs/info-hierarchy.md` "Compute-spend doctrine" and `docs/world-model/model.yaml`
-P16/P17/HR32/HR33/HR37/HR38.
+See also P16/P17/HR32/HR33/HR37/HR38 — the `HR#` half in
+`docs/architecture/federation-ops-and-invariants.md` §13b, the `P#` half nowhere
+(`docs/decisions/README.md`).
