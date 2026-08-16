@@ -276,6 +276,21 @@ def test_decisions_index_is_complete_and_resolves():
     )
 
 
+def test_knowledge_bundle_links_resolve():
+    """The OKF bundle is a signpost; a signpost pointing at a moved file is worse than none.
+
+    Same standard as the three maps above, and the same weak feedback: nothing else reads these
+    two files, so a rename in docs/ breaks them silently.
+    """
+    d = _ROOT / "knowledge"
+    dangling = []
+    for page in sorted(d.rglob("*.md")):
+        for link in re.findall(r"\]\((?!https?:)([^)#]+\.md)[^)]*\)", page.read_text("utf-8")):
+            if not (page.parent / link).resolve().is_file():
+                dangling.append(f"{page.relative_to(_ROOT)} -> {link}")
+    assert not dangling, "knowledge/ links a file that does not exist:\n" + "\n".join(dangling)
+
+
 def test_coverage_map_names_resolve():
     """Every unstruck `test_…` the §14 map cites must exist in src/tests/."""
     cited = _cited_test_names()
