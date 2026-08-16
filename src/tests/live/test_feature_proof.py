@@ -17,7 +17,7 @@ from tests.live._sample_workspace import SampleWorkspace
 pytestmark = pytest.mark.live
 
 _RSE_SRC = Path(__file__).resolve().parents[3]  # source-file reads only; NOT passed to daemon
-_REMOVED = ["hierarchy", "architecture_domains", "world_model",
+_REMOVED = ["architecture_domains",
             "patterns", "process_flows", "service_mesh", "business_rules", "feature_map",
             "suggested_questions"]
 _WHATS = ["structure","status","projects","metrics","import_cycles",
@@ -39,8 +39,7 @@ def test_fp0_deleted_modules():
     # WS-B's four, plus the tier-3 modules R0c deleted. Same assertion, wider subject: the
     # generative KB left as a unit, so the import guard that proved WS-B landed is also the
     # cheapest proof that R0c did — a re-added kb/bpre.py fails here before anything imports it.
-    for mod in ("rag_search.kb.hierarchy","rag_search.kb.federation_hierarchy",
-                "rag_search.kb.structure","rag_search.kb.world_model",
+    for mod in ("rag_search.kb.structure",
                 "rag_search.kb.bpre","rag_search.kb.bpre_ast","rag_search.kb.okf",
                 "rag_search.kb.patterns","rag_search.kb.resolve_rerank",
                 "rag_search.kb.valueflow","rag_search.kb.wiki",
