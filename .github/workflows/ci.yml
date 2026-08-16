@@ -37,6 +37,21 @@ jobs:
       - name: Compile check
         run: python -m compileall -q src/rag_search
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
+      - name: Install okf
+        run: go install github.com/fairyhunter13/okf/cmd/okf@latest
+
+      - name: Knowledge bundle conformance
+        run: okf check knowledge
+
+      # Advisory: a forward link to a concept not yet written is legitimate.
+      - name: Knowledge bundle warnings
+        run: okf check -Werror knowledge
+        continue-on-error: true
+
   # ──────────────────────────────────────────────
   # Job 2: Test discovery — confirm all live tests
   # are collected without import errors
