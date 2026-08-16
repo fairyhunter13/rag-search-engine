@@ -35,6 +35,7 @@ identifiers, and §14's coverage map resolves them under a guard.
 
 | Date | Decision |
 |------|----------|
+| 2026-08-16 | [A completeness stamp is not a freshness stamp](2026-08-16-a-completeness-stamp-is-not-a-freshness-stamp.md) |
 | 2026-08-14 | [The bit-lane threshold, and the three times it was re-validated](2026-08-14-the-bit-lane-threshold-was-validated-three-times.md) |
 | 2026-08-14 | [The extractor revision log](2026-08-14-the-extractor-rev-log.md) |
 | 2026-08-14 | [The invariant register was a sixth copy, and its checker read fewer files than it printed](2026-08-14-the-register-was-a-sixth-copy.md) |

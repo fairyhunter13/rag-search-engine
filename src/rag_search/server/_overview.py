@@ -543,11 +543,28 @@ def _overview_status(project_path, each_store) -> str:  # type: ignore[no-untype
     _cfg_src = "own" if _has_own else "inherited" if _is_member else "default"
     _any_hollow = any(m.get("symbol_hollow") for m in members_info)
     _any_degenerate = any(m.get("hierarchy_quality", {}).get("degenerate") for m in members_info)
+    # A root's own store is one member of the fan-out, so the worst-of rollups below can label a
+    # healthy root `degraded` on the strength of a stub member it merely federates. Both readings
+    # are wanted; only one of them answers "is the project I asked about usable".
+    _own = next((m for m in members_info if m["path"] == project_path), None)
+    # `indexed_at` marks the last *full* graph+vector build (sweeps `_index_project`), which
+    # incremental passes deliberately never restamp — so it is provenance, not freshness, and
+    # `now - indexed_at` is not index age. The watermark is what the vectors were built from.
+    from datetime import UTC, datetime
+
+    from rag_search.daemon.sweeps import _vectors_baseline
+    _wm = _vectors_baseline(project_path)
+    _through = (datetime.fromtimestamp(_wm, UTC).isoformat() if _wm else None)
     return json.dumps({"path": project_path, "indexed_at": e.indexed_at if e else None,
+                       "vectors_current_through": _through,
                        "last_change_seen": e.last_change_seen if e else None,
                        "file_count": e.file_count if e else 0, "total_file_count": tot_fc,
                        "symbols": tot_sym, "communities": tot_comm,
                        "index_state": worst_state,
+                       "federation_worst_state": worst_state,
+                       "own_index_state": _own["index_state"] if _own else None,
+                       "own_symbol_hollow": _own["symbol_hollow"] if _own else None,
+                       "own_hierarchy_quality": _own["hierarchy_quality"] if _own else None,
                        "symbol_hollow": _any_hollow,
                        "hierarchy_quality": {"degenerate": _any_degenerate},
                        "members": members_info,
