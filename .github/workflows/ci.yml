@@ -41,8 +41,9 @@ jobs:
         with:
           go-version: "1.25"
 
+      # Pinned: `@latest` lets this gate's verdict change with no commit in this repo.
       - name: Install okf
-        run: go install github.com/fairyhunter13/okf/cmd/okf@latest
+        run: go install github.com/fairyhunter13/okf/cmd/okf@v0.1.0
 
       - name: Knowledge bundle conformance
         run: okf check knowledge
