@@ -316,3 +316,57 @@ def test_tk15_unfiltered_projects_returns_counts_and_query_still_finds_a_row():
         "TK15: the filter cannot recover a row the unfiltered call no longer lists"
     )
     assert found["total"] == 236
+
+
+def test_tk16_a_federated_relation_is_bounded_without_losing_its_total():
+    """TK16: the per-member LIMIT 50 is multiplied by the member count, and the envelope caps it.
+
+    The trap is the one TK13 covers for `metrics`: capping the rows and reporting the capped length
+    as the answer. A caller who asks who calls a hot symbol and is told "50" stops looking. So this
+    asserts `total` against the uncapped sum, not against the kept length, and requires
+    `matches_truncated` to account for the difference — a bare cap reads as "that is all there is".
+    """
+    from rag_search.query.graph_handler import (
+        _MATCHES_PER_MEMBER,
+        _MATCHES_TOTAL,
+        _MEMBER_COUNTS_MAX,
+        _matches_payload,
+    )
+
+    grouped = [
+        (f"/w/git/github.com/org/service-{i:03d}",
+         [{"name": f"fn{i}_{j}", "file": f"src/m{j}.go"} for j in range(50)])
+        for i in range(137)
+    ]
+    out = _matches_payload(grouped)
+
+    assert len(out["matches"]) == _MATCHES_TOTAL, "TK16: the fan-out was not bounded"
+    assert out["total"] == 137 * 50, (
+        "TK16: `total` was counted from the capped list — the cap moved the answer"
+    )
+    assert out["matches_truncated"] == 137 * 50 - _MATCHES_TOTAL
+    assert out["members_with_matches"] == 137
+    assert len(out["top_members"]) <= _MEMBER_COUNTS_MAX, (
+        "TK16: the member breakdown is itself unbounded"
+    )
+    # No one member may fill the envelope: a per-member share is what shows the caller the spread.
+    assert len({m["name"].split("_")[0] for m in out["matches"]}) == \
+        _MATCHES_TOTAL // _MATCHES_PER_MEMBER, (
+        "TK16: one member's rows crowded out every other member's"
+    )
+
+
+def test_tk17_a_small_relation_answer_is_returned_whole():
+    """TK17: shaping must not fire below the threshold, or a scoped call loses rows it could keep.
+
+    Paired with TK16 deliberately: a bound that always truncates satisfies TK16 on its own, and
+    would silently cut the common case — a two-member root answering in nine rows.
+    """
+    from rag_search.query.graph_handler import _matches_payload
+
+    grouped = [(f"/w/p{i}", [{"name": f"fn{i}_{j}"} for j in range(3)]) for i in range(3)]
+    out = _matches_payload(grouped)
+
+    assert len(out["matches"]) == 9, "TK17: a nine-row answer was truncated"
+    assert out["total"] == 9
+    assert "matches_truncated" not in out, "TK17: an untruncated answer claimed a truncation"

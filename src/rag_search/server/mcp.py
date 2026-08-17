@@ -317,7 +317,11 @@ async def graph(
     to_symbol: str = "",
     ctx: Context | None = None,
 ) -> str:
-    """Analyze call graph. relation: definition|callers|callees|impact|impact_narrative|path."""
+    """Analyze call graph. relation: definition|callers|callees|impact|impact_narrative|path.
+
+    Fans out across the federation. `total` is the true count; a large answer returns a bounded
+    sample with `matches_truncated` and `top_members` — scope to one of those to see the rest.
+    """
     note_activity()
     project_path, err = await _default_or_error(ctx, project_path)
     if err:

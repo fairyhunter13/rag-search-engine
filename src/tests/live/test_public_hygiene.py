@@ -513,7 +513,9 @@ def test_claude_md_stays_an_instruction_file() -> None:
 # Generated docs are excluded and the ceiling dropped by their 392 lines, leaving the prose budget
 # exactly as tight: a generated table grows one row per guard, so counting it bills a new test to
 # the prose account and fails the build for adding one.
-_TRACKED_MD_MAX_LINES = 8_408
+# Raised 8_408 -> 8_461 on 2026-08-18 for the federation-exclusion decision record, which is the
+# home this gate's own message names. The raise is the ratchet working, not a waiver.
+_TRACKED_MD_MAX_LINES = 8_461
 
 
 def _is_generated(text: str) -> bool:
