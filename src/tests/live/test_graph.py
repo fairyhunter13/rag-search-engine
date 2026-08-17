@@ -229,3 +229,41 @@ def test_index_project_attributes_edges_to_enclosing_symbol():
     assert "start_line" in src or "sl <= call_line" in src, (
         "_extract_graph must search for enclosing symbol by line range"
     )
+
+
+# ── GR1: the bounded fan-out is reachable, and costs no more descriptors ──────
+
+def test_gr1_a_federated_relation_answers_bounded_without_holding_a_store(federation_root_path):
+    """GR1: the shaped envelope is reachable through the real surface, at a bounded fd cost.
+
+    TK16/TK17 grade the shaping function against a hand-built dict; this is the other half of the
+    repo's split, and it exists because a pure test cannot see two things. First, that `run_graph`
+    actually routes through `_matches_payload` — a payload function nothing calls shapes nothing.
+    Second, that `federated_map` still closes every store: shaping happens *after* the fan-out, so
+    a cap on the output cannot reduce the descriptors the fan-out opened, and the tempting
+    conclusion that a smaller answer is a cheaper query is wrong. `test_federated_open_fd_leak`
+    exists because this exact shape wedged the daemon at EMFILE on 2026-07-29.
+    """
+    import json
+    import os
+
+    from rag_search.query.graph_handler import _MATCHES_TOTAL, run_graph
+
+    def _fds() -> int:
+        return len(os.listdir("/proc/self/fd"))
+
+    before = _fds()
+    payload = json.loads(run_graph("handle", federation_root_path, "callers"))
+    after = _fds()
+
+    assert "error" not in payload, payload
+    assert "total" in payload, (
+        "GR1: `total` is absent — run_graph did not route through _matches_payload"
+    )
+    assert len(payload["matches"]) <= min(payload["total"], _MATCHES_TOTAL), (
+        "GR1: the returned list exceeds both its own total and the cap"
+    )
+    assert after <= before, (
+        f"GR1: {after - before} descriptor(s) survived the fan-out — federated_map stopped "
+        "closing its stores"
+    )

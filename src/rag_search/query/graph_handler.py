@@ -118,6 +118,35 @@ def path_between(src: str, tgt: str, store: GraphStore, *, max_depth: int = 5) -
     return []
 
 
+_MATCHES_PER_MEMBER = 10
+_MATCHES_TOTAL = 50
+_MEMBER_COUNTS_MAX = 10
+
+
+def _matches_payload(grouped: list[tuple[str, list[dict]]]) -> dict:
+    """Bound a fan-out envelope. Pure, so its size is testable without a graph db.
+
+    The per-relation `LIMIT 50` is per member, so a 137-member root multiplies it. Totals are
+    summed from the full set before any cap, so a truncated answer still says how much it cut and
+    where the rest is — a bare truncation would read as "that is all there is".
+    """
+    total = sum(len(ms) for _, ms in grouped)
+    if total <= _MATCHES_TOTAL:
+        return {"matches": [m for _, ms in grouped for m in ms], "total": total}
+    kept: list[dict] = []
+    for _, ms in grouped:
+        kept.extend(ms[:_MATCHES_PER_MEMBER])
+    kept = kept[:_MATCHES_TOTAL]
+    ranked = sorted(((p, len(ms)) for p, ms in grouped if ms), key=lambda r: (-r[1], r[0]))
+    return {
+        "matches": kept,
+        "total": total,
+        "matches_truncated": total - len(kept),
+        "members_with_matches": len(ranked),
+        "top_members": dict(ranked[:_MEMBER_COUNTS_MAX]),
+    }
+
+
 def run_graph(
     symbol: str,
     project_path: str = "",
@@ -158,12 +187,7 @@ def run_graph(
     }
     if relation in _union:
         _fn = _union[relation]
-        matches = [
-            m
-            for _, ms in federated_map(project_path, lambda gs: _fn(symbol, gs))
-            for m in ms
-        ]
-        return _dump({"matches": matches})
+        return _dump(_matches_payload(federated_map(project_path, lambda gs: _fn(symbol, gs))))
     if relation == "impact_narrative":
         affected = [
             m
