@@ -109,7 +109,7 @@ Four stated inline because violating them fails silently rather than loudly:
   with no LLM escape hatch to fall through to. (`test_no_code_semantic_regex.py`)
 - **No mocks** — real daemon, real GPU, real embedder. (`test_no_mocks_or_fakes.py`)
 - **Public repo** — no secrets, real device paths, usernames, or company names; every
-  machine-specific value is `os.environ.get(...)` in `core/config.py`. (`test_public_hygiene.py`)
+  machine-specific value comes from env or `.rse-index.yaml`. (`test_public_hygiene.py`)
 
 ## Project quick reference
 

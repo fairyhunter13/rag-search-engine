@@ -130,3 +130,97 @@ def test_hh5_is_code_language_contract():
     assert not is_code_language("json"), "json is data, not code"
     assert not is_code_language("unknown"), "unknown is not code"
     assert not is_code_language(""), "empty string is not code"
+
+
+# ---------------------------------------------------------------------- HH6-HH9: the validator
+#
+# Everything below ran silently wrong until 2026-08-17, and no test above could see it: HH1-HH5
+# only ever write well-formed config, so an unknown key, a misspelled sub-key and a quoted
+# boolean were all dropped without a word. `use_default_ignores: "false"` meant True, because
+# `bool("false")` is True.
+
+
+def _err(root: Path) -> str:
+    from rag_search.core.index_config import ProjectConfigError, load_project_config
+    with pytest.raises(ProjectConfigError) as exc:
+        load_project_config(root)
+    return str(exc.value)
+
+
+def test_hh6_a_well_formed_config_still_loads(safe_tmp_path):
+    """HH6: the validator's accepting half — a validator that rejects everything passes HH7-HH8.
+
+    Every field is set to a non-default so this fails on a loader that returns bare defaults as
+    well as on one that raises; reading them back is the assertion.
+    """
+    from rag_search.core.index_config import load_project_config
+
+    root = safe_tmp_path / "hh6"
+    root.mkdir()
+    _write_config(root, {
+        "index": {"exclude": ["vendor/**"], "include": ["*.tpl"],
+                  "use_default_ignores": False, "respect_gitignore": False},
+        "federation": {"exclude": ["*/_worktrees/*"]},
+    })
+    cfg = load_project_config(root)
+    assert (cfg.exclude, cfg.include) == (["vendor/**"], ["*.tpl"])
+    assert (cfg.use_default_ignores, cfg.respect_gitignore) == (False, False)
+    assert cfg.federation_exclude == ["*/_worktrees/*"]
+
+
+def test_hh7_a_key_the_loader_does_not_know_is_refused(safe_tmp_path):
+    """HH7: unknown top-level key, misspelled sub-key, and a retired key each name themselves.
+
+    The near-miss carries a suggestion because the failure mode this replaces is invisible, not
+    noisy: an operator who wrote `excludes` saw a config that loaded and did nothing.
+    """
+    root = safe_tmp_path / "hh7"
+    root.mkdir()
+
+    _write_config(root, {"indexing": {"exclude": ["x"]}})
+    msg = _err(root)
+    assert "unknown top-level key 'indexing'" in msg and "did you mean 'index'?" in msg
+
+    _write_config(root, {"index": {"excludes": ["x"]}})
+    msg = _err(root)
+    assert "unknown key index.excludes" in msg and "did you mean 'exclude'?" in msg
+
+    _write_config(root, {"watcher": {"max_pending_files": 10}})
+    assert "watcher.max_pending_files was retired" in _err(root)
+
+
+def test_hh8_a_wrongly_typed_value_is_refused(safe_tmp_path):
+    """HH8: a quoted boolean and a non-string list member are errors, not silent inversions."""
+    root = safe_tmp_path / "hh8"
+    root.mkdir()
+
+    _write_config(root, {"index": {"use_default_ignores": "false"}})
+    assert "must be true or false, got 'false'" in _err(root)
+
+    _write_config(root, {"index": {"exclude": ["ok", 3]}})
+    assert "must be a string or list of strings" in _err(root)
+
+
+def test_hh9_a_broken_config_quarantines_its_project_instead_of_raising(safe_tmp_path):
+    """HH9: containment — `effective_config` runs on the watcher path and inside `iter_files`.
+
+    Raising there would trade a silent-drop bug for a fleet-wide outage over one project's typo,
+    so the project is excluded whole and the error is reported through `config_error` instead.
+    `iter_files` is asserted rather than the returned dataclass, because "exclude everything" is
+    only a quarantine if the walker agrees. It agrees except for the config file itself, which
+    `iter_files` exempts by name so the watcher still sees the edit that lifts the quarantine —
+    a quarantine that hid its own release condition would need a daemon restart to leave.
+    """
+    from rag_search.core.index_config import config_error, effective_config
+    from rag_search.index.discover import iter_files
+
+    root = safe_tmp_path / "hh9"
+    root.mkdir()
+    (root / "keep.py").write_text("def public(): pass\n")
+    _write_config(root, {"index": {"use_default_ignores": "false"}})
+
+    assert effective_config(root).exclude == ["*"], "a broken config must exclude the project"
+    assert [p.name for p in iter_files(root)] == [".rse-index.yaml"], (
+        "quarantine must reach the walker, and must still let the config file back through"
+    )
+    assert "must be true or false" in config_error(root), "the reason must remain reportable"
