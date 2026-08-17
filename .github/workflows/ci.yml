@@ -37,9 +37,11 @@ jobs:
       - name: Compile check
         run: python -m compileall -q src/rag_search
 
+      # Must be >= okf's go.mod minimum: setup-go sets GOTOOLCHAIN=local, so `go install`
+      # cannot fetch a newer toolchain and fails outright rather than adapting.
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version: "1.26"
 
       # Pinned: `@latest` lets this gate's verdict change with no commit in this repo.
       - name: Install okf
