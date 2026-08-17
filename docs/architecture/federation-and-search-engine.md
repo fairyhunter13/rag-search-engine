@@ -83,6 +83,7 @@ os.walk(root, followlinks=False)       # any depth; do NOT follow links while wa
   for each dir that IS a symlink:
      target = dir.resolve()
      skip if target == root or target.is_relative_to(root)   # cycle guard
+     skip if is_federation_excluded(target)                  # §16.6: config ∪ env
      if _looks_like_repo(target):      # iter_files(target) yields ≥1 file
          members.append(str(target))
      dirs.remove(dir)                  # never descend into the symlink
@@ -312,8 +313,18 @@ Each project may carry an optional `.rse-index.yaml` (or `.yml`) at its root.
 | Field | Default | Meaning |
 |---|---|---|
 | `index.exclude` | `[]` | Glob patterns; matched against file path relative to root |
+| `index.include` | `[]` | Glob patterns re-admitting paths the ignores would drop (HR35 tier 2) |
 | `index.use_default_ignores` | `true` | Apply `IGNORED_DIRS` (node_modules, .git, …) |
-| `watcher.max_pending_files` | `10 000` | Watcher queue cap before forced flush |
+| `index.respect_gitignore` | `true` | Apply the `.gitignore` chain from the file up to the root |
+| `federation.exclude` | `[]` | Paths and globs that are **not** federation members (see §16.6) |
+
+Unknown keys, misspellings and wrongly-typed values are refused with the file, the offending key
+and a near-miss suggestion — they were silently dropped until 2026-08-17, which is how
+`watcher.max_pending_files` came to be parsed, inherited and reported while enforcing nothing. It
+is retired and now names itself in the error. A file that fails to parse **quarantines its project**
+(`exclude: ["*"]`) rather than raising: `effective_config` runs on the watcher path and inside
+`iter_files`, so a raise would be a fleet-wide outage over one project's typo. §16.4's `error` field
+is how the operator finds out. Gates: HH6–HH9, SC11.
 
 ### 16.2 `effective_config(path)` — inheritance model
 
@@ -322,8 +333,8 @@ Each project may carry an optional `.rse-index.yaml` (or `.yml`) at its root.
 
 1. **Standalone project** (no owning root in registry): `load_project_config(path)` — own file or defaults.
 2. **Federation member** (path appears in some root's `federation` list):
-   - `exclude` = **union** of root's globs + member's globs (order: root first).
-   - `use_default_ignores`, `max_pending_files` = member's value when member has own config file, **else root's**.
+   - `exclude`, `include`, `federation.exclude` = **union** of root's + member's (order: root first).
+   - `use_default_ignores`, `respect_gitignore` = member's value when member has own config file, **else root's**.
 3. Source label exposed in `overview(status).config.source`: `"own"` | `"inherited"` | `"default"`.
 
 ### 16.3 RSE config files are always indexed
@@ -340,8 +351,11 @@ drops the engine's own config from the index.
 {
   "config": {
     "exclude": ["*.gen.py"],
+    "include": [],
     "use_default_ignores": true,
-    "max_pending_files": 10000,
+    "respect_gitignore": true,
+    "federation_exclude": ["*/_worktrees/*"],
+    "error": "",
     "source": "inherited"
   }
 }
@@ -349,6 +363,25 @@ drops the engine's own config from the index.
 
 `source` values: `"own"` (project has its own `.rse-index.yaml`),
 `"inherited"` (federation member using root's config), `"default"` (standalone, no config file).
+
+`error` is non-empty only for a quarantined project, and is the only surface that reports one — the
+loader's raise is swallowed so one typo cannot take the watcher down. SE6 reads this endpoint rather
+than the file: a config is re-read under an mtime cache and can be quarantined, so what the daemon
+*resolved* is the only answer to whether a declared setting is in force.
+
+### 16.6 `federation.exclude` — which symlinks are not members
+
+`index.exclude` cannot express this. It filters files inside a member, while a federation symlink
+resolves to a directory *outside* the root that `discover_members` registers as a project of its own.
+The two are unioned root-first like `index.exclude`, and entries carrying `* ? [` are fnmatched while
+the rest are resolved and matched by exact path or prefix.
+
+`RSE_FEDERATION_EXCLUDE` still exists and is unioned with this, but is now **host-specific absolute
+paths only** — the ones HR34 keeps out of a tracked file. Layout patterns moved here on 2026-08-17
+because an environment variable reaches only the processes systemd handed it to: the CLI, the live
+suite and every script ran `register_all_members()` without it and upserted the excluded members
+straight back as `enabled=True`. Measured 2026-07-30: 58 rows, with the drop-in installed, in force,
+and the daemon restarted since. Gates: FE3, FE4b, FE6, FE8, FE11, FE12, SE6.
 
 ### 16.5 Config honored by every enumerator (HR29)
 

@@ -5,7 +5,7 @@ import logging
 import os
 from pathlib import Path
 
-from rag_search.core.config import IGNORED_DIRS
+from rag_search.core.config import FEDERATION_EXCLUDE_SOURCES, IGNORED_DIRS
 
 log = logging.getLogger(__name__)
 
@@ -15,8 +15,13 @@ def _looks_like_repo(target: Path) -> bool:
     return next(iter_files(target), None) is not None
 
 
-def discover_members(root_path: str) -> list[str]:
+def discover_members(
+    root_path: str, sources: tuple[str, ...] = FEDERATION_EXCLUDE_SOURCES,
+) -> list[str]:
     """Return resolved paths of nested symlinked dirs (any depth) that look like repos.
+
+    `sources` names which exclusion sources apply, and exists for FE11: with the exclusion
+    split across env and config, an empty env var no longer models "the exclusion was lost".
 
     Deduped (order-preserved): the same repo is often symlinked from several locations
     under the root, which would otherwise store the member N times in root.federation and
@@ -39,7 +44,7 @@ def discover_members(root_path: str) -> list[str]:
                 target = p.resolve()
                 if target == root or target.is_relative_to(root):
                     continue
-                if is_federation_excluded(str(target)):
+                if is_federation_excluded(str(target), sources):
                     dirs.remove(d)
                     continue
                 if _looks_like_repo(target):
@@ -84,21 +89,20 @@ def index_members(root_path: str) -> int:
 def register_all_members() -> None:
     """Register federation members for all enabled projects, and un-enable excluded ones.
 
-    The second half is not tidiness. `RSE_FEDERATION_EXCLUDE` reaches only the processes that
-    were given it, and the daemon's copy comes from a systemd drop-in — so *every* out-of-daemon
-    entry point (the CLI, the live suite, a script) runs `index_members` with the variable unset,
-    rediscovers the excluded members and upserts them back as `enabled=True`. `index_members`
-    cannot undo that on the next daemon start: exclusion filters at *discovery* time, so those
-    paths are no longer members of anything, and a row nothing discovers is a row nothing
-    revisits. Measured 2026-07-30 on this fleet: 58 `_worktrees` rows enabled and 58 stale entries
-    in one root's `federation` list, both re-created after the drop-in was already installed and
-    in force, with the daemon having restarted since.
+    The second half is not tidiness. It was written when the exclusion lived only in
+    `RSE_FEDERATION_EXCLUDE`, which reaches only the processes systemd hands it to — so every
+    out-of-daemon entry point (the CLI, the live suite, a script) ran `index_members` with the
+    variable unset, rediscovered the excluded members and upserted them back as `enabled=True`,
+    and nothing undid it, because exclusion filters at *discovery* time and a row nothing
+    discovers is a row nothing revisits. Measured 2026-07-30: 58 `_worktrees` rows re-created
+    after the drop-in was installed and in force, with the daemon restarted since.
 
-    So the exclusion is applied to the registry directly, by the one process that reliably holds
-    the value, at the one moment it already walks every row. `enabled=False` (rather than deleting
-    the row) is deliberate: it is what `index_members` does for a member discovery drops, it keeps
-    `indexed_at` so the store is still reclaimable, and it is reversible by an operator who
-    decides the path belongs after all. Guarded by FE9.
+    The layout patterns now live in the federation root's `.rse-index.yaml`, which every process
+    reads, so that hole is closed at the source and only host-specific absolute paths still
+    depend on the variable. This repair stays: it is the backstop for those, and for a row
+    already enabled before a pattern was added. `enabled=False` rather than deleting the row is
+    deliberate — it keeps `indexed_at` so the store stays reclaimable, and it is reversible.
+    Guarded by FE9, repaired-not-only-reported by FE12.
     """
     from rag_search.core.config import is_federation_excluded
     from rag_search.core.registry import list_projects, upsert_project

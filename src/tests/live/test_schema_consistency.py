@@ -8,6 +8,7 @@ SC6  Producer↔consumer symmetry, at two levels: no write-only symbols *column*
 SC8  community detection is leidenalg-free and deterministic
 SC9  every RSE_* env knob in core/config.py has a consumer outside core/config.py
 SC10 no served instruction names a JSON payload shape no server code emits
+SC11 every ProjectConfig field has a consumer outside index_config.py and the reporting surface
 """
 from __future__ import annotations
 
@@ -56,6 +57,47 @@ def test_sc9_every_env_knob_has_a_consumer():
         "env knob(s) in core/config.py with no consumer outside that file: "
         f"{orphans}. Either wire each to the code that reads it, or delete it — a knob that "
         "parses and does nothing is a broken public interface, not dead code."
+    )
+
+
+# ---------------------------------------------------------------------------
+# SC11 — SC9's twin, for the file half of the configuration surface
+# ---------------------------------------------------------------------------
+
+# `_overview.py` reports the resolved config back to a caller. Reporting a field is not
+# consuming it: `max_pending_files` was parsed, inherited, and echoed there for months while
+# nothing enforced it. Excluding the reporting surface is what lets this see that.
+_SC11_NON_CONSUMERS = ("core/index_config.py", "server/_overview.py")
+
+
+def test_sc11_every_project_config_field_has_a_consumer():
+    """SC11: a ProjectConfig field must be read by something that acts on it.
+
+    SC9 makes the same demand of every env knob, on the reasoning that a knob which parses and
+    does nothing is a broken public interface. Moving a knob out of `config.py` into
+    `.rse-index.yaml` moves it out of SC9's regex, so without this the file half of the
+    configuration surface has no equivalent cover at all — and the phase that moved
+    `federation.exclude` there is the phase that made that gap load-bearing.
+    """
+    import dataclasses
+
+    from rag_search.core.index_config import ProjectConfig
+
+    root = Path(__file__).parents[3]
+    fields = {f.name for f in dataclasses.fields(ProjectConfig)}
+    assert fields, "ProjectConfig has no fields — the import above stopped meaning anything"
+
+    searched = [
+        p for p in (*root.glob("src/rag_search/**/*.py"), *root.glob("scripts/**/*.py"))
+        if not any(p.as_posix().endswith(n) for n in _SC11_NON_CONSUMERS)
+    ]
+    corpus = "\n".join(p.read_text(errors="replace") for p in searched)
+
+    orphans = sorted(f for f in fields if not re.search(rf"\b{re.escape(f)}\b", corpus))
+    assert not orphans, (
+        f"ProjectConfig field(s) nothing outside {list(_SC11_NON_CONSUMERS)} reads: {orphans}. "
+        "Either wire each to the code that acts on it, or delete it — a config key that parses, "
+        "inherits and is echoed back but changes no behaviour is a promise the file does not keep."
     )
 
 

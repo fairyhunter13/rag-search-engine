@@ -242,11 +242,12 @@ def _assert_env_in_effect(conf: str, value: str) -> None:
     """The merged, effective environment — presence in *some* file is not enough here.
 
     These are the knobs that regress to a code default when a drop-in goes missing, so they get
-    the stronger source. A live value may be *wider* when it is an `os.pathsep` list: this host
-    prepends an absolute repo path to `RSE_FEDERATION_EXCLUDE`'s versioned `*/_worktrees/*`
-    glob, and that path is device-specific and must not be versioned (HR34). Written as a
-    rule about list-valued variables rather than an allowlist naming that file, so the exception
-    is a property of the value's shape and not a waiver.
+    the stronger source. A live value may be *wider* when it is an `os.pathsep` list, because a
+    host may append a device-specific entry that must not be versioned (HR34) — as
+    `RSE_FEDERATION_EXCLUDE` did until 2026-08-17, when its versioned half moved to
+    `.rse-index.yaml` and its drop-in was deleted. Written as a rule about list-valued variables
+    rather than an allowlist naming a file, so the exception is a property of the value's shape
+    and not a waiver.
     """
     import os
     import shlex

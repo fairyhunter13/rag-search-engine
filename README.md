@@ -79,6 +79,26 @@ rag-search init /path/to/project
 rag-search index /path/to/project
 ```
 
+## Per-project config (`.rse-index.yaml`)
+
+Optional, at a project root. A federation root's copy is inherited by every member.
+
+```yaml
+index:
+  exclude: ["*.min.js", "vendor/*"]   # union(root, member); beats .gitignore
+  include: ["vendor/keep-this/*"]     # force-keep, beats exclude's tier below it
+  use_default_ignores: true           # hidden dirs and IGNORED_DIRS
+  respect_gitignore: true
+federation:
+  exclude: ["*/_worktrees/*"]         # which symlinks are NOT members
+```
+
+`federation.exclude` is unioned with `RSE_FEDERATION_EXCLUDE`; put repo layout in the file, since
+the variable reaches only processes systemd handed it to, and keep host-specific absolute paths in
+the variable, since no tracked file may carry one. An unknown key is refused by name rather than
+dropped, and a project whose config stops parsing is quarantined with the reason reported by
+`overview(what="status")` — one typo must not take the watcher down for the fleet.
+
 ## MCP tool reference
 
 | Tool | Purpose |

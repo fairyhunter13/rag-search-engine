@@ -86,9 +86,17 @@ def _gitignore_match(full: Path, is_dir: bool, chain: _GitignoreChain) -> bool:
 
 
 def _cached_effective_config(root: Path) -> ProjectConfig:
-    """effective_config(root), cached and invalidated on the project's own config-file mtime."""
+    """effective_config(root), cached and invalidated on every config file that feeds it.
+
+    The federation roots' files are in the stamp because `effective_config` inherits from them:
+    keying on the member's own mtime alone meant a root-level exclude edit never reached a
+    member whose config was already cached, and the member's own file need not exist at all.
+    """
+    from rag_search.core.config import _federation_root_configs
+
     stamps = tuple(sorted(
-        (root / n).stat().st_mtime for n in _RSE_CFG_NAMES if (root / n).is_file()
+        [(root / n).stat().st_mtime for n in _RSE_CFG_NAMES if (root / n).is_file()]
+        + [p.stat().st_mtime for p in _federation_root_configs()]
     ))
     cached = _CFG_CACHE.get(root)
     if cached is not None and cached[0] == stamps:
@@ -481,7 +489,7 @@ def iter_files(
     """Yield indexable files under root, skipping ignored dirs and big files."""
     root = root.resolve()
     if cfg is None:
-        cfg = effective_config(root)
+        cfg = _cached_effective_config(root)
     chain_at: dict[Path, _GitignoreChain] = {}
     root_own = _own_gitignore_spec(root / ".gitignore") if cfg.respect_gitignore else None
     chain_at[root] = ((root, root_own),) if root_own is not None else ()
