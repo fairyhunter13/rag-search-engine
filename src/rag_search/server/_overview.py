@@ -184,6 +184,12 @@ def _grammar_ceilings(rows: list[dict]) -> list[dict]:
     return sorted(out, key=lambda r: r["dark_files"], reverse=True)
 
 
+# One row per (language, rung) pair across the federation, uncapped: 40+ languages x 6 rungs on
+# this fleet. `by_rung` and `grammar_ceilings` already carry the actionable cuts, so the long tail
+# of single-file pairs is paid for on every call and read on none.
+_LANG_RUNG_MAX = 24
+
+
 def _extraction_totals(rows: list[dict]) -> dict:
     """Roll per-(language, rung) rows up into the dark-set headline numbers.
 
@@ -222,7 +228,11 @@ def _extraction_totals(rows: list[dict]) -> dict:
         acc["dark_files"] = acc["files"] - acc["files_with_symbols"]
         acc["coverage_pct"] = (round(100.0 * acc["files_with_symbols"] / acc["files"], 2)
                                if acc["files"] else None)
-    return {"by_language_rung": rows,
+    # Every total below is summed from the full `rows`; only the emitted list is capped, so the
+    # headline numbers never depend on how many rows a caller was shown.
+    shown = sorted(rows, key=lambda r: r.get("files") or 0, reverse=True)[:_LANG_RUNG_MAX]
+    return {"by_language_rung": shown,
+            "by_language_rung_truncated": len(rows) - len(shown),
             "by_rung": sorted(by_rung.values(), key=lambda r: r["files"], reverse=True),
             "mismatch_diagnosis": _mismatch_diagnosis(rows),
             "grammar_ceilings": _grammar_ceilings(rows),
@@ -380,6 +390,33 @@ def _require_project(projects) -> tuple[str, str | None]:  # type: ignore[no-unt
     })
 
 
+def _projects_row(p) -> dict:  # type: ignore[no-untyped-def]
+    return {"path": p.path, "enabled": p.enabled, "indexed_at": p.indexed_at,
+            "last_change_seen": p.last_change_seen}
+
+
+def _projects_block(rows: list, query: str) -> dict:
+    """`overview(what="projects")`. 236 uncapped rows answer "which project is X in" at ~8k tokens.
+
+    The filter is the existing `query` parameter rather than a new one: a second knob for the same
+    property is the drift `2026-07-29-descriptor-exhaustion-in-the-federation-fanout.md` names.
+    """
+    if query:
+        q = query.casefold()
+        hits = [_projects_row(p) for p in rows if q in (p.path or "").casefold()]
+        return {"projects": hits, "matched": len(hits), "total": len(rows), "query": query}
+    roots = [p for p in rows if getattr(p, "federation", None)]
+    member_paths = {m for p in roots for m in p.federation}
+    # A caller that needs *a* path to scope with needs a root, not the 137 members underneath one.
+    enabled_roots = [p.path for p in rows if p.enabled and p.path not in member_paths]
+    return {"project_count": len(rows),
+            "enabled_count": sum(1 for p in rows if p.enabled),
+            "enabled_roots": enabled_roots,
+            "federation_roots": [{"path": p.path, "members": len(p.federation)} for p in roots],
+            "federation_members_count": sum(len(p.federation) for p in roots),
+            "hint": "pass query=<substring> to list the matching project rows"}
+
+
 def handle_overview(project_path: str, what: str, query: str = "") -> str:
     """Dispatch `overview(what=…)`; `_VALID` is the authority on which values exist.
 
@@ -394,11 +431,7 @@ def handle_overview(project_path: str, what: str, query: str = "") -> str:
         from rag_search.core.registry import resolve_registered_root
         project_path = resolve_registered_root(project_path)
     if what == "projects":
-        return json.dumps({"projects": [
-            {"path": p.path, "enabled": p.enabled, "indexed_at": p.indexed_at,
-             "last_change_seen": p.last_change_seen}
-            for p in list_projects()
-        ]})
+        return json.dumps(_projects_block(list_projects(), query))
     if what == "metrics":
         from rag_search.server.routes_ops import _snapshot
         # `pipeline_version` is a sibling of `extraction`, not a member of it: it is fleet-scoped
@@ -481,6 +514,27 @@ def _overview_communities(project_path, query, each_store) -> str:  # type: igno
         {"id": r[0], "title": r[1], "level": r[2],
          "summary": r[3], "member_count": r[4]} for r in rows],
         "resolved_project": project_path})
+
+
+# On the 137-member federation the `members` array is ~15k tokens, and every row a caller can act
+# on is one of the ~13 that are not ready, hollow or degenerate. The rest say "fine" at length.
+_MEMBERS_ECHO_MAX = 12
+
+
+def _needs_attention(m: dict) -> bool:
+    return bool(m.get("index_state") != "ready"
+                or m.get("symbol_hollow")
+                or (m.get("hierarchy_quality") or {}).get("degenerate"))
+
+
+def _members_block(members_info: list[dict]) -> dict:
+    """The `members` half of `overview(status)`. Pure, so its size is testable without a fleet."""
+    if len(members_info) <= _MEMBERS_ECHO_MAX:
+        return {"members": members_info}
+    flagged = [m for m in members_info if _needs_attention(m)]
+    return {"member_count": len(members_info),
+            "members_needing_attention": flagged,
+            "members_healthy_count": len(members_info) - len(flagged)}
 
 
 def _overview_status(project_path, each_store) -> str:  # type: ignore[no-untyped-def]
@@ -567,7 +621,7 @@ def _overview_status(project_path, each_store) -> str:  # type: ignore[no-untype
                        "own_hierarchy_quality": _own["hierarchy_quality"] if _own else None,
                        "symbol_hollow": _any_hollow,
                        "hierarchy_quality": {"degenerate": _any_degenerate},
-                       "members": members_info,
+                       **_members_block(members_info),
                        "config": {"exclude": _ecfg.exclude,
                                   "use_default_ignores": _ecfg.use_default_ignores,
                                   "max_pending_files": _ecfg.max_pending_files,
