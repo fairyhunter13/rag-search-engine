@@ -58,6 +58,54 @@ def _project(r: dict, verbosity: str) -> dict:
     }
 
 
+# Above this many members, echoing `projects_searched` costs more than the results it accompanies:
+# on the 137-member federation here the array is ~2500 tokens against ~600 tokens of answer, and a
+# caller that passed `project_paths` already knows what it scoped to. Eight keeps the array for the
+# scoped calls the resolution ladder is built to produce, where it is short and does say something.
+_SEARCHED_ECHO_MAX = 8
+
+
+def _projects_with_hits(results: list[dict], searched: list[str]) -> list[str]:
+    """Which searched projects actually contributed a returned row, in result order.
+
+    Result paths are absolute, so a row belongs to the longest searched root that prefixes it.
+    Longest, not first: a federation member lives inside its root and both appear in `searched`,
+    so a first-match walk would credit every member's hit to the root instead.
+    """
+    roots = sorted(searched, key=len, reverse=True)
+    hit: list[str] = []
+    seen: set[str] = set()
+    for r in results:
+        path = r.get("path") or ""
+        for root in roots:
+            if path == root or path.startswith(root.rstrip("/") + "/"):
+                if root not in seen:
+                    seen.add(root)
+                    hit.append(root)
+                break
+    return hit
+
+
+def _search_payload(
+    results: list[dict], searched: list[str], resolved: int, elapsed_ms: int, verbosity: str
+) -> dict:
+    """The `search` result envelope. Pure, so its size is testable without a GPU."""
+    payload: dict = {
+        "results": [_project(r, verbosity) for r in results],
+        "total": len(results),
+        "elapsed_ms": elapsed_ms,
+    }
+    if verbosity == "full" or len(searched) <= _SEARCHED_ECHO_MAX:
+        payload["projects_searched"] = searched
+        return payload
+    # Replacing the array loses the caller's view of what was skipped, which the `unindexed` error
+    # branch relies on being visible for the partial case. The count restores it.
+    payload["projects_searched_count"] = len(searched)
+    payload["projects_with_hits"] = _projects_with_hits(results, searched)
+    payload["projects_skipped_count"] = resolved - len(searched)
+    return payload
+
+
 def _search_sync(
     query: str, scope: str, project_paths: list[str] | None, top_k: int, verbosity: str
 ) -> str:
@@ -117,12 +165,9 @@ def _search_sync(
     # one question on the largest federation here — and concatenates rankings that were never
     # scored against each other.
     results = search_federation(query, get_embedder(), dbs, scope=scope, top_k=top_k)
-    return json.dumps({
-        "results": [_project(r, verbosity) for r in results],
-        "total": len(results),
-        "elapsed_ms": round((time.monotonic() - t0) * 1000),
-        "projects_searched": searched,
-    })
+    return json.dumps(_search_payload(
+        results, searched, len(paths), round((time.monotonic() - t0) * 1000), verbosity,
+    ))
 
 
 async def _roots_paths(ctx: Context) -> list[str]:

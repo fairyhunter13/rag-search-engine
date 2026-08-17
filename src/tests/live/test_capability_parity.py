@@ -121,7 +121,7 @@ def test_overview_what_round_trip(what):
     h, _ = _http_session()
     proj = ""
     if what not in ("projects", "metrics"):
-        enabled = [p["path"] for p in _mcp_overview(h, "projects").get("projects", []) if p.get("enabled")]
+        enabled = _mcp_overview(h, "projects").get("enabled_roots", [])
         assert enabled, "no enabled project to scope overview round-trip"
         proj = enabled[0]
     data = _mcp_overview(h, what, project_path=proj)
