@@ -1,6 +1,11 @@
-"""SE1-SE2: the versioned systemd drop-ins are the configuration actually in force.
+"""SE1, SE2, SE6: the configuration actually in force is the one that was declared.
 
-Five operator drop-ins are versioned under `scripts/systemd/`, and without this file nothing
+SE1/SE2 cover the systemd drop-ins; SE6 covers `.rse-index.yaml`, where the federation
+exclusion's layout patterns moved on 2026-08-17. The split matters to what each can see: a
+drop-in only reaches the daemon at start, so SE1 reads `/proc`, while a config file is re-read
+under an mtime cache and can be quarantined outright, so SE6 asks the daemon what it resolved.
+
+Operator drop-ins are versioned under `scripts/systemd/`, and without this file nothing
 compares them to the host — the repo copy reads as a backup while being free to drift from it.
 Delete `indexing-throughput.conf` from the live drop-in dir and `RSE_EMBED_BATCH` falls 32 -> 8,
 `MemoryHigh` 4G -> 3G: a ~4x indexing throughput regression with nothing else red anywhere
@@ -36,20 +41,12 @@ the failure this file exists to stop repeating.
 """
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.live
-
-# The live value carries this host's own repo exclusions ahead of the versioned glob, and the
-# versioned file stays device-neutral on purpose (this is a public repo and must not carry real
-# device paths). The exception is expressed as "live must contain every versioned entry" rather than
-# by dropping the file from the check, which is how an exception becomes a hole.
-_SUPERSET_OK = {"RSE_FEDERATION_EXCLUDE"}
-
 
 def _versioned_directives() -> list[tuple[str, str, str]]:
     """(conf name, directive, value) for every real directive line in the versioned drop-ins."""
@@ -118,10 +115,6 @@ def test_se1_every_versioned_environment_setting_is_in_force():
         got = live.get(name)
         if got is None:
             problems.append(f"{conf}: {name} is not set on the running daemon at all")
-        elif name in _SUPERSET_OK:
-            missing = [e for e in want.split(os.pathsep) if e and e not in got.split(os.pathsep)]
-            if missing:
-                problems.append(f"{conf}: {name} is in force but missing entries {missing}")
         elif got != want:
             problems.append(f"{conf}: {name} is {got!r} in force, versioned as {want!r}")
     assert not problems, (
@@ -132,8 +125,8 @@ def test_se1_every_versioned_environment_setting_is_in_force():
 def test_se2_every_versioned_service_directive_is_still_read():
     """SE2: the non-env directives systemd reads still include each versioned one.
 
-    Comments are stripped first, so a directive that survives only *inside* a comment — the state
-    most of `federation-exclude.conf` is in — cannot satisfy this.
+    Comments are stripped first, so a directive that survives only *inside* a comment cannot
+    satisfy this — which is the state the retired `federation-exclude.conf` had drifted into.
     """
     unit = _require_live_unit()
     text = _systemctl("cat", unit)
@@ -149,3 +142,53 @@ def test_se2_every_versioned_service_directive_is_still_read():
     assert not missing, (
         "versioned directives systemd is not reading — the drop-in carrying them is gone from the "
         "host or was edited there:\n  " + "\n  ".join(missing))
+
+
+def test_se6_every_declared_federation_exclusion_is_in_force(live_client):
+    """SE6: the exclusion each federation root declares is the one the daemon is applying.
+
+    The federation exclusion's layout patterns left `Environment=` for `.rse-index.yaml`, so SE1
+    and SE2 stopped covering the half of it that matters most — and the pair exists precisely
+    because one arm cannot see what the other catches. This is that pair rebuilt for a file
+    source. Reading the file back would only prove YAML round-trips; the daemon caches its config
+    read on mtime, holds a resolved copy per project, and quarantines a project whose config
+    stopped parsing, so "in force" can only be answered by the running process. It is asked
+    through `POST /api/overview`, the same discipline as SE1's `/proc` read.
+
+    A root that declares nothing is skipped, since an env-only fleet is legitimate — but the run
+    as a whole must find at least one declared pattern, or this passes by having nothing to check
+    and the exclusion could be deleted outright with SE6 still green.
+    """
+    from rag_search.core.index_config import ProjectConfigError, load_project_config
+    from rag_search.core.registry import list_projects
+
+    declared_total, problems = 0, []
+    for entry in [e for e in list_projects() if e.federation]:
+        try:
+            declared = load_project_config(Path(entry.path)).federation_exclude
+        except ProjectConfigError as exc:
+            # Caught rather than raised: a root whose config stopped parsing is the defect this
+            # gate reports, and an error here would end the loop before the other roots are seen.
+            problems.append(f"{entry.path}: the declared config no longer parses — {exc}")
+            continue
+        if not declared:
+            continue
+        declared_total += len(declared)
+        r = live_client.post("/api/overview",
+                             json={"project_path": entry.path, "what": "status"}, timeout=120)
+        assert r.status_code == 200, f"{entry.path}: overview(status) returned {r.status_code}"
+        cfg = r.json().get("config", {})
+        if cfg.get("error"):
+            problems.append(f"{entry.path}: the daemon quarantined it — {cfg['error']}")
+        missing = [p for p in declared if p not in cfg.get("federation_exclude", [])]
+        if missing:
+            problems.append(f"{entry.path}: declares {missing} but the daemon is not applying them")
+
+    # `problems` first: a root that failed to parse also declares nothing, and reporting that as
+    # "nobody declared anything" would send the reader looking for a deletion that never happened.
+    assert not problems, "declared and in-force exclusions disagree:\n  " + "\n  ".join(problems)
+    assert declared_total, (
+        "no federation root declares a `federation.exclude`, so SE6 checked nothing. Either the "
+        "exclusion moved back to the environment (then SE1 covers it and this should be retired) "
+        "or a root's .rse-index.yaml lost its federation block."
+    )

@@ -589,7 +589,7 @@ def _overview_status(project_path, each_store) -> str:  # type: ignore[no-untype
             worst_state = _ks
     from pathlib import Path as _P
 
-    from rag_search.core.index_config import _CONFIG_NAMES, effective_config
+    from rag_search.core.index_config import _CONFIG_NAMES, config_error, effective_config
     _ecfg = effective_config(project_path)
     _pp = _P(project_path).resolve()
     _has_own = any((_pp / n).is_file() for n in _CONFIG_NAMES)
@@ -622,9 +622,14 @@ def _overview_status(project_path, each_store) -> str:  # type: ignore[no-untype
                        "symbol_hollow": _any_hollow,
                        "hierarchy_quality": {"degenerate": _any_degenerate},
                        **_members_block(members_info),
+                       # `error` is the only way a quarantined project is visible: effective_config
+                       # swallows the raise so one typo cannot take the watcher down with it.
                        "config": {"exclude": _ecfg.exclude,
+                                  "include": _ecfg.include,
                                   "use_default_ignores": _ecfg.use_default_ignores,
-                                  "max_pending_files": _ecfg.max_pending_files,
+                                  "respect_gitignore": _ecfg.respect_gitignore,
+                                  "federation_exclude": _ecfg.federation_exclude,
+                                  "error": config_error(_pp),
                                   "source": _cfg_src},
                        "resolved_project": project_path})
 

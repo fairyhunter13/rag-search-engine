@@ -90,7 +90,8 @@ def test_no_junk_paths_in_live_registry(live_client, sample_workspace):
     The current session's sample_workspace paths are excluded — they are
     legitimately registered for the duration of the test session and torn down
     at session end.  Only entries from previous (leaked) sessions are flagged.
-    Worktrees exclusion is config-driven (RSE_FEDERATION_EXCLUDE), not hardcoded.
+    Worktrees exclusion is config-driven (`.rse-index.yaml` federation.exclude, unioned with
+    RSE_FEDERATION_EXCLUDE), not hardcoded.
     """
     from rag_search.core.registry import list_projects
     from tests.live._projects import sample_project_paths

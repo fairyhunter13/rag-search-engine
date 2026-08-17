@@ -121,28 +121,98 @@ def project_graph_db(project_path: str) -> Path:
 # writers left 9,016 orphaned files (97.1 MB) across 161 index dirs, purged separately on
 # 2026-07-29 — the size is here because the files are gone, so nothing can re-measure it. Not
 # residue, despite the era: `index_dir/ask_cache` is live on routes_chat.py and query/ask.py.
-def federation_exclude_paths() -> frozenset[str]:
-    """Resolved absolute paths excluded from federation discovery + reconcile indexing.
+# A federation root's `.rse-index.yaml` carries the layout patterns; the env var keeps the
+# host-specific absolute paths HR34 forbids a tracked file from holding. Env alone reached only
+# processes systemd handed the variable to, so the CLI, the live suite and every script ran with
+# it unset and re-enabled the excluded rows — 58 of them, measured 2026-07-30, with the drop-in
+# installed and in force.
+FEDERATION_EXCLUDE_SOURCES: tuple[str, ...] = ("env", "config")
 
-    Configured via RSE_FEDERATION_EXCLUDE (os.pathsep-separated list of paths).
-    Paths are expanded (~ allowed) and resolved before comparison. Empty by default.
+_CFG_EXCLUDE_CACHE: tuple[tuple[tuple[str, float], ...], tuple[str, ...]] | None = None
+_ROOT_CFG_CACHE: tuple[float, list[Path]] | None = None
+
+
+def _federation_root_configs() -> list[Path]:
+    """The `.rse-index.yaml` of every registered federation root.
+
+    Roots only: a member's own config governs what is indexed inside it, never which projects
+    exist. The import is deferred because `core.registry` imports this module at module scope.
+
+    Cached on the registry's mtime because `_cached_effective_config` calls this to build its
+    stamp, on the walker's per-file path — and `list_projects()` reads and migrates the whole
+    236-row JSON every time, so an uncached call here would make a cache hit cost more than the
+    miss it replaced. Bound worth knowing: a root config *created* while the daemon runs stays
+    invisible until the registry is next written, which `register_all_members()` does at every
+    start. Edits to an already-seen file are caught — `_config_exclude_raw` stamps its mtime.
     """
-    raw = os.environ.get("RSE_FEDERATION_EXCLUDE", "")
-    return frozenset(
-        str(Path(p).expanduser().resolve()) for p in raw.split(os.pathsep) if p.strip()
-    )
+    global _ROOT_CFG_CACHE
+    try:
+        stamp = REGISTRY_PATH.stat().st_mtime
+    except OSError:
+        stamp = 0.0
+    if _ROOT_CFG_CACHE is not None and _ROOT_CFG_CACHE[0] == stamp:
+        return _ROOT_CFG_CACHE[1]
+    try:
+        from rag_search.core.registry import list_projects
+        entries = list_projects()
+    except Exception:
+        return []
+    out = [
+        p for e in entries if e.federation
+        for n in (".rse-index.yaml", ".rse-index.yml")
+        if (p := Path(e.path) / n).is_file()
+    ]
+    _ROOT_CFG_CACHE = (stamp, out)
+    return out
 
 
-def _federation_exclude_entries() -> tuple[frozenset[str], tuple[str, ...]]:
-    """Split RSE_FEDERATION_EXCLUDE into (exact_or_prefix_set, glob_tuple).
+def _config_exclude_raw() -> tuple[str, ...]:
+    """`federation.exclude` unioned across every federation root, cached on the files' mtimes.
+
+    The uncached read this stands beside re-hit os.environ, re-split and re-resolve()d every
+    entry on every call — once per symlink inside the federation walk — so caching a YAML read
+    here is cheaper than the status quo, not an added cost.
+    """
+    global _CFG_EXCLUDE_CACHE
+    from rag_search.core.index_config import load_project_config
+
+    paths = _federation_root_configs()
+    try:
+        stamps = tuple(sorted((str(p), p.stat().st_mtime) for p in paths))
+    except OSError:
+        stamps = ()
+    if _CFG_EXCLUDE_CACHE is not None and _CFG_EXCLUDE_CACHE[0] == stamps:
+        return _CFG_EXCLUDE_CACHE[1]
+    out: list[str] = []
+    for p in paths:
+        for pat in load_project_config(p.parent).federation_exclude:
+            if pat not in out:
+                out.append(pat)
+    _CFG_EXCLUDE_CACHE = (stamps, tuple(out))
+    return tuple(out)
+
+
+def _federation_exclude_entries(
+    sources: tuple[str, ...] = FEDERATION_EXCLUDE_SOURCES,
+) -> tuple[frozenset[str], tuple[str, ...]]:
+    """Split the configured exclusion into (exact_or_prefix_set, glob_tuple).
 
     Entries containing * ? [ are treated as fnmatch globs (expanduser, not resolved).
     All other entries are resolved to absolute paths for exact/prefix matching.
+
+    `sources` exists so a caller can ask what happens with an exclusion source *absent*. With
+    two sources an empty RSE_FEDERATION_EXCLUDE no longer means "nothing excluded", and FE11 —
+    which proves the exclusion is load-bearing by running discovery with it and without — needs
+    a way to say "neither" that the filesystem cannot quietly contradict.
     """
-    raw = os.environ.get("RSE_FEDERATION_EXCLUDE", "")
+    raw: list[str] = []
+    if "env" in sources:
+        raw += os.environ.get("RSE_FEDERATION_EXCLUDE", "").split(os.pathsep)
+    if "config" in sources:
+        raw += _config_exclude_raw()
     exact: set[str] = set()
     globs: list[str] = []
-    for p in raw.split(os.pathsep):
+    for p in raw:
         p = p.strip()
         if not p:
             continue
@@ -153,8 +223,10 @@ def _federation_exclude_entries() -> tuple[frozenset[str], tuple[str, ...]]:
     return frozenset(exact), tuple(globs)
 
 
-def is_federation_excluded(candidate: str) -> bool:
-    """True if candidate matches any entry in RSE_FEDERATION_EXCLUDE.
+def is_federation_excluded(
+    candidate: str, sources: tuple[str, ...] = FEDERATION_EXCLUDE_SOURCES,
+) -> bool:
+    """True if candidate matches any configured exclusion entry.
 
     Plain entries match by exact path or prefix (subtree).
     Entries with glob chars (* ? [) are matched with fnmatch against the resolved candidate.
@@ -164,7 +236,7 @@ def is_federation_excluded(candidate: str) -> bool:
         resolved = Path(candidate).resolve()
     except OSError:
         return False
-    exact_or_prefix, globs = _federation_exclude_entries()
+    exact_or_prefix, globs = _federation_exclude_entries(sources)
     for entry in exact_or_prefix:
         entry_p = Path(entry)
         if resolved == entry_p or resolved.is_relative_to(entry_p):
