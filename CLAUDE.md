@@ -7,7 +7,7 @@ lives in `docs/architecture/`. Don't restate either here.
 
 1. **`overview(what='projects')` first** — confirm the project is indexed.
 2. **`search` immediately after** — natural-language query describing what you need.
-3. Do NOT delegate codebase questions to sub-agents; they don't inherit these rules.
+3. Delegate only with explicit `project_paths` and file:line citations back, never unscoped.
 4. Fall back to Bash/Grep/Glob/Read only if `search` returns nothing useful.
 
 Applies to EVERY codebase question, however simple. Training-data answers about this repo are

@@ -7,6 +7,7 @@ SC6  Producer↔consumer symmetry, at two levels: no write-only symbols *column*
      becoming columns at all — the guard could not see what it did not start from.
 SC8  community detection is leidenalg-free and deterministic
 SC9  every RSE_* env knob in core/config.py has a consumer outside core/config.py
+SC10 no served instruction names a JSON payload shape no server code emits
 """
 from __future__ import annotations
 
@@ -229,4 +230,74 @@ def test_sc8_detect_communities_deterministic(safe_tmp_path):
     assert m1 == m2, (
         f"SC8b: detect_communities non-deterministic — "
         f"diff: {set(m1.items()) ^ set(m2.items())}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# SC10 — the served doctrine may not describe a payload no server code emits
+# ---------------------------------------------------------------------------
+
+_JSON_LITERAL = re.compile(r'\{[^{}]*"[^"]+"\s*:[^{}]*\}')
+_JSON_KEY = re.compile(r'"([A-Za-z_][A-Za-z0-9_]*)"\s*:')
+
+
+_WITHDRAWN_CLAUSE = (
+    'RESILIENCE: if an MCP call returns {"status":"timeout","fallback":true} or hangs,'
+)
+
+
+def _claimed_keys(text: str) -> set[str]:
+    return {k for lit in _JSON_LITERAL.findall(text) for k in _JSON_KEY.findall(lit)}
+
+
+def _emitter_corpus(root: Path, prompt_files: tuple[Path, ...]) -> str:
+    return "\n".join(
+        p.read_text(errors="replace")
+        for p in root.glob("src/rag_search/**/*.py") if p not in prompt_files
+    )
+
+
+def _prompt_files(root: Path) -> tuple[Path, ...]:
+    return (root / "src" / "rag_search" / "daemon" / "global_prompt.py",
+            root / "scripts" / "integrations" / "canonical.py")
+
+
+def test_sc10_no_prompt_names_a_payload_no_code_emits():
+    """SC10a: every JSON key the served instructions tell a caller to recognise is emitted.
+
+    The instructions are a contract read by an agent that cannot check it. Until 2026-08-17 the
+    RESILIENCE rule told callers to watch for `{"status":"timeout","fallback":true}` — a shape no
+    code has ever produced, so the branch it armed could not fire and the fallback it promised
+    was unreachable. That is worse than an absent rule: it reads as coverage.
+
+    Keys rather than the literal string, because a shape can be assembled from a dict the source
+    never writes on one line.
+    """
+    root = Path(__file__).parents[3]
+    pf = _prompt_files(root)
+    corpus = _emitter_corpus(root, pf)
+    claimed = {k for f in pf for k in _claimed_keys(f.read_text())}
+
+    missing = sorted(k for k in claimed if f'"{k}"' not in corpus)
+    assert not missing, (
+        f"the served instructions name JSON key(s) no server code emits: {missing}. "
+        "Delete the clause or implement the payload — a rule keyed on a shape that cannot "
+        "appear arms a branch that can never fire."
+    )
+
+
+def test_sc10_the_withdrawn_clause_is_still_caught():
+    """SC10b: SC10a is vacuous on a prompt carrying no JSON literal, which is the state it
+    landed in — so the predicate is re-run against the clause it was written to catch.
+
+    Without this, deleting the clause and deleting the guard look identical from CI.
+    """
+    root = Path(__file__).parents[3]
+    corpus = _emitter_corpus(root, _prompt_files(root))
+    claimed = _claimed_keys(_WITHDRAWN_CLAUSE)
+    assert claimed, "SC10b: the literal parser stopped matching the clause it was built from"
+    assert sorted(k for k in claimed if f'"{k}"' not in corpus) == ["fallback"], (
+        "SC10b: `fallback` now appears in src/ — either the timeout payload was implemented, in "
+        "which case restore the clause, or an unrelated key took the name and SC10b needs a new "
+        "discriminator. Until one is chosen SC10a is running blind."
     )
