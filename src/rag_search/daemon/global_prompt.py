@@ -20,12 +20,14 @@ See MCP tool schemas for full parameter reference (scope/relation/what variants,
 
 Rules (no exceptions):
 - Call search/graph/overview BEFORE any Bash grep/find, Glob, or Grep tool call.
-- Never delegate codebase questions to sub-agents via the Agent tool.
+- Delegate a codebase question to a sub-agent only when the delegating prompt names the exact
+  project_paths to search and asks for file:line citations rather than bodies. An unscoped
+  delegation federates over every member and hands back prose — both costs, and no isolation win.
 - GPU-only inference — CPU fallback is forbidden for all RSE operations.
-- RESILIENCE: if an MCP call returns {"status":"timeout","fallback":true} or hangs,
-  immediately fall back to native Read/Grep/Glob/Bash — never wait or retry the MCP call.
-  If it fails with an *error* instead, fall back the same way but quote the error first.
-  Never narrate an error as a timeout: the two have different causes and only one is transient.
+- RESILIENCE: if an MCP call hangs on the observed wall clock, immediately fall back to native
+  Read/Grep/Glob/Bash — never wait or retry the MCP call. If it fails with an *error* instead,
+  fall back the same way but quote the error first: a hang and an error have different causes
+  and only one is transient.
 - NEVER auto-index. Only call index(enabled=True) when the user explicitly asks.
 - If not indexed, say so and ask before indexing.
 - `search` returns ranked LOCATIONS (path + line range + a short preview), not file bodies.
