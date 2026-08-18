@@ -983,19 +983,6 @@ def _collect_chat_tokens(live_client, question: str, project_path: str, **extra)
         "How does promo-svc integrate with checkout or cart services?",
         ["checkout", "cart", "integrat", "service", "federation"],
     ),
-])
-def test_chat_comprehensive_question_a(live_client, service_path, question, kws):
-    """Chat quality A: promo-svc domain questions about discount, coupon, order, integration."""
-    answer, done_seen = _collect_chat_tokens(live_client, question, service_path)
-    al = answer.lower()
-    assert done_seen, f"SSE never sent done for: {question[:60]}"
-    assert len(al) > 30, f"Answer too short: {al!r}"
-    assert not al.startswith("error"), f"Answer starts with error: {al[:200]!r}"
-    assert any(k in al for k in kws), f"Answer missing {kws}: {al[:300]!r}"
-
-
-@pytest.mark.costly
-@pytest.mark.parametrize("question,kws", [
     (
         "What is the overall architecture of this service?",
         ["service", "function", "module", "class", "communit"],
@@ -1013,8 +1000,8 @@ def test_chat_comprehensive_question_a(live_client, service_path, question, kws)
         ["rule", "business", "logic", "valid", "check"],
     ),
 ])
-def test_chat_comprehensive_question_b(live_client, service_path, question, kws):
-    """Chat quality B: structural, model, error-handling, business-rule questions against promo-svc."""
+def test_chat_comprehensive_question(live_client, service_path, question, kws):
+    """Chat quality against promo-svc: domain, structural, model, error-handling and rule questions."""
     answer, done_seen = _collect_chat_tokens(live_client, question, service_path)
     al = answer.lower()
     assert done_seen, f"SSE never sent done for: {question[:60]}"
