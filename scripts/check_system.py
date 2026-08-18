@@ -18,9 +18,7 @@ import urllib.request
 from datetime import date
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 PASS = "[x]"
 FAIL = "[ ]"
@@ -46,9 +44,7 @@ def _warn(msg: str, detail: str = "") -> None:
     print(f"  {WARN} {msg}{suffix}")
 
 
-# ---------------------------------------------------------------------------
 # Section: Core imports
-# ---------------------------------------------------------------------------
 
 CORE_MODULES = [
     "rag_search.server.mcp",
@@ -82,9 +78,7 @@ def check_imports() -> None:
             _fail(f"import {mod}", str(exc))
 
 
-# ---------------------------------------------------------------------------
 # Section: Config constants
-# ---------------------------------------------------------------------------
 
 # Must track core/config.py's defaults: a mismatch here is reported to the user as "env override
 # active", so a stale entry accuses a clean machine of a misconfiguration it does not have.
@@ -118,9 +112,7 @@ def check_config() -> None:
                 _warn(f"  (default is {default_val!r} but env override active)")
 
 
-# ---------------------------------------------------------------------------
 # Section: GPU
-# ---------------------------------------------------------------------------
 
 
 def check_gpu() -> None:
@@ -135,9 +127,7 @@ def check_gpu() -> None:
         _fail("assert_gpu_available()", str(exc))
 
 
-# ---------------------------------------------------------------------------
 # Section: Daemon
-# ---------------------------------------------------------------------------
 
 DAEMON_URL = os.environ.get("RSE_DAEMON_URL", "http://127.0.0.1:8765")
 
@@ -154,9 +144,7 @@ def check_daemon() -> None:
         _fail(f"Daemon reachable at {DAEMON_URL}", str(exc), required=False)
 
 
-# ---------------------------------------------------------------------------
 # Section: MCP tools registered
-# ---------------------------------------------------------------------------
 
 EXPECTED_MCP_TOOLS = {"search", "graph", "overview", "index"}
 
@@ -177,9 +165,7 @@ def check_mcp_tools() -> None:
         _fail("server.mcp importable and tools listable", str(exc))
 
 
-# ---------------------------------------------------------------------------
 # Section: CLI commands
-# ---------------------------------------------------------------------------
 
 CLI_COMMANDS = ["rag-search"]
 
@@ -199,9 +185,7 @@ def check_cli() -> None:
             _fail(f"{cmd} found on PATH or .venv/bin", required=False)
 
 
-# ---------------------------------------------------------------------------
 # Section: LLM provider
-# ---------------------------------------------------------------------------
 
 
 def check_llm_provider() -> None:
@@ -227,9 +211,7 @@ def check_llm_provider() -> None:
         _warn("claude CLI not found — chat will emit SSE error (search/graph unaffected)")
 
 
-# ---------------------------------------------------------------------------
 # Main
-# ---------------------------------------------------------------------------
 
 
 def _render_markdown(output_file: str | None = None) -> str:

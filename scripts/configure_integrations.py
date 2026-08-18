@@ -46,9 +46,7 @@ class ConfigResult:
     diff: str = ""
 
 
-# ---------------------------------------------------------------------------
 # System prompt repair helpers
-# ---------------------------------------------------------------------------
 
 def _replace_sentinel_block(text: str, start: str, end: str, new_body: str) -> str:
     """Replace everything between start/end sentinels (inclusive) with new block.
@@ -96,9 +94,7 @@ def _diff(old: str, new: str, label: str) -> str:
     return "".join(lines)
 
 
-# ---------------------------------------------------------------------------
 # CLAUDE.md targets (3 profiles)
-# ---------------------------------------------------------------------------
 #
 # These profiles must NOT carry the doctrine block. The daemon already serves the
 # identical text as MCP server instructions (daemon/global_prompt.py::_PROMPT ==
@@ -145,9 +141,7 @@ def _repair_claude_md(md_path: Path, dry_run: bool = False) -> ConfigResult:
                         path=str(md_path), diff=diff)
 
 
-# ---------------------------------------------------------------------------
 # MCP entry repair: claude ~/.claude.json via `claude mcp` CLI (3 profiles)
-# ---------------------------------------------------------------------------
 #
 # MCP server *definitions* live in ~/.claude.json (user/local scope) or
 # .mcp.json (project scope) -- settings.json only holds MCP *approval* keys
@@ -276,9 +270,7 @@ def _repair_claude_mcp(config_dir: Path | None, label: str, dry_run: bool = Fals
                         message="Registered rag-search via claude mcp add", path=str(config_dir or "~"))
 
 
-# ---------------------------------------------------------------------------
 # MCP entry repair: hermes config.yaml
-# ---------------------------------------------------------------------------
 
 def _build_hermes_config_text() -> str:
     """Build the complete canonical hermes config.yaml (MCP entry + agent system prompt)."""
@@ -337,9 +329,7 @@ def _repair_hermes_yaml(config_path: Path, dry_run: bool = False) -> ConfigResul
                         message=f"Updated hermes config.yaml: {config_path}", path=str(config_path), diff=diff)
 
 
-# ---------------------------------------------------------------------------
 # hermes agent.system_prompt in config.yaml (replaces SYSTEM_PROMPT.md)
-# ---------------------------------------------------------------------------
 
 def _verify_hermes_agent_prompt(config_path: Path) -> ConfigResult:
     """Verify that agent.system_prompt in hermes config.yaml contains the canonical body."""
@@ -375,9 +365,7 @@ def _repair_hermes_agent_prompt(config_path: Path, dry_run: bool = False) -> Con
                         path=result.path, diff=result.diff)
 
 
-# ---------------------------------------------------------------------------
 # bash_aliases sentinel block
-# ---------------------------------------------------------------------------
 
 _BASH_ALIASES_SENTINEL_START = "# [rag-search-aliases:start]"
 _BASH_ALIASES_SENTINEL_END   = "# [rag-search-aliases:end]"
@@ -460,9 +448,7 @@ def repair_bash_aliases(dry_run: bool = False) -> ConfigResult:
 
 
 
-# ---------------------------------------------------------------------------
 # Run functions
-# ---------------------------------------------------------------------------
 
 _H = Path.home()
 
