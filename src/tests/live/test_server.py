@@ -147,12 +147,20 @@ def test_api_projects_returns_list(live_client):
 
 
 def test_api_overview_projects(live_client):
-    """/api/overview?what=projects returns ≥1 real project."""
+    """/api/overview?what=projects counts the fleet, and answers with rows only when asked.
+
+    Unqueried the arm returns counts and roots; `query` is what asks for rows. Same contract as
+    the MCP path, over HTTP.
+    """
     r = live_client.post("/api/overview", json={"what": "projects"})
     assert r.status_code == 200
     data = r.json()
-    assert "projects" in data
-    assert len(data["projects"]) >= 1, "live daemon should have ≥1 registered project"
+    assert data["project_count"] >= 1, "live daemon should have ≥1 registered project"
+    assert "projects" not in data, "an unqueried call must not echo the fleet"
+
+    r = live_client.post("/api/overview", json={"what": "projects", "query": "rag-search-engine"})
+    assert r.status_code == 200
+    assert len(r.json()["projects"]) >= 1, "a query must return the rows it matched"
 
 
 def test_live_daemon_has_mcp_route(live_client):
