@@ -6,35 +6,19 @@ safe_tmp_path keeps roots off /tmp/.cache.
 """
 from __future__ import annotations
 
+import functools
 import json
-import shutil
 
 import pytest
 
 from rag_search.core.config import index_dir
+from tests.live._projects import build_federation
+from tests.live._projects import deregister as _clean
 from tests.live._run import run_tool
 
 pytestmark = pytest.mark.live
 
-
-def _federate(base):
-    uid = str(id(base))[-6:]
-    marker = f"rse_arch_{uid}"
-    root = base / "root"
-    member = base / "member-repo"
-    root.mkdir()
-    member.mkdir()
-    (member / f"{marker}.py").write_text(f"def {marker}(): pass\n")
-    (root / "readme.txt").write_text("root\n")
-    (root / "link").symlink_to(member)
-    return root, member, marker
-
-
-def _clean(paths):
-    from rag_search.core.registry import remove_project
-    for p in paths:
-        remove_project(str(p))
-        shutil.rmtree(index_dir(str(p)), ignore_errors=True)
+_federate = functools.partial(build_federation, prefix="rse_arch")
 
 
 def test_gdup_duplicate_symlink_members_deduped(safe_tmp_path):

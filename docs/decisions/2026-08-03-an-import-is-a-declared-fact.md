@@ -93,8 +93,8 @@ above is 0% overlap, and a call can cross files that import each other transitiv
 directly. It now reads `file_imports` and returns nothing on a store that predates e11, because an
 empty answer is honest and silently substituting a different relation is the failure this ends.
 
-That consumer also satisfies **SC6** (no write-only columns), alongside `import_count()` and
-`list_imports()`.
+That consumer also satisfies **SC6** (no write-only columns), alongside `list_imports()`.
+(`import_count()` was the third until 2026-08-18: a counter nothing counted.)
 
 ## Stamp discipline
 

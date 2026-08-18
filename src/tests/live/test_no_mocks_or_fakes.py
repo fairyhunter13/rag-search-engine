@@ -39,7 +39,6 @@ _MOCK_RE = re.compile("|".join(_MOCK_PATTERNS))
 _BUILD_TEST_APP_ALLOWLIST: frozenset[str] = frozenset()
 
 _BUILD_TEST_APP_RE = re.compile(r"\bbuild_test_app\b")
-_DEF_RE = re.compile(r"^def (test_\w+)", re.MULTILINE)
 _THIS_FILE = Path(__file__).stem
 
 

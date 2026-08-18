@@ -133,3 +133,31 @@ def service_member() -> str:
 def sample_project_paths(ws) -> set[str]:
     """All sample workspace paths (root + members + ledger). Used for fleet-wide scope guards."""
     return {ws.fed_root, ws.cart, ws.checkout, ws.promo, ws.ledger}
+
+
+def build_federation(base, prefix: str):
+    """Scratch root + symlinked member under `base`. Returns (root, member, marker).
+
+    `prefix` namespaces the marker symbol so concurrent files cannot collide in the index.
+    """
+    marker = f"{prefix}_{str(id(base))[-6:]}"
+    root = base / "root"
+    member = base / "member-repo"
+    root.mkdir()
+    member.mkdir()
+    (member / f"{marker}.py").write_text(f"def {marker}(): pass\n")
+    (root / "readme.txt").write_text("root\n")
+    (root / "link").symlink_to(member)
+    return root, member, marker
+
+
+def deregister(paths) -> None:
+    """Drop each path from the registry and delete its index dir."""
+    import shutil
+
+    from rag_search.core.config import index_dir
+    from rag_search.core.registry import remove_project
+
+    for p in paths:
+        remove_project(str(p))
+        shutil.rmtree(index_dir(str(p)), ignore_errors=True)

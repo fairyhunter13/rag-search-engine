@@ -375,9 +375,6 @@ class GraphStore:
     def symbol_count(self) -> int:
         return self._con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
 
-    def import_count(self) -> int:
-        return self._con.execute("SELECT COUNT(*) FROM file_imports").fetchone()[0]
-
     def edge_count(self) -> int:
         return self._con.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
 
