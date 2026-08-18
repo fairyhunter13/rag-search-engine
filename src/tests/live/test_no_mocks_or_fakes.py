@@ -33,25 +33,8 @@ _MOCK_PATTERNS = [
 ]
 _MOCK_RE = re.compile("|".join(_MOCK_PATTERNS))
 
-# ── (b) build_test_app allowlist ──────────────────────────────────────────────
-# Migration complete: build_test_app() deleted from routes.py; allowlist is empty.
-# Any future re-introduction of build_test_app in a test FAILS this guard immediately.
-_BUILD_TEST_APP_ALLOWLIST: frozenset[str] = frozenset()
-
 _BUILD_TEST_APP_RE = re.compile(r"\bbuild_test_app\b")
 _THIS_FILE = Path(__file__).stem
-
-
-def _current_test_in_function(lines: list[str], lineno: int) -> str | None:
-    """Return the nearest def test_* name at or before lineno (1-based)."""
-    fn = None
-    for i, line in enumerate(lines, 1):
-        m = re.match(r"^def (test_\w+)", line)
-        if m:
-            fn = m.group(1)
-        if i >= lineno:
-            break
-    return fn
 
 
 def test_no_mocks_or_fakes():
@@ -72,28 +55,21 @@ def test_no_mocks_or_fakes():
     )
 
 
-def test_build_test_app_only_in_allowlist():
-    """(b) build_test_app may only appear in tests listed in _BUILD_TEST_APP_ALLOWLIST."""
+def test_build_test_app_is_gone():
+    """(b) build_test_app() was deleted from routes.py; a re-introduction fails here.
+
+    There is no allowlist. The escape hatch was an empty frozenset for months, and an exemption
+    list nobody can be exempted by is a shape that invites the first entry.
+    """
     tests_root = Path(__file__).parents[1]  # src/tests/
     violations: list[str] = []
     for py in sorted(tests_root.rglob("*.py")):
         if py.stem == _THIS_FILE:
             continue
-        if not _BUILD_TEST_APP_RE.search(py.read_text(encoding="utf-8")):
-            continue
-        lines = py.read_text(encoding="utf-8").splitlines()
-        for lineno, line in enumerate(lines, 1):
+        for lineno, line in enumerate(py.read_text(encoding="utf-8").splitlines(), 1):
             if _BUILD_TEST_APP_RE.search(line):
-                fn = _current_test_in_function(lines, lineno)
-                key = f"{py.stem}::{fn}" if fn else f"{py.stem}::?"
-                if key not in _BUILD_TEST_APP_ALLOWLIST:
-                    rel = py.relative_to(tests_root.parent)
-                    violations.append(
-                        f"{rel}:{lineno} [{key}]: {line.strip()[:80]}\n"
-                        f"  → Add to _BUILD_TEST_APP_ALLOWLIST (permanent negative test)\n"
-                        f"    OR convert to live_client at :8765 (the live_client pattern)."
-                    )
+                violations.append(f"{py.relative_to(tests_root.parent)}:{lineno}: {line.strip()[:80]}")
     assert not violations, (
-        "build_test_app used outside allowlist (use live daemon at :8765 for happy paths):\n"
+        "build_test_app is deleted — use the live daemon at :8765 (the live_client pattern):\n"
         + "\n".join(violations)
     )
