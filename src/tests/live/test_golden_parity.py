@@ -20,7 +20,10 @@ OVERVIEW_SHAPE: list[tuple[str, set[str], bool]] = [
     # that is gone belongs in test_feature_proof.py instead, whose fp1/fp2 assert the daemon
     # answers "unknown" and the name is absent from `_VALID` — there is no shape to check when
     # handle_overview replies {"error": ...} and `required_keys` goes missing rather than empty.
-    ("projects",             {"projects"},                                     True),
+    # An unqueried `projects` call deliberately returns counts and roots, never the row list —
+    # 236 rows is the fleet echoing itself. The rows come back when `query` asks for them, which
+    # is the shape test_mcp_protocol_*.py assert.
+    ("projects",             {"project_count", "enabled_count", "enabled_roots"}, True),
 ]
 
 

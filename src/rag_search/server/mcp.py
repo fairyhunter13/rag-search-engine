@@ -335,9 +335,11 @@ async def overview(project_path: str = "", what: str = "structure", query: str =
                    ctx: Context | None = None) -> str:
     """Overview of a project. what: structure|communities|status|projects|metrics|import_cycles|surprising_connections|validate.
 
-    `query` applies to what="communities" only: it ranks the community map by relevance to your
-    question, which is the architecture axis — use it when you need what a project is *shaped*
-    like rather than where a symbol is. Use `search` for locations.
+    `query` applies to what="communities" and what="projects". For communities it ranks the
+    community map by relevance to your question, which is the architecture axis — use it when you
+    need what a project is *shaped* like rather than where a symbol is. Use `search` for
+    locations. For projects it filters the registry by path substring, and it is the only way to
+    get the rows: an unqueried call answers with counts and roots instead.
     """
     note_activity()
     from rag_search.server._overview import _VALID
