@@ -7,7 +7,8 @@
 The world model was meant to be the single source of truth for the repo's laws. Measured against
 the tree, it was the sixth statement of them. `P0` ("GPU-only inference") was defined in
 `model.yaml`, in `docs/world-model/README.md`, in the generated `.claude/skills/world-model/SKILL.md`,
-in `docs/CONFORMANCE_EVALUATION.md`, in `docs/audits/2026-07-09-root-federation-audit.md`, and in
+in `docs/CONFORMANCE_EVALUATION.md`, in `docs/audits/2026-07-09-root-federation-audit.md` (deleted
+2026-08-18; git history), and in
 §1a of the architecture document. The copies had drifted: two audits said `HR1-HR40` against a
 register that ran to HR41, and the L2 component map still pointed at a `kb/` module deleted in July.
 
@@ -60,7 +61,8 @@ called for replacing §13b's `HR#` id column with each rule's name, on the reaso
 that names its guard needs no number". **§13b names no guards.** It is two columns wide — id and
 requirement — and the guards are named in §14, a different table whose own first column is the id.
 Executing the instruction would have keyed §14 to nothing. The same plan also exempted the 51 dated
-records in `docs/decisions/` and `docs/audits/` *because* they cite these ids as they stood, which
+records in `docs/decisions/` and `docs/audits/` (the latter deleted 2026-08-18) *because* they cite
+these ids as they stood, which
 is an exemption that only holds while the ids still resolve somewhere; stage B would have removed
 the last place they do. So §13b keeps its ids and becomes the one definition table — stated as
 policy in `README.md` here, and gated since 2026-08-15 by

@@ -45,4 +45,5 @@ unattended and drained the owner's Claude session quota mid-workday.
 And no commit-message trigger: `contains()` matches the whole message including the body, so a
 commit that merely mentioned the tag in prose fired a 60-minute real-model run.
 
-See `docs/audits/2026-07-09-whole-engine-conformance-and-research.md`.
+The audit behind this — `docs/audits/2026-07-09-whole-engine-conformance-and-research.md` — was
+deleted 2026-08-18 and lives in git history; its durable findings are in `knowledge/defects/`.
