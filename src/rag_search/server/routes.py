@@ -67,7 +67,10 @@ async def _api_overview(request: Request) -> JSONResponse:
     from rag_search.server._overview import handle_overview
     proj = body.get("project") or body.get("project_path", "")
     what = body.get("what", "structure")
-    return JSONResponse(json.loads(await asyncio.to_thread(handle_overview, proj, what)))
+    # `query` is not decoration: since 026d824 it is the only way to reach the projects rows,
+    # and the communities ranking has no other knob. Dropping it here made both unreachable.
+    query = body.get("query", "")
+    return JSONResponse(json.loads(await asyncio.to_thread(handle_overview, proj, what, query)))
 
 
 def _register_all(app) -> None:
