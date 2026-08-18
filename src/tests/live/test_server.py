@@ -41,12 +41,19 @@ def test_mcp_graph_nonexistent_returns_error():
 
 
 def test_mcp_overview_projects_returns_list():
-    """overview(what='projects') returns ≥1 real registered project."""
+    """overview(what='projects') reports ≥1 real registered project.
+
+    Unqueried, the arm returns counts and roots rather than the row list — 236 rows is the fleet
+    echoing itself. `query` is what asks for rows, and it is the existing knob rather than a
+    second one.
+    """
     from rag_search.server.mcp import overview as overview_tool
-    result = run_tool(overview_tool("", "projects"))
-    data = json.loads(result)
-    assert "projects" in data
-    assert len(data["projects"]) >= 1, "daemon should have ≥1 registered project"
+    data = json.loads(run_tool(overview_tool("", "projects")))
+    assert data["project_count"] >= 1, "daemon should have ≥1 registered project"
+    assert "projects" not in data, "an unqueried call must not echo the fleet"
+
+    scoped = json.loads(run_tool(overview_tool("", "projects", "rag-search-engine")))
+    assert len(scoped["projects"]) >= 1, "a query must return the rows it matched"
 
 
 def test_mcp_overview_metrics():

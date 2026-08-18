@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -111,8 +112,13 @@ def _payload(r: dict) -> dict:
 
 
 def test_stdio_overview_projects_returns_indexed_sample_projects(stdio_mcp, sample_proj_path):
-    """tools/call overview(projects) over stdio — >=2 sample projects indexed."""
-    r = stdio_mcp.request("tools/call", {"name": "overview", "arguments": {"what": "projects"}})
+    """tools/call overview(projects) over stdio — >=2 sample projects indexed.
+
+    Scoped by `query`: an unqueried call answers with counts and roots, not the row list.
+    """
+    ws = Path(sample_proj_path).parent.name
+    r = stdio_mcp.request("tools/call", {
+        "name": "overview", "arguments": {"what": "projects", "query": ws}})
     data = _payload(r)
     projects = data.get("projects", [])
     assert len(projects) >= 2, f"expected >=2 sample projects, got {len(projects)}"

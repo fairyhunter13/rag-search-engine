@@ -49,6 +49,10 @@ _LIST_PROJECTS_ALLOWLIST = {
     # reads the registry to check *its own two rows' membership*, never to pick a project out of
     # it, which is the thing this guard exists to stop. Landed red in d5ef403.
     "test_run_isolation.py",
+    # SE6: same shape as FE9/FE10 above — the claim is that every federation root on this fleet
+    # declares an exclusion its config still parses, and a synthetic registry would only assert
+    # that about roots the test invented. Rows are read and counted; no path is used as data.
+    "test_systemd_effective_config.py",
     "test_no_real_project_in_tests.py",  # this file
 }
 
