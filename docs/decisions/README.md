@@ -35,6 +35,7 @@ identifiers, and §14's coverage map resolves them under a guard.
 
 | Date | Decision |
 |------|----------|
+| 2026-08-18 | [The bundle becomes the home](2026-08-18-the-bundle-becomes-the-home.md) |
 | 2026-08-17 | [The env var reached only systemd's children](2026-08-17-the-env-var-reached-only-systemds-children.md) |
 | 2026-08-17 | [OKF lands here as a signpost, not a corpus](2026-08-17-okf-lands-as-a-signpost.md) |
 | 2026-08-16 | [A completeness stamp is not a freshness stamp](2026-08-16-a-completeness-stamp-is-not-a-freshness-stamp.md) |
