@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 import requests
@@ -75,11 +76,15 @@ def test_http_mcp_tools_list_returns_exactly_4():
 
 
 def test_http_mcp_overview_projects_returns_indexed_sample_projects(sample_proj_path):
-    """/mcp tools/call overview(projects) — >=2 sample projects indexed (SSE)."""
+    """/mcp tools/call overview(projects) — >=2 sample projects indexed (SSE).
+
+    Scoped by `query`: an unqueried call answers with counts and roots, not the row list.
+    """
     h, _ = _http_session()
+    ws = Path(sample_proj_path).parent.name
     r = requests.post(_MCP_URL, json={
         "jsonrpc": "2.0", "id": 3, "method": "tools/call",
-        "params": {"name": "overview", "arguments": {"what": "projects"}},
+        "params": {"name": "overview", "arguments": {"what": "projects", "query": ws}},
     }, headers=h, timeout=10)
     assert r.status_code == 200
     data = json.loads(_sse_json(r)["result"]["content"][0]["text"])
