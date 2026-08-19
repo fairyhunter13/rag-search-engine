@@ -12,8 +12,14 @@ record of what was measured, not of what is built.
   Each module lands with its tests.
 - **No mocks.** A test either calls the real model on the real GPU or touches no model at all.
 - Every file under 300 lines; the package under 2,700.
-- `knowledge/` is deliberately absent. It is rebuilt against the shipped engine, one concept per
-  commit that earns one, not ahead of the code.
+
+## Knowledge bundle
+
+`knowledge/` is an OKF v0.2 bundle. Read the concepts that touch the task before starting; write
+them back in the same commit as the code. The `okf-knowledge-bundle` skill owns how. It is small on
+purpose — a concept that restates a module docstring is not written, and `knowledge/log.md` records
+which ones were refused for that reason.
+Gate: `uv run pytest tests/test_okf_bundle.py`, which fails rather than skips without `okf`.
 
 ## Two rules that outlive the rebuild
 
