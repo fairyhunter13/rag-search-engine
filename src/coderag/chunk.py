@@ -10,16 +10,24 @@ second GPU pass to decide where to cut.
 No parser, no grammar, no per-language path. A controlled study over 864
 configurations (arXiv:2605.04763) found structure-aware chunking does not beat
 a sliding window on quality or cost, and function-level chunking was *worse* by
-3.96-5.64 pp Exact Match. The old engine spent ~4,200 lines on the parser
+3.57-5.64 pp Exact Match. The old engine spent ~4,200 lines on the parser
 track, including 211 lines of subprocess isolation whose only job was to
 survive a parse that cannot be cancelled in-process. That is the price of the
 tie.
 
-**The header is where the measured gain is.** The three-way code comparison
-that put a tree-sitter chunker first credits its scope context headers --
-enclosing class, imports, path -- not its AST boundaries; cAST has the same
-parser, lacks the header, and loses. So the header is built from what a regex
-already knows, and the grammar stays uninstalled.
+**The header is unevidenced, and this docstring used to claim otherwise.** It
+credited cAST's rival with scope headers and said cAST "lacks the header, and
+loses". cAST prepends no header at all: its +4.3 Recall@5 is from AST
+boundaries, and its own limitations section says it works "without explicit
+contextual awareness" -- naming the header as future work, not as its result.
+Every *measured* gain for prepending context comes from an LLM-generated blurb
+(one model call per chunk) or from context trained into the embedder. No
+published result isolates a regex scope header. So the header stays for now
+because it is nearly free, `CHUNK_HEADER=0` is a real bake-off arm, and
+whichever way that arm falls is what ships.
+
+The header is also the one place per-type knowledge enters this pipeline, which
+is why it dispatches on language rather than the splitter doing so.
 """
 
 from __future__ import annotations
@@ -30,7 +38,7 @@ from dataclasses import dataclass
 
 from semantic_text_splitter import TextSplitter
 
-from . import config
+from . import config, filters
 
 _WS = re.compile(r"\s+")
 
@@ -50,6 +58,17 @@ _DECL = re.compile(
 )
 
 MAX_IMPORTS = 5
+
+# A markdown ATX heading. The prose analogue of a declaration: the chain of
+# enclosing headings is what tells a reader which section a paragraph is in.
+_HEADING = re.compile(r"^(#{1,6})\s+(\S.*?)\s*#*$")
+
+# A mapping key in YAML, JSON or a TOML `key = ...` line, with its indentation.
+# Quotes are optional so the same pattern reads JSON's `"key":` form.
+_KEY = re.compile(r"""^(\s*)(?:-\s+)?["']?([\w.\-/]+)["']?\s*[:=](?:\s|$)""")
+
+# A TOML table header, which states its own full path and ends the walk.
+_TOML_TABLE = re.compile(r"^\s*\[+\s*([^\]]+?)\s*\]+\s*$")
 
 
 @dataclass(slots=True)
@@ -93,12 +112,75 @@ def _decl_at(lines: list[str], line_no: int) -> str:
     return ""
 
 
+def _heading_chain(lines: list[str], line_no: int) -> str:
+    """The enclosing markdown headings, outermost first.
+
+    Walk up keeping only headings that are strictly shallower than the last one
+    kept, which is what makes `### C` under `## B` under `# A` come back as the
+    path rather than as every heading above the chunk.
+    """
+    chain, want = [], 7
+    for i in range(min(line_no, len(lines)) - 1, -1, -1):
+        if (match := _HEADING.match(lines[i])) and (level := len(match.group(1))) < want:
+            chain.append(match.group(2))
+            want = level
+            if level == 1:
+                break
+    return " > ".join(reversed(chain))
+
+
+def _key_path(lines: list[str], line_no: int, *, toml: bool) -> str:
+    """The enclosing key path in YAML, JSON or TOML, by indentation.
+
+    Same shape as the heading walk, with indent standing in for heading level.
+    TOML is the one dialect where a column-0 key is not the top: `[tool.ruff]`
+    above it is, so only a table header ends that walk. Everywhere else a
+    column-0 key does, which also keeps the table regex away from the YAML flow
+    sequences it would otherwise misread.
+    """
+    path, want = [], None
+    for i in range(min(line_no, len(lines)) - 1, -1, -1):
+        line = lines[i]
+        if toml and (match := _TOML_TABLE.match(line)):
+            path.append(match.group(1))
+            break
+        if (match := _KEY.match(line)) and (want is None or len(match.group(1)) < want):
+            path.append(match.group(2))
+            want = len(match.group(1))
+            if want == 0 and not toml:
+                break
+    return ".".join(reversed(path))
+
+
 def scope_header(rel_path: str, lines: list[str], start_line: int) -> str:
+    """Path, plus whatever "where am I" means for this file type.
+
+    Dispatching here rather than in the splitter is deliberate. The boundary
+    evidence rates format-aware splitting a tie on code and this corpus is a
+    quarter prose and data, so the cheap, reversible place to hold per-type
+    knowledge is the one string we prepend -- not a second chunker, which costs
+    a full re-index to compare and doubles the eval matrix.
+
+    An unlabeled extension falls to the code arm on purpose: a new language gets
+    the generic declaration regex for free, and the arm degrades to the path.
+    """
     parts = [rel_path]
-    if imports := _imports(lines):
-        parts.append(f"imports: {imports}")
-    if decl := _decl_at(lines, start_line):
-        parts.append(f"in: {decl}")
+    lang = filters.lang_of(rel_path)
+    if lang in filters.DOC_LANGS:
+        # Never `_decl_at` here. The generic C-family arm matches any prose line
+        # ending in a parenthetical, so a section heading became an `in:` line
+        # borrowed from an unrelated part of the file -- and an adjacent-but-wrong
+        # header is the hardest kind of distractor to retrieve past.
+        if chain := _heading_chain(lines, start_line):
+            parts.append(f"in: {chain}")
+    elif lang in filters.DATA_LANGS:
+        if keys := _key_path(lines, start_line, toml=lang == "toml"):
+            parts.append(f"in: {keys}")
+    else:
+        if imports := _imports(lines):
+            parts.append(f"imports: {imports}")
+        if decl := _decl_at(lines, start_line):
+            parts.append(f"in: {decl}")
     return "\n".join(parts)
 
 

@@ -127,9 +127,11 @@ DISABLE_TENSORRT = _env_flag("DISABLE_TENSORRT", True)
 # ------------------------------------------------------------------- chunking
 
 # Non-whitespace characters, so that indented and dense code get comparable
-# amounts of content per chunk. 2,000 is measured, not chosen: "across both
-# benchmarks, 2,000 non-whitespace characters is a robust default"
-# (arXiv:2605.04763), which is also the unit cAST defines.
+# amounts of content per chunk -- the unit cAST defines (arXiv:2506.15655).
+# 2,000 is a round number in a flat region, not an optimum: the 864-config study
+# (arXiv:2605.04763) reports that "chunk size has a weaker, non-monotonic
+# effect" and names no default. An earlier comment here quoted that paper
+# calling 2,000 "a robust default"; it says no such thing.
 CHUNK_CHARS = _env_int("CHUNK_CHARS", 2000)
 
 # Zero, and the same study is why: overlap is negligible (<=0.5 pp) at sizes

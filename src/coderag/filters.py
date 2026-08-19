@@ -93,6 +93,11 @@ LANGS = {
 # still ask for prose without knowing every extension that carries it.
 DOC_LANGS = frozenset({"markdown", "docs", "html", "xml"})
 
+# Files whose structure is a key path rather than a declaration. Separate from
+# DOC_LANGS because the header built for them is different, not because the
+# chunker treats them differently -- it does not.
+DATA_LANGS = frozenset({"json", "yaml", "toml"})
+
 
 def is_secret_path(path: Path | str) -> bool:
     name = Path(path).name

@@ -10,6 +10,7 @@ okf_version: "0.2"
 
 # Decision
 
+* [Per-type knowledge enters through the header, not through a second splitter](decisions/the-header-dispatches-on-type-the-splitter-does-not.md) - A quarter of the corpus is prose and structured data the code-only evidence never covered, and the four-arm header is the reversible half of the fix.
 * [One chunker ships, it is third-party, and the part we wrote is the header](decisions/one-chunker-and-it-is-third-party.md) - Six splitter libraries and four boundary strategies compared on August 2026 evidence, and why the measured gain is in the scope header rather than the boundary.
 * [Two MCP tools, and everything an operator needs is on the CLI](decisions/two-tools-and-the-operator-surface-is-the-cli.md) - The 4-tool, 16-route, 20-command surface contracted to two actions, and the refusals that hold it there.
 * [sqlite-vec, with the measurement that reverses it stated up front](decisions/sqlite-vec-survives-only-because-search-is-scoped.md) - Brute force survives only because search is scoped to one project plus its members; the scoped p95 that would overturn it.
