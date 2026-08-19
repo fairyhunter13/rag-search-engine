@@ -125,20 +125,33 @@ ARMS = {
         "DOCUMENT_PREFIX": " ",
         "QUERY_PREFIX": " ",
     },
-    # Each model carries its own prefix and its own context limit. Handing one
-    # model another's prefixes measures the mismatch, and reads as the model
-    # losing: gte scored 0.029 that way, and bge failed to run at all against
-    # nomic's 768-token budget with 512 position embeddings.
+    # Each model carries its own prefix, its own context limit, and its own
+    # pooling. Handing one model another's measures the mismatch, and reads as
+    # the model losing: gte scored 0.029 on borrowed prefixes, and bge failed to
+    # run at all against nomic's 768-token budget with 512 position embeddings.
+    # The pooling was the one that got missed -- see the arms marked cls, which
+    # were scored on a masked mean until 2026-08-19.
     "gte-modernbert": {
         "EMBED_MODEL": "Alibaba-NLP/gte-modernbert-base",
+        "EMBED_POOLING": "cls",
         "DOCUMENT_PREFIX": " ",
         "QUERY_PREFIX": " ",
     },
     "bge-base": {
         "EMBED_MODEL": "BAAI/bge-base-en-v1.5",
+        "EMBED_POOLING": "cls",
         "EMBED_MAX_TOKENS": "512",
         "DOCUMENT_PREFIX": " ",
         "QUERY_PREFIX": "Represent this sentence for searching relevant passages: ",
+    },
+    # The only code-specific embedder that clears both filters this repo cannot
+    # bend: apache-2.0 for an MIT public tree, and an official ONNX export
+    # (fp16 too). 161M, 768 dims so the store's width is unchanged, mean-pooled
+    # like the incumbent, and no prefixes -- it was trained without them.
+    "jina-code": {
+        "EMBED_MODEL": "jinaai/jina-embeddings-v2-base-code",
+        "DOCUMENT_PREFIX": " ",
+        "QUERY_PREFIX": " ",
     },
     "overlap-300": {"CHUNK_OVERLAP": "300"},
     "no-header": {"CHUNK_HEADER": "0"},
@@ -149,6 +162,7 @@ ARMS = {
     "nomic-dims256": {"EMBED_TRUNCATE_DIMS": "256", "EMBED_DIMS": "256"},
     "bge-small": {
         "EMBED_MODEL": "BAAI/bge-small-en-v1.5",
+        "EMBED_POOLING": "cls",
         "EMBED_DIMS": "384",
         "EMBED_MAX_TOKENS": "512",
         "DOCUMENT_PREFIX": " ",

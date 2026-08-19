@@ -81,6 +81,13 @@ WATCH_DEBOUNCE_MS = _env_int("WATCH_DEBOUNCE_MS", 1500)
 EMBED_MODEL = _env("EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
 EMBED_DIMS = _env_int("EMBED_DIMS", 768)
 EMBED_MAX_TOKENS = _env_int("EMBED_MAX_TOKENS", 768)
+
+# How the token states become one vector. Third in the list of things a model
+# carries with it, after its prefixes and its context limit -- and the one that
+# is invisible when wrong, because every pooling produces a plausible unit
+# vector. bge and gte-modernbert are trained on CLS; nomic and jina on the mean.
+EMBED_POOLING = _env("EMBED_POOLING", "mean")
+
 RERANK_MODEL = _env("RERANK_MODEL", "Alibaba-NLP/gte-reranker-modernbert-base")
 RERANK_MAX_TOKENS = _env_int("RERANK_MAX_TOKENS", 512)
 
