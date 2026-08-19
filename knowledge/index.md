@@ -5,6 +5,7 @@ okf_version: "0.2"
 # Constraint
 
 * [Joining a root is a configuration change to an existing project, and it has to reach the index](constraints/joining-a-root-is-a-config-change-to-an-existing-project.md) - One registry row per resolved path records why it is there, and the config signature turns the next index pass into a reconcile rather than a no-op.
+* [This host cannot produce an admissible latency number while it throttles](constraints/this-host-cannot-produce-an-admissible-latency-number.md) - The card runs three degrees past its own throttle point at ~15% of rated clock, so a timing figure measured here is a cooling measurement; recall survives, latency does not.
 
 # Decision
 

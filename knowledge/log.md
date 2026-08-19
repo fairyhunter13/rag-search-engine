@@ -7,6 +7,9 @@ title: coderag knowledge history
 
 ## 2026-08-19
 
+- **Creation**: [this host cannot produce an admissible latency number](constraints/this-host-cannot-produce-an-admissible-latency-number.md), written from a measurement taken while the bake-off ran: `GPU T.Limit` at −3, SM clock ~460 MHz of a rated 3090, 60 W drawn of 175 available, chassis 97 °C. Written as a concept rather than a `gpu.py` comment because it invalidates numbers in three other places — the sqlite-vec kill criterion, the live suite's recorded p50/p95, and every per-arm wall clock — and a comment beside `cool_down()` reaches none of those readers. The question that produced it was "should we use lighter models", and the honest answer is that the throttle costs ~6× against a shortlist spread of ~1 pp, so the model was the smaller term.
+- **Update**: [the sqlite-vec decision](decisions/sqlite-vec-survives-only-because-search-is-scoped.md) gains the distinction between a criterion that is met and one that cannot currently be measured. Its whole argument is that the reversal condition is a number, and a number this host cannot produce would buy an ANN index to fix a fan.
+
 - **Deprecation**: the v1 bundle — all 31 concepts — was **deleted** rather than deprecated in
   place. The `okf-knowledge-bundle` rule is augment-never-shrink, and this is the exception it does
   not cover: that rule governs a bundle whose subject still exists. Here the subject was deleted in
