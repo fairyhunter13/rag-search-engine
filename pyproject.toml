@@ -13,7 +13,12 @@ dependencies = [
     # onnxruntime-gpu, never onnxruntime: the CPU wheel exports a
     # CUDAExecutionProvider name that resolves to CPU, which is the one failure
     # gpu.py exists to make impossible.
-    "onnxruntime-gpu>=1.26",
+    #
+    # Pinned and extra'd, both deliberately. `>=1.26` with no extras left the
+    # CUDA runtime ambient rather than declared, and ORT's own build moved from
+    # CUDA 12 to CUDA 13 at exactly 1.27 -- so the resolver walked forward while
+    # the cu12 wheels stayed, and every session loaded on CPU.
+    "onnxruntime-gpu[cuda,cudnn]==1.29.*",
     "tokenizers>=0.23",
     "numpy>=2.0",
     "huggingface-hub>=1.0",
@@ -23,6 +28,10 @@ dependencies = [
     "uvicorn>=0.34",
     "httpx>=0.28",
     "watchfiles>=1.0",
+    # The splitter. Rust, MIT, zero transitive dependencies, and it returns each
+    # chunk with its offset -- which is what makes a line range a newline count
+    # rather than a re-derivation this engine would have to guess at.
+    "semantic-text-splitter>=0.32,<0.33",
 ]
 
 [project.scripts]
