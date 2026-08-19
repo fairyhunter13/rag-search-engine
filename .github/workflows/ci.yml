@@ -55,8 +55,11 @@ jobs:
       - name: Install okf
         run: go install github.com/fairyhunter13/okf/cmd/okf@v0.1.0
 
+      # Here rather than in the unit job, which is the only place `okf` is
+      # installed. These tests shell out to it and fail closed when it is
+      # absent -- correctly, and that is what turned the unit lane red.
       - name: Knowledge bundle conformance
-        run: okf check knowledge
+        run: pytest tests/test_okf_bundle.py -q
 
       # Not `continue-on-error`. The bundle is clean under -Werror today, and a
       # gate whose failure is swallowed reports the same green as a passing one.
@@ -88,7 +91,10 @@ jobs:
       - name: Tests
         env:
           CODERAG_NAME_BAN: none
-        run: pytest -m "not gpu and not live and not restart" -q --strict-markers --strict-config -ra
+        # The bundle tests are the `quality` job's, where `okf` exists.
+        run: >-
+          pytest -m "not gpu and not live and not restart" --ignore=tests/test_okf_bundle.py
+          -q --strict-markers --strict-config -ra
 
 # NOTE: there are no GPU or live jobs here, and that is deliberate.
 # They used to run `runs-on: self-hosted` against the maintainer's workstation.
