@@ -13,6 +13,8 @@ okf_version: "0.2"
 * [One chunker ships, it is third-party, and the part we wrote is the header](decisions/one-chunker-and-it-is-third-party.md) - Six splitter libraries and four boundary strategies compared on August 2026 evidence, and why the measured gain is in the scope header rather than the boundary.
 * [Two MCP tools, and everything an operator needs is on the CLI](decisions/two-tools-and-the-operator-surface-is-the-cli.md) - The 4-tool, 16-route, 20-command surface contracted to two actions, and the refusals that hold it there.
 * [sqlite-vec, with the measurement that reverses it stated up front](decisions/sqlite-vec-survives-only-because-search-is-scoped.md) - Brute force survives only because search is scoped to one project plus its members; the scoped p95 that would overturn it.
+* [Progress is a file, not a protocol notification](decisions/progress-is-a-file-not-a-protocol-notification.md) - MCP's two mechanisms for long-running work both need a live request or a second status surface; the counter is a throttled JSON file instead.
+* [The thermal pause is not what indexing costs, and the profile says so](decisions/the-thermal-pause-is-not-what-indexing-costs.md) - 80.7% of self-time is the ONNX forward pass and 0.04% is cool_down, so the cooldown stays and the lever is 7.63 chunks per call against a ceiling of 128.
 
 # Defect
 
