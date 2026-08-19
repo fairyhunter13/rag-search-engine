@@ -259,7 +259,13 @@ def main(argv: list[str] | None = None) -> int:
         return _worker(args.project.resolve(), args.lane, args.limit)
 
     names = [a for a in (args.arms.split(",") if args.arms else ARMS) if a]
-    rows = [run_arm(n, args.project.resolve(), args.scratch, args.lane, args.limit) for n in names]
+    args.scratch.mkdir(parents=True, exist_ok=True)
+    partial = args.scratch / "results.json"
+    rows = []
+    for name in names:
+        rows.append(run_arm(name, args.project.resolve(), args.scratch, args.lane, args.limit))
+        # stdout only arrives at the end, and an arm costs ~25 min of GPU time.
+        partial.write_text(json.dumps(rows, indent=2), encoding="utf-8")
     print(json.dumps(rows, indent=2))
     # Read the deltas, never the levels: the same model scored 0.61 and 0.19 on
     # two stores of the same corpus, purely from distractor count.

@@ -2,7 +2,7 @@
 type: Constraint
 resource: src/coderag/gpu.py, tests/test_thermal.py
 title: This host cannot produce an admissible latency number while it throttles
-description: The laptop runs its GPU three degrees past its own throttle point at roughly a sixth of rated clock, so every timing figure measured here is a thermal measurement rather than an engine one.
+description: The laptop's GPU runs at a sixth of rated clock, so every timing figure measured here measures the host rather than the engine -- and the cause is a power cap, not the heat the first reading blamed.
 tags: [thermal, measurement, latency, kill-criterion]
 status: stable
 generated: { by: claude/opus-5, at: 2026-08-19T12:45:00Z }
@@ -57,3 +57,54 @@ rather than not at all. The half it does not own is the power cap — `nvidia-sm
 2026's power-capping literature converges on ~70% TDP holding ~93% of throughput. A *deliberate* cap
 also beats this involuntary one for measurement, because an erratic clock is what makes a number
 unrepeatable.
+
+# Amendment, 2026-08-19 — the claim holds, the cause was wrong
+
+Everything above about *admissibility* stands. The **diagnosis does not**, and the way it failed is
+the part worth keeping.
+
+Re-measured the same day under the same sustained load:
+
+| | first reading | re-measured | live throttle reason |
+|---|---|---|---|
+| GPU temp | 88–89 °C, pinned | **66–70 °C** | — |
+| CPU / chassis | 96 °C / 97 °C | **68–71 °C / 69–71 °C** | — |
+| `SW Thermal Slowdown` | "Active, 330,867 s" | — | **Not Active** |
+| `HW Thermal Slowdown` | — | — | **Not Active** |
+| `SW Power Cap` | — | — | **Active** |
+| power | 50–71 W | 75–80 W against an **80 W** cap | `power.max_limit` = **175 W** |
+
+**`nvidia-smi` prints two blocks that look alike and are not.** `Clocks Event Reasons` is
+instantaneous state; `Clocks Event Reasons Counters` is a lifetime accumulator in microseconds. The
+"Active, 330,867 s" above is the *counter* — about 93 hours summed over the life of the card — read
+as if it described the current moment. The live block said Not Active the whole time. An error of
+this shape does not read as a guess: it arrives with a unit and six significant figures, and that is
+exactly why it survived unchallenged.
+
+The real constraint is that the board is pinned to its **80 W default cap on a 175 W part** — 46%.
+`Notebook Dynamic Boost: Supported`, but nothing negotiates the budget, so the card sits on its floor.
+
+So the sentence above — "the card is not power-limited" — is precisely inverted. It is *only*
+power-limited.
+
+# Amendment: two fixes that cannot work here, and one that can
+
+The closing paragraph proposes `nvidia-smi -pl`. **It cannot work on this machine.** Laptop GPUs
+return *"Changing power management limit is not supported in current scope"*; the knob is not
+root-gated, it is absent. `power-profiles-daemon` is the other dead end —
+`/sys/firmware/acpi/platform_profile` does not exist here, which is why PPD reports
+`PlatformDriver: placeholder`, and it therefore has no channel to the dGPU at all.
+
+The lever that exists is **`nvidia-powerd`**, the daemon that negotiates Dynamic Boost. Ubuntu 24.04's
+`nvidia-kernel-common-595` ships the binary at `/usr/bin/nvidia-powerd` but installs **neither** its
+systemd unit (doc-only, under `/usr/share/doc/`) **nor** any D-Bus policy — so the service does not
+exist until it is assembled by hand, and without the policy it starts and then fails to own
+`nvidia.powerd.server`. Both files placed, the enforced limit went **80 W → 130 W** against a 175 W
+maximum. See [restoring Dynamic Boost](../runbooks/restoring-dynamic-boost.md), which also names the
+`nvidia-smi` field that reads `[N/A]` on a working system.
+
+What this changes for measurement: **recall verdicts taken before the fix remain valid** — all arms
+were capped equally and recall@k is not a timing metric, which is what the original entry got right
+for the wrong reason. **Latency verdicts stay inadmissible until the cap is lifted** — which it now is, so the
+sqlite-vec kill criterion is testable for the first time, on runs taken *after* 2026-08-19T14:28Z
+and not before.
