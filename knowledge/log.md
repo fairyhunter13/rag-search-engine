@@ -97,3 +97,14 @@ title: coderag knowledge history
   Dynamic Boost symptom; the unit needs `SuccessExitStatus=1`, which the noble doc copy omits; and
   the honest expectation is **+5 to +25 W**, not the 80 → 175 W the numbers invite, because the rest
   of that gap is platform power mode and this machine has no `platform_profile` to reach it.
+- **Added** `decisions/progress-is-a-file-not-a-protocol-notification.md` and
+  `decisions/the-thermal-pause-is-not-what-indexing-costs.md`. The first records two refusals with
+  named alternatives: `notifications/progress` needs a `progressToken` on a live request and `index`
+  returns immediately by design, and the Tasks extension is poll-based — which is the shape `index`
+  already has, so adopting it adds a second status surface for a semantic already exposed. The
+  second is a profile that contradicted the question that prompted it: the thermal cooldown is one
+  sample in 2,359 and the forward pass is 80.7%, so *keeping* the governor is the decision, and the
+  batch-size finding (7.63 chunks per call against a ceiling of 128) is recorded where the next
+  person looking to speed up indexing will meet it.
+- **Refused**: a concept for `progress.snapshot`'s ETA algebra. The reasoning is three lines at the
+  call site and there is no rejected alternative — the "clever" form reduced to the naive one.

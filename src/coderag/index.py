@@ -23,11 +23,11 @@ import logging
 import queue
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import chunk as chunker
-from . import discover, embed, gpu, projcfg, registry, store
+from . import discover, embed, gpu, progress, projcfg, registry, store
 
 log = logging.getLogger(__name__)
 
@@ -50,16 +50,16 @@ class State:
     current: str | None = None
     done: int = 0
     failed: int = 0
-    started_at: float = field(default_factory=time.time)
 
     def snapshot(self, depth: int) -> dict:
-        return {
+        out = {
             "state": "indexing" if self.current or depth else "idle",
             "queue_depth": depth,
             "current": self.current,
             "completed": self.done,
             "failed": self.failed,
         }
+        return out | ({"progress": inner} if (inner := progress.snapshot()) else {})
 
 
 _queue: queue.Queue[Job | None] = queue.Queue()
@@ -159,7 +159,7 @@ def index_project(project: Path | str, paths: list[str] | None = None) -> dict:
     deleted = store.delete_files(conn, delete)
     conn.commit()
 
-    written = _write_files(conn, write)
+    written = _write_files(conn, write, project)
 
     store.stamp(conn)
     store.set_meta(conn, config_signature=signature, indexed_at=time.time())
@@ -183,7 +183,7 @@ def index_project(project: Path | str, paths: list[str] | None = None) -> dict:
     }
 
 
-def _write_files(conn, metas: list) -> int:
+def _write_files(conn, metas: list, project: Path | str = "") -> int:
     """Chunk, embed and store, committing every BATCH_FILES.
 
     The embed call sits outside the transaction on purpose: it is the slow part
@@ -191,20 +191,27 @@ def _write_files(conn, metas: list) -> int:
     would block every reader for the length of a batch.
     """
     written, pending = 0, []
+    progress.begin(project, len(metas))
     for meta in metas:
         chunks = chunker.chunk_text(meta.text, rel_path=meta.rel)
-        if not chunks:
-            continue
-        vectors = embed.get_embedder().embed([c.embed_text for c in chunks], side=embed.DOCUMENT)
-        pending.append((meta, chunks, vectors))
-        if len(pending) >= BATCH_FILES:
-            written += _flush(conn, pending)
-            pending = []
-            # After the flush, never before: the wait must land while no
-            # transaction is open and no GPU lock is held, or cooling the card
-            # blocks every reader and every query for the length of the pause.
-            gpu.cool_down()
-    return written + _flush(conn, pending)
+        if chunks:
+            vectors = embed.get_embedder().embed(
+                [c.embed_text for c in chunks], side=embed.DOCUMENT
+            )
+            pending.append((meta, chunks, vectors))
+            if len(pending) >= BATCH_FILES:
+                written += _flush(conn, pending)
+                pending = []
+                # After the flush, never before: the wait must land while no
+                # transaction is open and no GPU lock is held, or cooling the
+                # card blocks every reader and every query for the pause.
+                progress.phase("cooling")
+                progress.cooled(gpu.cool_down())
+                progress.phase("indexing")
+        progress.advance()
+    written += _flush(conn, pending)
+    progress.finish()
+    return written
 
 
 def _flush(conn, pending: list) -> int:
