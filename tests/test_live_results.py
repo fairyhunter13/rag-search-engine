@@ -103,7 +103,10 @@ def test_every_returned_location_resolves(rpc, tree):
         lines = path.read_text().splitlines()
         start, end = hit["lines"]
         assert 1 <= start <= end <= len(lines), (hit, len(lines))
-        assert "KEEP" in "\n".join(lines[start - 1 : end]), hit
+        # Case-folded, because the lexical lane is: `KEEP` legitimately returns
+        # the `import keep` line, and a literal comparison here read that
+        # correct hit as a stale line number.
+        assert "keep" in "\n".join(lines[start - 1 : end]).lower(), hit
 
 
 def test_the_preview_is_a_location_not_a_body(rpc, tree):

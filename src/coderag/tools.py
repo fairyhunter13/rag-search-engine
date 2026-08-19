@@ -13,14 +13,20 @@ members would have to discover them, which is the work this engine exists to do.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
-from . import config, federation, index, registry, search, watch
+from . import config, federation, index, projcfg, registry, search, watch
 
 INSTRUCTIONS = """\
 Code retrieval over the current project and the repos it federates.
 
+- `search` is the primary code lookup here: reach for it before grep or a file
+  read whenever the question is about behaviour rather than a literal string,
+  and for anything that may live in a repo the root federates -- your own tools
+  see one working tree, this sees all of them. Fall back to them when a call
+  errors or hangs, and quote the error -- the two have different causes.
 - `index` flags the current root as indexed and returns immediately; the work
   runs in the background. Call it again to read status -- there is no third
   action and no wait parameter.
@@ -42,8 +48,12 @@ mcp = MCPServer(
     name="index",
     description="Flag the current root and its federated projects as indexed. "
     "Returns immediately; indexing runs in the background. Call again for status.",
+    # Without this the reply carries the payload only as a JSON string inside a
+    # text block, which every caller re-parses and no schema covers. It needs
+    # the concrete `dict[str, Any]`: a bare `dict` is refused at import.
+    structured_output=True,
 )
-def index_project(root: str = "", enabled: bool = True) -> dict:
+def index_project(root: str = "", enabled: bool = True) -> dict[str, Any]:
     target = registry.resolve(root or Path.cwd())
     if not target.is_dir():
         return {"error": f"{target} is not a directory"}
@@ -54,11 +64,38 @@ def index_project(root: str = "", enabled: bool = True) -> dict:
         # directories on a computed set, so nothing here computes such a set.
         removed = federation.unregister(target)
         registry.set_enabled(target, False)
+        # Narrowing is applied when a member joins, so widening has to be
+        # submitted when it leaves: nothing else re-walks a released member, and
+        # until something does it answers under a root's excludes that no longer
+        # apply to it.
+        for project in removed:
+            # Survivors only. `removed` carries the root itself, and a member
+            # claimed by nothing else is out of the registry entirely -- walking
+            # it would rebuild a store no search will ever read.
+            if project != target and registry.get(project) is not None:
+                index.submit(project, reason="index tool")
+        index.start_worker()
         watch.rearm()
-        return {"root": str(target), "enabled": False, "members_released": removed}
+        # The rows themselves, not a count: the question after a teardown is
+        # always *which* ones moved, and `Path` is not JSON.
+        return {
+            "root": str(target),
+            "enabled": False,
+            "members_released": [str(p) for p in removed],
+        }
 
     registry.claim(target, direct=True)
-    members = federation.register(target)
+    try:
+        members = federation.register(target)
+    except projcfg.ConfigError as exc:
+        # A broken `.coderag.toml` is the caller's own mistake and it has to
+        # reach them as something they can act on. Raised, it arrives as an
+        # `isError` envelope with no status attached and no record of which
+        # project is stuck; recorded, the next `index` call still says it.
+        registry.update(target, last_error=str(exc))
+        # Not `_status`: it reads the same broken file to compute
+        # `suppressed_by_excludes` and would raise on the way out.
+        return {"root": str(target), "error": str(exc), "last_error": str(exc)}
     for project in [target, *members]:
         index.submit(project, reason="index tool")
     watch.rearm()
@@ -68,7 +105,7 @@ def index_project(root: str = "", enabled: bool = True) -> dict:
     return _status(target, members)
 
 
-def _status(target: Path, members: list[Path]) -> dict:
+def _status(target: Path, members: list[Path]) -> dict[str, Any]:
     entry = registry.get(target)
     roots = list(entry.roots) if entry else []
     out = {
@@ -88,8 +125,13 @@ def _status(target: Path, members: list[Path]) -> dict:
 
 @mcp.tool(
     name="search",
-    description="Search the current root and its federated projects. Returns ranked "
+    # The decision-time text, and the one a model weighs against its own grep.
+    # What it returns is not enough on its own: naming what grep cannot do is
+    # the part that competes, and on a literal string nothing here wins.
+    description="Find code by describing it, across the current root and every project it "
+    "federates -- your own tools see one working tree, this sees all of them. Returns ranked "
     "locations (path + line range + preview), not file bodies.",
+    structured_output=True,
 )
 def search_code(
     query: str,
@@ -102,7 +144,7 @@ def search_code(
     max_per_file: int = 2,
     preview_lines: int = 3,
     include_body: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     try:
         return search.search(
             query,

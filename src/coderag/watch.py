@@ -18,6 +18,7 @@ never reaches the queue at all.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 from pathlib import Path
@@ -31,6 +32,7 @@ log = logging.getLogger(__name__)
 _thread: threading.Thread | None = None
 _stop = threading.Event()
 _rearm = threading.Event()
+_armed: tuple[Path, ...] = ()
 _lock = threading.Lock()
 
 
@@ -50,8 +52,22 @@ def _roots() -> list[Path]:
 
 
 def rearm() -> None:
-    """Ask the watcher to re-read the registry. The 60 s tick calls this."""
+    """Ask the watcher to re-read the registry. Callers that changed it call this."""
     _rearm.set()
+
+
+def rearm_if_changed() -> None:
+    """The periodic tick's version, and the reason it is not just `rearm`.
+
+    Re-arming tears down every inotify watch and rebuilds it, and on this fleet
+    that is ~120,000 of them -- 5.4 s measured over 151 projects. Called
+    unconditionally every 60 s, the watcher spent a tenth of its life blind, and
+    inotify has no replay: a file deleted inside one of those windows stayed
+    searchable forever while the watcher reported itself healthy. That is how a
+    deleted file survived a 60 s poll here three runs running.
+    """
+    if tuple(_roots()) != _armed:
+        _rearm.set()
 
 
 def _loop() -> None:
@@ -63,17 +79,36 @@ def _loop() -> None:
             continue
 
         _rearm.clear()
+        global _armed
+        # The unfiltered list on purpose: a project dropped below for a broken
+        # config is still enabled, so comparing against the filtered one would
+        # differ on every tick and re-arm forever -- the bug this replaces.
+        _armed = tuple(roots)
         configs = {}
-        for root in roots:
+        for root in list(roots):
             entry = registry.get(root)
-            configs[root] = projcfg.effective(root, tuple(entry.roots) if entry else ())
+            try:
+                configs[root] = projcfg.effective(root, tuple(entry.roots) if entry else ())
+            except projcfg.ConfigError as exc:
+                # One typo in one repo's `.coderag.toml` used to take the whole
+                # thread down, and a dead watcher is indistinguishable from a
+                # quiet one: nothing restarts it and every other project stops
+                # noticing writes. Drop the project, keep the fleet.
+                log.warning("not watching %s: %s", root, exc)
+                with contextlib.suppress(Exception):
+                    registry.update(root, last_error=str(exc))
 
+        roots = [r for r in roots if r in configs]
+        if not roots:
+            if _stop.wait(config.SCHEDULER_TICK_S):
+                return
+            continue
         log.info("watching %d projects", len(roots))
         for batch in _watch(
             *roots,
             stop_event=_stop,
             debounce=config.WATCH_DEBOUNCE_MS,
-            rust_timeout=config.SCHEDULER_TICK_S * 1000,
+            rust_timeout=config.WATCH_POLL_MS,
             yield_on_timeout=True,
         ):
             _dispatch(batch, roots, configs)
@@ -90,7 +125,13 @@ def _dispatch(batch, roots: list[Path], configs: dict) -> None:
     """
     grouped: dict[Path, set[str]] = {}
     for _change, raw in batch:
-        path = Path(raw)
+        # inotify identifies a directory by inode, so a root and the member it
+        # reaches through a symlink register the same watch, and notify reports
+        # events under whichever was added last. Unresolved, a member's writes
+        # arrive addressed to its root as `link/src/x.py` and the member's own
+        # store is never corrected -- which is how a deleted file stayed
+        # searchable indefinitely.
+        path = Path(raw).resolve()
         project = _owner(path, roots)
         if project is None:
             continue
