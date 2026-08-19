@@ -119,7 +119,12 @@ def register(root: Path | str) -> list[Path]:
 
 
 def unregister(root: Path | str) -> list[Path]:
-    """Drop a root's claim on itself and its members. Returns the rows removed.
+    """Drop a root's claim on itself and its members. Returns the rows released.
+
+    Released, not deleted: a member that was also claimed directly survives the
+    release, and it is the one that most needs reporting -- it goes on being
+    searched, under excludes nobody holds any more, until something re-walks it.
+    Reporting only the deletions hid exactly that row.
 
     Works off the registry rather than a fresh walk: the symlinks may already
     be gone, and a member whose link was deleted is exactly the one that must
@@ -131,7 +136,8 @@ def unregister(root: Path | str) -> list[Path]:
     removed: list[Path] = []
 
     for key, entry in registry.load().items():
-        if root_key in entry.roots and registry.release(key, root=root):
+        if root_key in entry.roots:
+            registry.release(key, root=root)
             removed.append(Path(key))
     if registry.release(root, direct=True):
         removed.append(root)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import threading
 import time
 from pathlib import Path
 
@@ -135,6 +136,99 @@ def test_the_watcher_reports_whether_it_is_actually_running(tmp_path):
     finally:
         watch.stop()
     assert not watch.watching()
+
+
+def test_one_broken_config_does_not_take_the_whole_watcher_down(tmp_path, monkeypatch):
+    """A `ConfigError` raised while building the per-project config escaped the
+    thread. Nothing restarts a watcher and `watching()` was the only thing that
+    would have said so, so every other repo in the fleet quietly stopped
+    noticing writes because one of them had a typo."""
+    broken = tmp_path / "broken"
+    good = tmp_path / "good"
+    for path in (broken, good):
+        path.mkdir()
+        registry.claim(path, direct=True)
+    (broken / ".coderag.toml").write_text('[index]\nexcludes = ["x/*"]\n')
+
+    monkeypatch.setattr(config, "WATCH_DEBOUNCE_MS", 100)
+    watch.start()
+    try:
+        time.sleep(1.0)  # the Rust watcher has to arm before the write
+        (good / "a.py").write_text("x = 1\n")
+        job = _wait_for_job()
+        assert watch.watching(), "the watcher thread died on the broken project"
+        assert job is not None and job.project == good, job
+    finally:
+        watch.stop()
+
+
+def test_the_tick_restarts_a_watcher_that_died(monkeypatch):
+    """`rearm` only sets a flag, and a dead thread reads no flags."""
+    from coderag import server
+
+    started = []
+    monkeypatch.setattr(watch, "start", lambda: started.append(1))
+    monkeypatch.setattr(watch, "rearm", lambda: None)
+    monkeypatch.setattr(server.config, "SCHEDULER_TICK_S", 0.01)
+    monkeypatch.setattr(server.config, "MODEL_IDLE_UNLOAD_S", 0)
+    thread = threading.Thread(target=server._tick, daemon=True)
+    server._stop.clear()
+    thread.start()
+    time.sleep(0.15)
+    server._stop.set()
+    thread.join(2)
+    assert started, "the tick never restarted the watcher"
+
+
+def test_an_event_reported_through_a_roots_symlink_goes_to_the_member(tmp_path):
+    """The path notify reports is not the path the file lives at.
+
+    inotify keys a directory by inode, so a root and the member it reaches
+    through a symlink share one watch descriptor and the reported path is
+    whichever was registered last -- measured both ways against the real
+    watcher, and nothing here chooses the order. The batch is synthetic for
+    that reason: driving this through notify tests the ordering, not the fix.
+    """
+    member, root = tmp_path / "m", tmp_path / "r"
+    (member / "src").mkdir(parents=True)
+    root.mkdir()
+    (root / "link").symlink_to(member, target_is_directory=True)
+    for path in (member, root):
+        registry.claim(path, direct=True)
+
+    roots = [member, root]
+    configs = dict.fromkeys(roots, projcfg.ProjectConfig())
+    watch._dispatch([("2", str(root / "link" / "src" / "a.py"))], roots, configs)
+
+    jobs = _jobs()
+    assert jobs and jobs[0].project == member, (
+        f"the member's own write was billed to {jobs and jobs[0].project}"
+    )
+    assert jobs[0].paths == ["src/a.py"], jobs[0].paths
+
+
+def test_the_tick_does_not_rearm_a_watch_set_that_has_not_changed(tmp_path, monkeypatch):
+    """The blind window, and why it is not a tuning knob.
+
+    Re-arming rebuilds every inotify watch -- 5.4 s over the real 151-project
+    fleet -- and inotify replays nothing, so every re-arm is a window in which
+    a delete is lost permanently. Done unconditionally on the 60 s tick, that
+    was a tenth of the watcher's life, and it is what kept a deleted file
+    searchable through three 60 s polls in a row.
+
+    The assertion is in two halves because either alone passes on the broken
+    code: unconditional `rearm` passes the second, a `pass` passes the first.
+    """
+    monkeypatch.setattr(watch, "_armed", tuple(watch._roots()))
+    watch._rearm.clear()
+    watch.rearm_if_changed()
+    assert not watch._rearm.is_set(), "an unchanged registry re-armed the watcher"
+
+    project = tmp_path / "newcomer"
+    project.mkdir()
+    registry.claim(project, direct=True)
+    watch.rearm_if_changed()
+    assert watch._rearm.is_set(), "a newly registered project was never picked up"
 
 
 def test_rearm_is_observable_so_the_tick_can_pick_up_a_new_project():

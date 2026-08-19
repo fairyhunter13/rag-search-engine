@@ -76,6 +76,38 @@ def test_unflagging_releases_the_row_and_never_the_index_directory(tmp_path, mon
     assert db.exists(), "unflagging must never delete a store"
 
 
+def test_unflagging_a_root_re_walks_the_members_it_released(tmp_path, monkeypatch):
+    """The asymmetry that made a root's excludes outlive the root.
+
+    Joining a root narrows a member and submits it; leaving one widens it and
+    submitted nothing, so the member went on answering under excludes nobody
+    was holding any more -- until the next unrelated write to it, or forever.
+
+    The member is claimed directly on purpose: that is the row that survives the
+    release and goes on being searched, and `unregister` used to report only the
+    rows it deleted -- so the one project that needed re-walking was the one
+    project it never named.
+    """
+    monkeypatch.setattr(watch, "start", lambda: None)
+    monkeypatch.setattr(index, "start_worker", lambda: None)
+    member, root = tmp_path / "m", tmp_path / "r"
+    (member / "src").mkdir(parents=True)
+    root.mkdir()
+    (root / "linked").symlink_to(member, target_is_directory=True)
+    tools.index_project(str(member))
+    tools.index_project(str(root))
+    while not index._queue.empty():
+        index._queue.get_nowait()
+
+    out = tools.index_project(str(root), enabled=False)
+
+    assert str(member) in out["members_released"], out
+    submitted = []
+    while not index._queue.empty():
+        submitted.append(index._queue.get_nowait().project)
+    assert submitted == [member], submitted
+
+
 def test_a_search_error_is_returned_as_data_not_raised(tmp_path):
     """An agent can act on an error that names what to call next; a transport
     failure is just a dead turn."""
@@ -94,6 +126,31 @@ def test_the_app_serves_two_routes_and_no_dashboard():
     paths = {getattr(r, "path", None) for r in server.build_app().routes}
     assert "/mcp" in paths and "/healthz" in paths
     assert not {p for p in paths if p and p.startswith("/api")}
+
+
+def test_mcp_answers_a_request_and_not_only_the_route_table(monkeypatch):
+    """`/mcp` existing in `routes` is not `/mcp` working.
+
+    Ours replaced the SDK's lifespan instead of nesting inside it, so the
+    session manager's task group was never entered and every call answered 500
+    while `/healthz` -- a plain route -- stayed green. The route-table test
+    above passed throughout.
+    """
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(config, "RECONCILE_ON_START", False)
+    monkeypatch.setattr(index, "start_worker", lambda: None)
+    monkeypatch.setattr(watch, "start", lambda: None)
+
+    with TestClient(server.build_app()) as client:
+        got = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+
+    assert got.status_code != 500, got.text
+    assert "Task group is not initialized" not in got.text
 
 
 async def test_healthz_reports_what_doctor_would_ask():
@@ -131,8 +188,20 @@ def test_the_notifier_is_silent_without_a_socket(monkeypatch):
 def test_the_unit_carries_the_two_numbers_that_were_bought_with_outages():
     text = systemd.unit_text("/usr/bin/python3")
     assert "LimitNOFILE=65536" in text, "150 repos x 3 fds under WAL against a 1024 default"
+    assert "CODERAG_INDEX_TEMP_C=84" in text, (
+        "the governor defaults to off, and the unit is the unattended overnight run"
+    )
     assert "Restart=on-failure" in text
     assert "Type=notify" in text and "WatchdogSec=" in text
+
+
+def test_on_failure_sits_in_unit_where_systemd_reads_it():
+    """systemd logs "Unknown key name" for a `[Service]` OnFailure and carries
+    on, so the misplaced one ran for weeks as an alert that never fired and
+    never said it had not."""
+    text = systemd.unit_text("/usr/bin/python3")
+    unit, service = text.split("\n[Service]\n", 1)
+    assert "OnFailure=" in unit and "OnFailure=" not in service
 
 
 def test_the_alert_waits_before_it_pages():

@@ -28,6 +28,9 @@ def unit_text(executable: str = "") -> str:
 [Unit]
 Description=coderag MCP daemon
 After=graphical-session.target
+# [Unit], not [Service]: systemd logs "Unknown key name" and carries on, so a
+# misplaced one is an alert that never fires and never says it did not.
+OnFailure={config.APP}-alert@%n.service
 
 [Service]
 Type=notify
@@ -38,7 +41,9 @@ Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
 Environment=PYTHONUNBUFFERED=1
-OnFailure={config.APP}-alert@%n.service
+# The governor is off by default and this is the run it exists for: unattended,
+# overnight, on a card that throttles at 87 C. It costs 0.04% of run time.
+Environment=CODERAG_INDEX_TEMP_C=84
 
 [Install]
 WantedBy=default.target

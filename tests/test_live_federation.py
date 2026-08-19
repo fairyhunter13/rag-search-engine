@@ -19,9 +19,30 @@ from live import Rpc, require_clear_gpu, require_daemon, until
 
 pytestmark = pytest.mark.live
 
-VENDORED = "vendor/bundle.min.js"
+# Not `vendor/bundle.min.js`, which is what this was. `vendor/*` and `*.min.js`
+# are both in `DEFAULT_IGNORES`, so no root's exclude was ever what dropped it:
+# test 4 asserted a mechanism that could not have run, and tests 5 and 6 waited
+# 300 s each for a file the indexer is never allowed to see. The path has to be
+# one the *config* excludes and the defaults do not, or the assertion is about
+# `DEFAULT_IGNORES` under another name.
+VENDORED = "thirdparty/bundle.js"
 FIRST_PARTY = "src/session.py"
 NEEDLE = "def rotate_session_secret"
+
+
+def test_0_the_excluded_path_is_one_the_defaults_would_have_indexed():
+    """The fixture's own precondition, asserted rather than assumed.
+
+    Every exclude assertion in this file is satisfied by a file that never got
+    indexed, whatever the reason -- so if `DEFAULT_IGNORES` grows a pattern that
+    covers `VENDORED`, four tests go on passing while the mechanism they name
+    stops being exercised. This is the only place that can notice.
+    """
+    from coderag import discover, projcfg
+
+    assert discover.indexable(VENDORED, projcfg.ProjectConfig()), (
+        f"{VENDORED} is dropped before any config exclude sees it"
+    )
 
 
 def _repo(path, files: dict[str, str]):
@@ -59,7 +80,7 @@ def member(tmp_path_factory):
 def root(tmp_path_factory, member):
     """A root that reaches the member only through a directory symlink."""
     path = _repo(tmp_path_factory.mktemp("root"), {"app.py": "import member\n"})
-    (path / ".coderag.toml").write_text('[index]\nexclude = ["vendor/*"]\n')
+    (path / ".coderag.toml").write_text('[index]\nexclude = ["thirdparty/*"]\n')
     (path / "linked-member").symlink_to(member, target_is_directory=True)
     return path
 
@@ -169,4 +190,4 @@ def test_8_teardown_leaves_the_fleet_alone(rpc, root, member):
     test that pruned rows is what destroyed it once already."""
     for path in (root, member):
         rpc.tool("index", root=str(path), enabled=False)
-    assert rpc.tool("index", root=str(root), enabled=False)["members_released"] == 0
+    assert rpc.tool("index", root=str(root), enabled=False)["members_released"] == []

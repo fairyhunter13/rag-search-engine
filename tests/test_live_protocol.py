@@ -13,19 +13,19 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from coderag import config
-from live import Rpc, require_clear_gpu, require_daemon
+from live import MODERN_PROTOCOL, Rpc, require_clear_gpu, require_daemon
 
 pytestmark = pytest.mark.live
 
 PROTOCOL = "2025-06-18"
-# The revision `mcp` 2.x negotiates. Kept beside the older one on purpose: a
-# server that only answers the version its own SDK prefers is a server that
-# breaks every client that has not upgraded yet.
-CURRENT_PROTOCOL = "2026-07-28"
+# The newest revision the handshake can reach. `2026-07-28` is not one of them:
+# it dropped `initialize` entirely, so asking for it here is answered with this.
+LATEST_HANDSHAKE = "2025-11-25"
 # `--help` verified against 0.1.16 on 2026-08-19: `server --url` and `--spec-version`.
 CONFORMANCE = "~0.1.16"
 
@@ -127,33 +127,51 @@ def test_the_official_inspector_agrees(rpc):
     )
 
 
-def test_the_current_spec_revision_is_negotiated(rpc):
-    """`2026-07-28` made the protocol core stateless and deprecated Roots,
-    Sampling and Logging. This repo pins `mcp==2.0.*`, which shipped alongside
-    it -- so the pin is only correct if the wire agrees, and nothing else here
-    would notice a server stuck on an older revision."""
+def test_the_handshake_settles_on_the_newest_revision_it_can_reach(rpc):
+    """Asking for `2026-07-28` is the interesting case: the handshake cannot
+    reach it, so the correct answer is a counter-offer of the newest revision
+    that it can -- and a server stuck on an older one is the failure nothing
+    else in this suite would notice."""
     result = rpc.call(
         "initialize",
         {
-            "protocolVersion": CURRENT_PROTOCOL,
+            "protocolVersion": MODERN_PROTOCOL,
             "capabilities": {},
             "clientInfo": {"name": "coderag-live-suite", "version": "0.1.0"},
         },
     )
-    assert result["protocolVersion"] == CURRENT_PROTOCOL, (
-        f"asked for {CURRENT_PROTOCOL}, server negotiated {result['protocolVersion']!r}"
+    assert result["protocolVersion"] == LATEST_HANDSHAKE, (
+        f"server negotiated {result['protocolVersion']!r}, not the newest handshake revision"
     )
     assert not (set(result["capabilities"]) & {"sampling", "logging", "roots"}), (
         f"server advertises a deprecated capability: {sorted(result['capabilities'])}"
     )
 
 
+def test_the_current_revision_is_served_with_no_handshake_at_all(rpc):
+    """`2026-07-28` replaced `initialize` with one `server/discover` call and
+    no session. ccw's `policy/hermes.py` reads the host system prompt from it,
+    so an unreachable era would silently pin the host to a compatibility path
+    that has a removal date on it."""
+    result = rpc.modern("server/discover")
+
+    assert MODERN_PROTOCOL in result["supportedVersions"], result.get("supportedVersions")
+    assert "index" in result["instructions"] and "search" in result["instructions"]
+    assert not (set(result["capabilities"]) & {"sampling", "logging", "roots"})
+    assert sorted(x["name"] for x in rpc.modern("tools/list")["tools"]) == ["index", "search"]
+
+
 @pytest.mark.skipif(not shutil.which("npx"), reason="the conformance suite needs npx")
-def test_the_official_conformance_suite_passes():
+def test_the_official_conformance_suite_passes(rpc):
     """Separate from the inspector, and it checks what the inspector does not:
     error shapes, required-field handling and the revision's own rules. The
     inspector reports what a server said; this reports whether it was allowed
-    to say it."""
+    to say it.
+
+    It takes `rpc` for the fixture's preconditions, not for the client: run
+    with `-k conformance` it otherwise failed on connection-refused, which
+    names npx as the suspect instead of the daemon that is not running.
+    """
     out = subprocess.run(
         [
             "npx",
@@ -165,7 +183,13 @@ def test_the_official_conformance_suite_passes():
             "--url",
             config.MCP_URL,
             "--spec-version",
-            CURRENT_PROTOCOL,
+            LATEST_HANDSHAKE,
+            # The suite runs every scenario in its set, including the ones for
+            # capabilities this server does not have. The baseline names those,
+            # and the run still fails on anything not in it -- or on anything in
+            # it that starts passing.
+            "--expected-failures",
+            str(Path(__file__).parent / "conformance-baseline.yaml"),
         ],
         capture_output=True,
         text=True,
