@@ -26,6 +26,8 @@ PROTOCOL = "2025-06-18"
 # server that only answers the version its own SDK prefers is a server that
 # breaks every client that has not upgraded yet.
 CURRENT_PROTOCOL = "2026-07-28"
+# `--help` verified against 0.1.16 on 2026-08-19: `server --url` and `--spec-version`.
+CONFORMANCE = "~0.1.16"
 
 
 @pytest.fixture(scope="module")
@@ -156,18 +158,20 @@ def test_the_official_conformance_suite_passes():
         [
             "npx",
             "-y",
-            "@modelcontextprotocol/conformance",
+            # Pinned: pre-1.0, so a minor bump is a breaking one, and an
+            # unpinned suite turns a green test red without a commit here.
+            f"@modelcontextprotocol/conformance@{CONFORMANCE}",
             "server",
             "--url",
             config.MCP_URL,
+            "--spec-version",
+            CURRENT_PROTOCOL,
         ],
         capture_output=True,
         text=True,
         check=False,
         timeout=300,
     )
-    # 0 ok, 4 unreachable, 5 tool error -- a non-zero code that is not 4 means
-    # the daemon answered and the answer was out of spec, which is the finding.
     assert out.returncode == 0, (
         f"exit {out.returncode}:\n{out.stdout[-3000:]}\n{out.stderr[-1500:]}"
     )
