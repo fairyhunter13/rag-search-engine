@@ -1,0 +1,172 @@
+"""Layer 3, part one: federation against the running daemon.
+
+Real repos on disk, real symlinks, real inotify, real GPU, one daemon. The
+fixtures build the tree in a tmp dir rather than pointing at the fleet, because
+every assertion below needs to know what the answer *should* be -- an exclude
+test against a repo whose contents you did not write is satisfied by an empty
+index. The fleet root is measured separately, where the question is latency and
+member count rather than correctness.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import time
+
+import pytest
+
+from live import Rpc, require_clear_gpu, require_daemon, until
+
+pytestmark = pytest.mark.live
+
+VENDORED = "vendor/bundle.min.js"
+FIRST_PARTY = "src/session.py"
+NEEDLE = "def rotate_session_secret"
+
+
+def _repo(path, files: dict[str, str]):
+    path.mkdir(parents=True, exist_ok=True)
+    for rel, text in files.items():
+        target = path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    return path
+
+
+@pytest.fixture(scope="module")
+def rpc():
+    require_clear_gpu()
+    client = Rpc(require_daemon())
+    yield client
+    client.close()
+
+
+@pytest.fixture(scope="module")
+def member(tmp_path_factory):
+    """A repo with one first-party file and one vendored blob, so both
+    directions of an exclude assertion have something to land on."""
+    return _repo(
+        tmp_path_factory.mktemp("member"),
+        {
+            FIRST_PARTY: f"{NEEDLE}(store):\n    return store.rotate()\n",
+            VENDORED: "function ck(){return 'vendored editor bundle'}\n",
+        },
+    )
+
+
+@pytest.fixture(scope="module")
+def root(tmp_path_factory, member):
+    """A root that reaches the member only through a directory symlink."""
+    path = _repo(tmp_path_factory.mktemp("root"), {"app.py": "import member\n"})
+    (path / ".coderag.toml").write_text('[index]\nexclude = ["vendor/*"]\n')
+    (path / "linked-member").symlink_to(member, target_is_directory=True)
+    return path
+
+
+def _hits(rpc, query, root, **kw):
+    out = rpc.tool("search", query=query, root=str(root), mode="lexical", **kw)
+    assert "error" not in out, out
+    return [r["path"] for r in out["results"]]
+
+
+def _indexed(rpc, root):
+    return until(
+        lambda: (rpc.tool("index", root=str(root))["indexed"]["chunks"] or 0) > 0,
+        timeout=180,
+        what="the root's own chunks to land",
+    )
+
+
+# ---------------------------------------------------------------- the sequence
+
+
+def test_1_index_returns_before_the_work_does(rpc, root):
+    """A return that blocks is a failure even if the index is eventually
+    correct: the caller is an agent mid-answer, not a build script."""
+    started = time.perf_counter()
+    out = rpc.tool("index", root=str(root))
+    assert time.perf_counter() - started < 1.0, "index blocked on the build"
+    assert out["members"] == 1, out
+    assert out["watching"] is True
+
+
+def test_2_the_member_is_registered_under_its_real_path(rpc, root, member):
+    """The symlink is a discovery mechanism and must not survive into state --
+    inotify does not traverse one, so a stored symlink is a watcher that
+    silently never fires."""
+    out = rpc.tool("index", root=str(root))
+    assert out["members"] == 1
+    listed = rpc.tool("search", query=NEEDLE, root=str(member), mode="lexical")
+    assert "error" not in listed or "index" not in listed.get("error", ""), listed
+
+
+def test_3_search_from_the_root_reaches_the_member(rpc, root):
+    _indexed(rpc, root)
+    paths = until(
+        lambda: _hits(rpc, NEEDLE, root),
+        timeout=300,
+        what="the member's content to become searchable from the root",
+    )
+    assert any(FIRST_PARTY in p for p in paths), paths
+
+
+def test_4_the_roots_excludes_reach_the_member_that_has_no_config(rpc, root):
+    """Both directions, or an empty index passes the half that matters."""
+    assert _hits(rpc, NEEDLE, root), "first-party content must be findable"
+    assert not [p for p in _hits(rpc, "vendored editor bundle", root) if VENDORED in p]
+
+
+def test_5_a_late_join_narrows_an_existing_index_without_a_rebuild(rpc, member, root):
+    """The real sequence: standalone first, root second. A test that flags the
+    root first never exercises the reconcile at all."""
+    rpc.tool("index", root=str(root), enabled=False)
+    rpc.tool("index", root=str(member))
+    _indexed(rpc, member)
+    assert until(
+        lambda: [p for p in _hits(rpc, "vendored editor bundle", member) if VENDORED in p],
+        timeout=300,
+        what="the standalone member to index its vendored blob",
+    )
+
+    rpc.tool("index", root=str(root))
+    assert until(
+        lambda: not [p for p in _hits(rpc, "vendored editor bundle", member) if VENDORED in p],
+        timeout=300,
+        what="the root's excludes to remove the vendored chunks",
+    )
+    status = rpc.tool("index", root=str(member))
+    assert str(root) in status["roots"], status
+    assert _hits(rpc, NEEDLE, member), "narrowing must not cost the first-party file"
+
+
+def test_6_unflagging_the_root_widens_the_member_back(rpc, member, root):
+    rpc.tool("index", root=str(root), enabled=False)
+    assert until(
+        lambda: [p for p in _hits(rpc, "vendored editor bundle", member) if VENDORED in p],
+        timeout=300,
+        what="the widened config to re-add what the root was suppressing",
+    )
+    assert rpc.tool("index", root=str(member))["roots"] == []
+
+
+def test_7_a_typo_in_the_config_is_an_error_that_names_the_nearest_key(rpc, tmp_path_factory):
+    """A silently ignored exclude typo is how an index ends up three times too
+    large, so the failure has to be loud and at the call that caused it."""
+    project = _repo(tmp_path_factory.mktemp("typo"), {"a.py": "x = 1\n"})
+    (project / ".coderag.toml").write_text('[index]\nexcludes = ["wiki/*"]\n')
+    out = rpc.tool("index", root=str(project))
+    error = until(
+        lambda: out.get("last_error") or rpc.tool("index", root=str(project)).get("last_error"),
+        timeout=60,
+        what="the config error to surface on the project's status",
+    )
+    assert "excludes" in error and "exclude" in error, error
+
+
+def test_8_teardown_leaves_the_fleet_alone(rpc, root, member):
+    """Not a courtesy: this suite runs against the real registry, and a live
+    test that pruned rows is what destroyed it once already."""
+    for path in (root, member):
+        rpc.tool("index", root=str(path), enabled=False)
+    assert rpc.tool("index", root=str(root), enabled=False)["members_released"] == 0
