@@ -115,6 +115,8 @@ QUERY_PREFIX = _env("QUERY_PREFIX", "search_query: ")
 # throttle point and the poll is free by comparison.
 INDEX_TEMP_C = _env_int("INDEX_TEMP_C", 0)
 INDEX_TEMP_POLL_S = _env_int("INDEX_TEMP_POLL_S", 5)
+PROGRESS_PATH = STATE_DIR / "progress.json"
+PROGRESS_WRITE_S = _env_int("PROGRESS_WRITE_S", 2)
 INDEX_TEMP_WAIT_S = _env_int("INDEX_TEMP_WAIT_S", 120)
 
 # 0 means adapt to free VRAM at load time.
