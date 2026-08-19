@@ -67,3 +67,9 @@ title: coderag knowledge history
 - **Refused**: a concept for the incremental persistence added to `tests/eval.py`. The reason lives
   at the call site in three words and the harness is not load-bearing; the durable lesson is already
   in `running-the-live-suite`, which says to read the deltas rather than the levels.
+- **Second amendment** to the same constraint, hours after the first: lifting the power cap moved
+  the binding constraint rather than removing it. At 130 W the card draws 83–90 W and hits 87 °C,
+  `SW Power Cap` goes Not Active and `SW Thermal Slowdown` goes Active. Both readings are correct at
+  their own power limit, which is the durable lesson — **a throttle-reason diagnosis is only valid
+  at the cap it was taken under.** The first amendment was right about that window and wrong to
+  imply heat was never a constraint here.

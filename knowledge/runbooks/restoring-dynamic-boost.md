@@ -94,7 +94,11 @@ chassis behaving as reviewed, not a symptom of this problem.
 
 # What it does not fix
 
+**It does not make this host admissible for latency.** At 130 W the card draws 83–90 W and reaches
+87 °C, at which point `SW Power Cap` goes Not Active and **`SW Thermal Slowdown` goes Active**. The
+budget was the binding constraint at 80 W; heat is the binding constraint at 130 W. Expect a real
+but partial gain, not a rated card.
+
 Recall verdicts taken under the 80 W cap **remain valid** — all arms were capped equally and
-recall@k is not a timing metric. Latency verdicts taken before the fix stay inadmissible, and any
-arm-to-arm *timing* comparison that straddles the change is void: record which side of it each run
-fell on.
+recall@k is not a timing metric. Any arm-to-arm *timing* comparison that straddles the change is
+void: record which side of it each run fell on.
