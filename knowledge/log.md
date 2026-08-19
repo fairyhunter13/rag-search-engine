@@ -54,3 +54,16 @@ title: coderag knowledge history
   skips. It also holds the two checks `okf check` treats as warnings and this bundle treats as
   errors: a link to a file that does not exist, and a `resource:` naming a path that does not — the
   second being exactly how the deleted bundle above ended up describing code that was gone.
+- **Amendment** to `this-host-cannot-produce-an-admissible-latency-number`: the claim held, the
+  cause did not. The card was never thermally saturated — it was pinned to 46% of its power budget,
+  and the "SW Thermal Slowdown: Active, 330,867 s" that anchored the original diagnosis was
+  `nvidia-smi`'s *lifetime counter* in microseconds read as instantaneous state. Amended rather than
+  rewritten: the misreading is the reusable part, because an error carrying a unit and six
+  significant figures does not read like a guess.
+- **Creation**: `runbooks/restoring-dynamic-boost.md`. Written because the fix is two files Ubuntu's
+  driver package installs nowhere systemd or D-Bus will look, and because the obvious verification
+  probe (`nvidia-smi --query-gpu=power.limit`) reports `[N/A]` on a working system — a runbook that
+  only listed the commands would have been re-derived and then disbelieved.
+- **Refused**: a concept for the incremental persistence added to `tests/eval.py`. The reason lives
+  at the call site in three words and the harness is not load-bearing; the durable lesson is already
+  in `running-the-live-suite`, which says to read the deltas rather than the levels.

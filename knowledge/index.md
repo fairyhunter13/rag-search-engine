@@ -6,7 +6,7 @@ okf_version: "0.2"
 
 * [Joining a root is a configuration change to an existing project, and it has to reach the index](constraints/joining-a-root-is-a-config-change-to-an-existing-project.md) - One registry row per resolved path records why it is there, and the config signature turns the next index pass into a reconcile rather than a no-op.
 * [A model carries three things, and pooling is the one that fails invisibly](constraints/a-model-carries-three-things-and-pooling-is-the-invisible-one.md) - Prefixes and context limits fail loudly; a mispooled model returns a plausible unit vector and reads as the model losing.
-* [This host cannot produce an admissible latency number while it throttles](constraints/this-host-cannot-produce-an-admissible-latency-number.md) - The card runs three degrees past its own throttle point at ~15% of rated clock, so a timing figure measured here is a cooling measurement; recall survives, latency does not.
+* [This host cannot produce an admissible latency number while it throttles](constraints/this-host-cannot-produce-an-admissible-latency-number.md) - The card runs at ~15% of rated clock, so a timing figure measured here measures the host; recall survives, latency does not — and the amendment corrects a lifetime counter read as live state.
 
 # Decision
 
@@ -22,3 +22,4 @@ okf_version: "0.2"
 
 * [Running anything that touches the real GPU](runbooks/running-the-live-suite.md) - Both preconditions, the one-at-a-time rule, and how to read a bake-off table without reading the levels.
 * [Restoring the registry, the one file that cannot be re-derived](runbooks/restoring-the-registry.md) - Where the backups are, why no re-index follows a restore, and the two traps that produced the losses.
+* [Restoring Dynamic Boost, and the two files the driver package does not install](runbooks/restoring-dynamic-boost.md) - Why the GPU sat at 46% of its budget, the systemd unit and D-Bus policy Ubuntu ships nowhere useful, and the nvidia-smi field that reports failure on a working system.
