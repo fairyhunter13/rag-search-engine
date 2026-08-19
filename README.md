@@ -80,8 +80,10 @@ coderag bridge-stdio | install-systemd
 ## Development
 
 ```bash
-uv run pytest -m "not gpu and not live"   # no model is loaded
-uv run pytest -m gpu                      # the real models, one run at a time on a machine
+uv run pytest -m "not gpu and not live and not restart"   # no model is loaded
+uv run pytest -m gpu          # the real models, one run at a time on a machine
+uv run pytest -m live         # needs a daemon already running; never starts one
+uv run pytest -m restart      # starts and kills daemons of its own, on a private state dir
 ```
 
 No mocks: a test either calls the real model on the real GPU or touches no model at all. The public
