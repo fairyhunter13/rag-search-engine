@@ -1,9 +1,8 @@
 # coderag — Claude Code instructions
 
 The engine is being rebuilt from zero in `src/coderag/`. The old package, its tests, its docs and
-its knowledge bundle are gone; `docs/archive/` is the only survivor and it describes code that no
-longer exists. **Do not take an architectural claim from `docs/archive/` as current** — it is a
-record of what was measured, not of what is built.
+its knowledge bundle are gone. `knowledge/` is the only prose plane; the previous engine's records
+live in git history at `365a235^` and are not a description of anything that exists.
 
 ## While the rebuild is in progress
 

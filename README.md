@@ -88,9 +88,6 @@ No mocks: a test either calls the real model on the real GPU or touches no model
 hygiene guard needs `CODERAG_NAME_BAN` set — `=none` for a clean clone, because a guard that stands
 down when its input is missing reports the same green as a clean tree.
 
-`docs/archive/` is the previous engine's incident record: unmaintained, and describing code that
-was deleted in `365a235`. Do not read an architectural claim there as current.
-
 ## License
 
 MIT. See [LICENSE](LICENSE).
