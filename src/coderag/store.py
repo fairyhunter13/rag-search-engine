@@ -46,12 +46,17 @@ CREATE TABLE IF NOT EXISTS chunks (
   n_chars    INTEGER NOT NULL,
   sha256     TEXT NOT NULL,
   text       TEXT NOT NULL,
-  tokens     TEXT NOT NULL DEFAULT ''
+  tokens     TEXT NOT NULL DEFAULT '',
+  header     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS chunks_file ON chunks(file_id);
 
+-- `header` is its own column rather than being folded into `text`: the body is
+-- what a preview shows and what a line range must resolve to, so a path
+-- prepended to it would appear in every result and add the same terms to every
+-- BM25 score. Its own column is searchable and invisible.
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-  text, tokens, content='chunks', content_rowid='id',
+  text, tokens, header, content='chunks', content_rowid='id',
   tokenize="unicode61 remove_diacritics 0 tokenchars '_$.'"
 );
 
@@ -130,6 +135,7 @@ def stamp(conn: sqlite3.Connection) -> None:
         embed_dims=config.EMBED_DIMS,
         chunk_chars=config.CHUNK_CHARS,
         chunk_overlap=config.CHUNK_OVERLAP,
+        chunk_header=config.CHUNK_HEADER,
     )
 
 
@@ -148,6 +154,7 @@ def incompatible(conn: sqlite3.Connection) -> str | None:
         ("embed_dims", config.EMBED_DIMS),
         ("chunk_chars", config.CHUNK_CHARS),
         ("chunk_overlap", config.CHUNK_OVERLAP),
+        ("chunk_header", config.CHUNK_HEADER),
     ):
         was = get_meta(conn, key)
         if was != now:
@@ -213,9 +220,10 @@ def upsert_file(conn: sqlite3.Connection, meta: dict, chunks: list, embeddings) 
 
     for i, chunk in enumerate(chunks):
         tokens = identifier_tokens(chunk.text)
+        header = getattr(chunk, "header", "")
         cur = conn.execute(
-            "INSERT INTO chunks(file_id, ord, start_line, end_line, n_chars, sha256, text, tokens)"
-            " VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO chunks(file_id, ord, start_line, end_line, n_chars, sha256, text,"
+            " tokens, header) VALUES(?,?,?,?,?,?,?,?,?)",
             (
                 file_id,
                 chunk.ord,
@@ -225,13 +233,14 @@ def upsert_file(conn: sqlite3.Connection, meta: dict, chunks: list, embeddings) 
                 chunk.sha256,
                 chunk.text,
                 tokens,
+                header,
             ),
         )
         chunk_id = cur.lastrowid
         # The contract at the top of this file, honoured in three statements.
         conn.execute(
-            "INSERT INTO chunks_fts(rowid, text, tokens) VALUES(?,?,?)",
-            (chunk_id, chunk.text, tokens),
+            "INSERT INTO chunks_fts(rowid, text, tokens, header) VALUES(?,?,?,?)",
+            (chunk_id, chunk.text, tokens, header),
         )
         if embeddings is not None:
             conn.execute(
