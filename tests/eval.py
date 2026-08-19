@@ -142,6 +142,18 @@ ARMS = {
     },
     "overlap-300": {"CHUNK_OVERLAP": "300"},
     "no-header": {"CHUNK_HEADER": "0"},
+    # The "lighter model" arms. Three distinct levers, and only the last is a
+    # different model -- so a flat result on the first two is the cheap win and
+    # a flat result on the third is a smaller store forever.
+    "nomic-fp16": {"EMBED_ONNX_FILE": "onnx/model_fp16.onnx"},
+    "nomic-dims256": {"EMBED_TRUNCATE_DIMS": "256", "EMBED_DIMS": "256"},
+    "bge-small": {
+        "EMBED_MODEL": "BAAI/bge-small-en-v1.5",
+        "EMBED_DIMS": "384",
+        "EMBED_MAX_TOKENS": "512",
+        "DOCUMENT_PREFIX": " ",
+        "QUERY_PREFIX": "Represent this sentence for searching relevant passages: ",
+    },
 }
 
 

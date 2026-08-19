@@ -84,11 +84,31 @@ EMBED_MAX_TOKENS = _env_int("EMBED_MAX_TOKENS", 768)
 RERANK_MODEL = _env("RERANK_MODEL", "Alibaba-NLP/gte-reranker-modernbert-base")
 RERANK_MAX_TOKENS = _env_int("RERANK_MAX_TOKENS", 512)
 
+# Which export to pull. Every model in the bake-off publishes fp16 and int8
+# siblings beside `model.onnx`, so "a lighter model" is first a lighter file of
+# the same model -- no re-index, no second vector space to keep coherent.
+EMBED_ONNX_FILE = _env("EMBED_ONNX_FILE", "onnx/model.onnx")
+RERANK_ONNX_FILE = _env("RERANK_ONNX_FILE", "onnx/model.onnx")
+
+# Matryoshka truncation. nomic-embed-text-v1.5 is trained so a prefix of the
+# vector is itself a vector; below its trained rungs (512/256/128/64) this is
+# just throwing away dimensions, which is why it is a per-arm knob and not a
+# default. EMBED_DIMS stays the width the store is built against either way.
+EMBED_TRUNCATE_DIMS = _env_int("EMBED_TRUNCATE_DIMS", 0)
+
 # The prefixes are a precondition, not a tuning knob: the measured margin
 # between two embedders on this corpus was entirely the prefixes -- +0.008
 # unprefixed, a tie, against +0.062 prefixed.
 DOCUMENT_PREFIX = _env("DOCUMENT_PREFIX", "search_document: ")
 QUERY_PREFIX = _env("QUERY_PREFIX", "search_query: ")
+
+# Thermal governor for the index path only. 0 disables it. The default is off
+# because a desktop card that never reaches 84 C would only pay for the poll;
+# on the laptop this was written for, the card sits three degrees past its own
+# throttle point and the poll is free by comparison.
+INDEX_TEMP_C = _env_int("INDEX_TEMP_C", 0)
+INDEX_TEMP_POLL_S = _env_int("INDEX_TEMP_POLL_S", 5)
+INDEX_TEMP_WAIT_S = _env_int("INDEX_TEMP_WAIT_S", 120)
 
 # 0 means adapt to free VRAM at load time.
 EMBED_BATCH = _env_int("EMBED_BATCH", 0)

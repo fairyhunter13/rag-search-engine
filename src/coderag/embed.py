@@ -105,14 +105,19 @@ def _mean_pool(hidden: np.ndarray, mask: np.ndarray) -> np.ndarray:
     summed = (hidden * weights).sum(axis=1)
     counts = np.clip(weights.sum(axis=1), 1e-9, None)
     vectors = summed / counts
+    if config.EMBED_TRUNCATE_DIMS:
+        # Renormalising after the cut is the whole technique -- a truncated
+        # unit vector is not a unit vector, and cosine over it silently ranks
+        # by how much norm each chunk happened to keep.
+        vectors = vectors[:, : config.EMBED_TRUNCATE_DIMS]
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)
     return vectors / np.clip(norms, 1e-12, None)
 
 
 class Embedder:
-    def __init__(self, repo: str = "", filename: str = "onnx/model.onnx"):
+    def __init__(self, repo: str = "", filename: str = ""):
         self.repo = repo or config.EMBED_MODEL
-        self.session = _session(self.repo, filename)
+        self.session = _session(self.repo, filename or config.EMBED_ONNX_FILE)
         gpu.verify_session(self.session, f"embedder {self.repo}")
         self.tokenizer = _tokenizer(self.repo, config.EMBED_MAX_TOKENS)
         self.batch = gpu.adaptive_batch(per_item_bytes=config.EMBED_MAX_TOKENS * 4 * 1024)
@@ -161,9 +166,9 @@ class Reranker:
     was checked.
     """
 
-    def __init__(self, repo: str = "", filename: str = "onnx/model.onnx"):
+    def __init__(self, repo: str = "", filename: str = ""):
         self.repo = repo or config.RERANK_MODEL
-        self.session = _session(self.repo, filename)
+        self.session = _session(self.repo, filename or config.RERANK_ONNX_FILE)
         gpu.verify_session(self.session, f"reranker {self.repo}")
         self.tokenizer = _tokenizer(self.repo, config.RERANK_MAX_TOKENS)
 

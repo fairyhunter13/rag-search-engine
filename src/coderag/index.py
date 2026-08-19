@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import chunk as chunker
-from . import discover, embed, projcfg, registry, store
+from . import discover, embed, gpu, projcfg, registry, store
 
 log = logging.getLogger(__name__)
 
@@ -200,6 +200,10 @@ def _write_files(conn, metas: list) -> int:
         if len(pending) >= BATCH_FILES:
             written += _flush(conn, pending)
             pending = []
+            # After the flush, never before: the wait must land while no
+            # transaction is open and no GPU lock is held, or cooling the card
+            # blocks every reader and every query for the length of the pause.
+            gpu.cool_down()
     return written + _flush(conn, pending)
 
 
