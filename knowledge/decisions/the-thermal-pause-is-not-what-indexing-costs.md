@@ -25,23 +25,28 @@ By containing frame: the embed call 84.2%, `chunk_text` 8.4%, `_flush` 7.3%, and
 one sample — 0.04%**. Removing the thermal governor buys nothing measurable, and it is the only
 thing standing between an 87 °C card and an unbounded build. It stays.
 
-# Where the time actually is
+# Where the time is not: batch size
 
-`_write_files` calls `embed()` **once per file**. The store holds 7,200 files across 54,937
-chunks — **7.63 chunks per call** against an `adaptive_batch` ceiling of 128. Every call pays a
-full kernel launch and a padded batch for a fraction of the work it could carry, which is why
-`session.run` dominates without the GPU being saturated.
+`_write_files` called `embed()` **once per file** — 7.63 chunks against an `adaptive_batch` ceiling
+of 128 — so the obvious reading of that profile was that the card paid a full kernel launch for 6%
+of a batch. It was wrong, and the A/B says so. Moving the embed call into `_flush`, batching 64
+files at a time, ABBA on the same repo with a warm model:
 
-The fix is to accumulate chunks across files up to the batch ceiling rather than flushing the
-embedder at each file boundary. Length-bucketing within a batch cuts the padding on top of that,
-and the ~19% spent in `chunk_text` and `_flush` is CPU that could overlap the forward pass.
+| arm | seconds |
+|---|---|
+| batched flush | 32.7 · 33.0 |
+| per file (shipped) | 32.0 · 32.0 |
 
-# Why it was not fixed when it was found
+**2–3% slower.** The change was reverted. Vectors were equivalent (min cosine 0.9999997), so this
+is a throughput result, not a correctness one.
 
-The arms of a bake-off are separate subprocesses launched from **the same source tree**. Changing
-the indexing hot path mid-run makes arms 4–7 incomparable to arms 1–3 — the run measures the edit,
-not the models. The progress counter landed anyway because it is control-flow-identical (counters
-only); batching is not, and waits for the run to end.
+The reason is in the token lengths: **every chunk arrives at exactly `EMBED_MAX_TOKENS`**. Padding
+waste at batch 128 is 0.0%, sorted or unsorted, because there is nothing to pad — sequences are
+already full width. The GPU was doing dense work at 6 items per call and dense work at 128 per call,
+so there was no launch overhead to recover. Length-bucketing is refuted by the same number.
+
+That is what "80.7% in `session.run`" actually meant: the indexer is **token-throughput bound**, and
+the only levers left are fewer tokens or a smaller model — not a better batch shape.
 
 # The measurement trap this walked into first
 
@@ -49,3 +54,6 @@ only); batching is not, and waits for the run to end.
 thermal gate was not even enabled. It was: `/proc/<worker-pid>/environ` carried
 `CODERAG_INDEX_TEMP_C=84`. The daemon's environment is not the shell's, and only one of them is
 running the code.
+
+The second trap is the one above: a profile localises time, it does not name a cause. "80.7% in the
+forward pass" was read as "the batches are too small" and the A/B refuted it in eight minutes.
