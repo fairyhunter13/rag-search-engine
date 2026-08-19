@@ -26,6 +26,12 @@ That makes the reversal condition measurable rather than a matter of taste: **if
 both numbers worse. Anyone reading a slow query here should check the scope first — an unscoped
 query is not a slow version of this design, it is outside it.
 
+**The criterion is currently unmeasurable on this host**, which is a different thing from being met:
+the card runs three degrees past its own throttle point at ~15% of rated clock, so a p95 taken here
+is a cooling measurement. See
+[this host cannot produce an admissible latency number](../constraints/this-host-cannot-produce-an-admissible-latency-number.md).
+Reversing this decision on a throttled number would buy an ANN index to fix a fan.
+
 Quantization was rejected on the same arithmetic. The old engine carried a binary index and a
 hamming coarse pass over an oversampled candidate set feeding an exact float32 rerank. Against
 1.8 GB total and a sub-10 ms scan it buys nothing, and it costs a second index that has to stay
