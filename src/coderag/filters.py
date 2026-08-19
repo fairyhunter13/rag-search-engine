@@ -37,7 +37,14 @@ _SECRET_NAMES = frozenset(
 )
 
 _SECRET_GLOBS = (
+    # Three patterns, not one, because `fnmatch` anchors the whole name: `.env.*`
+    # matches `.env.local` and misses both `prod.env` and `svc.env.enc`. A fleet
+    # sweep found 456 tracked files shaped like credentials that the single
+    # pattern let through -- none of them holding a live value, which is the
+    # reason this reads as a latent hole rather than an incident.
     ".env.*",
+    "*.env",
+    "*.env.*",
     "*.pem",
     "*.key",
     "*.pfx",

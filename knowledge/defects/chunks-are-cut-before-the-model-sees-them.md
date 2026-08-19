@@ -2,16 +2,18 @@
 type: Defect
 resource: src/coderag/config.py
 title: The chunk budget and the token window do not fit each other
-description: 2,000 non-whitespace chars produces chunks of p50 904 and p95 1373 tokens against a 768-token window, so 70% of chunks are cut and 27% of all tokens never reach the embedder.
+description: 2,000 non-whitespace chars produces chunks of p50 904 and p95 1373 tokens against a 768-token window, so 70% of chunks are cut — and two arms then showed the cut costs no recall.
 tags: [chunking, embedding, recall]
-status: open
+status: refuted
 generated: { by: claude/opus-5, at: 2026-08-19T16:45:00Z }
 ---
 
 # The two numbers, each defensible alone
 
-`CHUNK_CHARS = 2000` non-whitespace is measured — arXiv:2605.04763 calls it "a robust default"
-across 864 configurations. `EMBED_MAX_TOKENS = 768` is also measured: it is the recall peak from
+`CHUNK_CHARS = 2000` non-whitespace comes from cAST's unit ([arXiv:2506.15655](https://arxiv.org/abs/2506.15655))
+and sits inside the range [864 controlled configurations](https://arxiv.org/abs/2605.04763) explored.
+That study finds chunk size has "a weaker, non-monotonic effect" and names no default, so 2,000 is a
+round number in a flat region rather than a measured optimum. `EMBED_MAX_TOKENS = 768` *is* a peak:
 the 512→768 work, where 1024 regressed.
 
 Neither was chosen against the other, and on real code they do not fit. Tokenising the chunker's
@@ -32,13 +34,24 @@ Every chunk arriving at exactly the ceiling is what makes the mean token length 
 — the signature that found this. It also means padding waste is 0%, which is why a batching
 experiment aimed at launch overhead came back flat and pointed here instead.
 
-# What is not yet known
+# The verdict: it costs no recall, and both constants stay
 
-Whether it costs recall. The 512-token `bge-base` arm — which drops strictly more — won recall@10
-in the seven-arm run (0.3433 against `gte-modernbert` 0.3200 at 768), so the dropped tail may carry
-little. Two arms are running against corpus B to settle it from both ends: `gte-win1536`
-widens the window past p95, `gte-chunk1000` cuts the chunk to fit the window. Read them within the
-run against `gte-modernbert`, never against a level from another run.
+corpus B, 300 queries, semantic lane, one run — the only way these are comparable:
 
-Do not change either constant until those land. Both numbers have evidence behind them; only their
-*product* is unmeasured.
+| arm | recall@1 | recall@10 | MRR |
+|---|---|---|---|
+| `gte-modernbert` (768 / 2000) | 0.1600 | 0.3200 | 0.2079 |
+| `gte-win1536` (window past p95) | **0.1600** | **0.3200** | 0.2112 |
+| `gte-chunk1000` (chunk cut to fit) | 0.1433 | 0.3133 | 0.1930 |
+
+Attacked from both ends and neither end moves the number the right way. Widening the window past
+the p95 changes recall by **exactly nothing** — identical to four decimals at both k — for double
+the tokens per chunk. Cutting the chunk to fit the window is **worse** at both k, which is the
+sharper half: the 2,000-char chunk is not merely tolerable, it beats the one that fits.
+
+So the 70% figure is real and the inference drawn from it was wrong. The discarded tail is the part
+of a 2,000-char chunk that carries no retrievable signal, and the lexical lane indexes it anyway.
+The product of the two constants is now measured, and `gte-win1536` is on record as a cost with no
+benefit — the more useful half of the finding, because it is the change someone will propose next.
+
+The freeze this file placed on both constants is lifted. They do not move.

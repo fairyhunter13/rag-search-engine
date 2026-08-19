@@ -14,13 +14,14 @@ okf_version: "0.2"
 * [Two MCP tools, and everything an operator needs is on the CLI](decisions/two-tools-and-the-operator-surface-is-the-cli.md) - The 4-tool, 16-route, 20-command surface contracted to two actions, and the refusals that hold it there.
 * [sqlite-vec, with the measurement that reverses it stated up front](decisions/sqlite-vec-survives-only-because-search-is-scoped.md) - Brute force survives only because search is scoped to one project plus its members; the scoped p95 that would overturn it.
 * [Progress is a file, not a protocol notification](decisions/progress-is-a-file-not-a-protocol-notification.md) - MCP's two mechanisms for long-running work both need a live request or a second status surface; the counter is a throttled JSON file instead.
+* [CI runs no GPU and no live job, and the self-hosted runner is deregistered](decisions/ci-does-not-touch-the-gpu.md) - A runner group is unavailable on a personal account and the GPU lanes contended for the one card; both reasons point the same way.
 * [The thermal pause is not what indexing costs, and the profile says so](decisions/the-thermal-pause-is-not-what-indexing-costs.md) - 80.7% of self-time is the ONNX forward pass and 0.04% is cool_down, so the cooldown stays -- and the batching fix that profile seemed to imply was measured, refuted and reverted.
 
 # Defect
 
 * [A floating range on onnxruntime-gpu changed the CUDA major version](defects/a-floating-range-changed-the-cuda-major.md) - A resolver bump moved the linked CUDA from 12 to 13, every GPU test failed on a missing shared object, and only the fourth assertion caught the CPU fallback.
 
-* [The chunk budget and the token window do not fit each other](defects/chunks-are-cut-before-the-model-sees-them.md) - 2,000 non-whitespace chars makes chunks of p95 1373 tokens against a 768-token window, so 70% are cut and 27% of tokens never reach the embedder.
+* [The chunk budget and the token window do not fit each other](defects/chunks-are-cut-before-the-model-sees-them.md) - REFUTED: 70% of chunks are cut and it costs no recall — widening the window past the p95 moved the number by nothing, and cutting the chunk to fit made it worse.
 
 # Runbook
 

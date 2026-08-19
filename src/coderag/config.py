@@ -200,6 +200,16 @@ DEFAULT_IGNORES = (
     "composer.lock",
     "poetry.lock",
     "uv.lock",
+    # Not a chunker problem, so not a chunker fix. A notebook is JSON holding
+    # base64 output blobs and escaped \n that are not newlines, so the splitter's
+    # top rung -- runs of blank lines -- does not exist in it and every cut lands
+    # mid-object. A CSV has the same shape with the header row stranded in chunk
+    # one. Neither yields a retrievable chunk under any splitter; a format-aware
+    # one would only make the result tidier. Extracting a notebook's code cells
+    # is a real feature and is not this.
+    "*.ipynb",
+    "*.csv",
+    "*.tsv",
 )
 
 # -------------------------------------------------------------------- hygiene

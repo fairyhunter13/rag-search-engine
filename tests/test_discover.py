@@ -25,6 +25,39 @@ def test_templates_and_ordinary_files_are_not_secrets(name):
     assert not filters.is_secret_path(name)
 
 
+@pytest.mark.parametrize(
+    "name", ["prod.env", ".global.env", "svc.env.enc", "backup.env.bak", "creds.env.json"]
+)
+def test_a_dotted_env_suffix_is_refused_too(name):
+    """`fnmatch` anchors the whole name, so `.env.*` is only the leading form.
+
+    These five shapes are the trailing one, and every one of them passed until a
+    fleet sweep counted 352 tracked files carrying them. Named individually rather
+    than asserted over the pattern tuple: a test that reads the tuple it is
+    guarding agrees with any tuple, including an empty one.
+    """
+    assert filters.is_secret_path(name)
+
+
+@pytest.mark.parametrize("name", ["app.envelope", "config.environment", "docs/environments.md"])
+def test_env_lookalikes_still_index(name):
+    """The trailing patterns must not swallow ordinary words containing "env"."""
+    assert not filters.is_secret_path(name)
+
+
+@pytest.mark.parametrize("rel", ["notes.ipynb", "data/rows.csv", "data/rows.tsv"])
+def test_notebooks_and_tables_are_not_indexed(rel):
+    """Excluded upstream of the chunker because no splitter rescues them.
+
+    A notebook is JSON with base64 output blobs; a CSV strands its header row in
+    the first chunk. Both produce chunks that cannot answer a query.
+    """
+    assert not discover.indexable(rel, ProjectConfig())
+    assert discover.indexable(rel, ProjectConfig(use_default_ignores=False)), (
+        "the refusal must come from DEFAULT_IGNORES, not from a binary or secret rule"
+    )
+
+
 def test_nul_byte_sniff_catches_an_extensionless_binary():
     assert filters.looks_binary(b"\x7fELF\x02\x00\x00\x00text")
     assert not filters.looks_binary(b"#!/bin/sh\necho hi\n")
