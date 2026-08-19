@@ -2,44 +2,52 @@ name: CI
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main"]
   workflow_dispatch:  # manual "Run workflow" — requires write access (owner-only)
-  # NOTE: no `pull_request` trigger. This is a PUBLIC repo whose GPU jobs run on a
-  # self-hosted runner (the maintainer's device); a fork PR must never be able to
-  # trigger CI. Every trigger above requires write access.
-  # NOTE: no `schedule` trigger either. A nightly cron fired BOTH live jobs unattended
-  # (on a schedule event `github.ref` is refs/heads/main, so live-fast's gate passed too),
-  # spending the maintainer's Claude session quota mid-workday. The live suite calls real
-  # models, so live-slow now only ever runs when a human asks for it explicitly:
-  # `workflow_dispatch`. See the live-slow job for why a commit-message tag is not a trigger.
+  # NOTE: no `pull_request` trigger. This is a PUBLIC repo; every trigger above
+  # requires write access, so a fork can never cause code here to execute.
+  # NOTE: no `schedule` trigger either. A nightly cron once fired the live jobs
+  # unattended (on a schedule event `github.ref` is refs/heads/main, so a ref gate
+  # passes too), spending the maintainer's model quota mid-workday.
+
+# The repo default is already `read`; stating it means a future change to that
+# default cannot silently widen what a workflow run can do.
+permissions:
+  contents: read
 
 jobs:
-  # ──────────────────────────────────────────────
-  # Job 1: Code quality (ruff + compile check)
-  # ──────────────────────────────────────────────
   quality:
-    name: Code Quality
+    name: Lint, compile, knowledge bundle
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      # Actions are pinned to 40-char commit SHAs, not tags. A tag is mutable by
+      # anyone with write access to the action's repo — the mechanism of
+      # CVE-2025-30066 (tj-actions/changed-files, March 2025), which rewrote every
+      # version tag to a malicious commit and exfiltrated secrets through the log.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
         with:
           python-version: "3.12"
           cache: "pip"
 
-      - name: Install dependencies
-        run: pip install ruff
+      - name: Install
+        # `dev` is an extra, not a PEP 735 group, so `.[dev]` installs pytest and
+        # ruff. GPU wheels install fine CPU-side; only runtime needs CUDA.
+        run: pip install -e ".[dev]" --quiet
 
       - name: Ruff lint
-        run: ruff check src/rag_search src/tests scripts
+        run: ruff check src tests
+
+      - name: Ruff format
+        run: ruff format --check src tests
 
       - name: Compile check
-        run: python -m compileall -q src/rag_search
+        run: python -m compileall -q src/coderag
 
       # Must be >= okf's go.mod minimum: setup-go sets GOTOOLCHAIN=local, so `go install`
       # cannot fetch a newer toolchain and fails outright rather than adapting.
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7
         with:
           go-version: "1.26"
 
@@ -50,252 +58,44 @@ jobs:
       - name: Knowledge bundle conformance
         run: okf check knowledge
 
-      # Advisory: a forward link to a concept not yet written is legitimate.
+      # Not `continue-on-error`. The bundle is clean under -Werror today, and a
+      # gate whose failure is swallowed reports the same green as a passing one.
       - name: Knowledge bundle warnings
         run: okf check -Werror knowledge
-        continue-on-error: true
 
-  # ──────────────────────────────────────────────
-  # Job 2: Test discovery — confirm all live tests
-  # are collected without import errors
-  # ──────────────────────────────────────────────
-  collect:
-    name: Test Collection
+  test:
+    name: Unit tests (no GPU, no daemon)
     runs-on: ubuntu-latest
     needs: quality
-
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
         with:
           python-version: "3.12"
           cache: "pip"
 
-      - name: Install dependencies (base + collection tools)
-        # `dev` is a PEP 735 dependency-group, NOT an extra — `src[dev]` silently
-        # installs nothing (base only) and pytest goes missing. Install the base
-        # package (GPU wheels install fine CPU-side; only runtime needs CUDA) plus
-        # the two tools collection needs. Collection is GPU-free (onnxruntime is
-        # deferred to a fixture), so this runs on the GitHub-hosted runner.
-        run: |
-          pip install -e src --quiet
-          pip install pytest pytest-asyncio --quiet
+      - name: Install
+        run: pip install -e ".[dev]" --quiet
 
-      - name: Collect live tests (no services needed)
-        # No `| tail` — a bare pipe masks pytest's exit code, so an import/collection
-        # error (exit 2) would look green. Let the non-zero exit fail the step.
-        run: |
-          python -m pytest src/tests/live/ \
-            --ignore=src/tests/live/test_browser.py \
-            --collect-only -q
+      # CODERAG_NAME_BAN=none is deliberate and is not a skip. Five of the seven
+      # tests in test_public_hygiene.py need no ban list and run for real here,
+      # including the one asserting that an *unset* list fails rather than standing
+      # down. The literal-name sweep is not moved into a repo secret because the
+      # test reports its matches — the banned terms themselves — into a log that is
+      # public on this repo, and because CI runs after the push, by which time the
+      # content is already published. That gate's only useful home is pre-push.
+      - name: Tests
+        env:
+          CODERAG_NAME_BAN: none
+        run: pytest -m "not gpu and not live and not restart" -q --strict-markers --strict-config -ra
 
-      - name: Confirm zero non-live tests remain
-        # Every real test lives under src/tests/live/ and must carry the `live`
-        # marker (nothing may pass without real services). Scope to that dir — the
-        # whole src/tests/ tree also holds fixture sample-projects (test DATA, e.g.
-        # fixtures/.../test_ledger.py) that must not be collected as suite tests.
-        # pytest exit codes: 5 = no tests collected (the state we WANT — zero
-        # non-live), 0 = some collected (policy violation), other = real error.
-        # The old `| grep | ... || echo 0` masked all three into a trivial pass.
-        run: |
-          set -uo pipefail
-          rc=0
-          python -m pytest src/tests/live/ --ignore=src/tests/live/test_browser.py \
-            -m "not live" --collect-only -q || rc=$?
-          case "$rc" in
-            5) echo "OK: zero non-live tests remain" ;;
-            0) echo "ERROR: found non-live tests runnable without real services"; exit 1 ;;
-            *) echo "ERROR: pytest collection failed (exit $rc)"; exit "$rc" ;;
-          esac
-
-  # ──────────────────────────────────────────────
-  # Fast live tests: enforcement, config, search,
-  # KB health — run on every push to main.
-  # Completes in <5 minutes on GPU runner.
-  #
-  # Runs IN the maintainer's registered + indexed working tree ($RSE_DEV_REPO,
-  # set in the runner's .env — device path kept out of this public file). The
-  # suite assumes "this repo" is a live, indexed project (e.g.
-  # test_pipeline_all_stages_rse_repo) and uses that tree's .venv as the canonical
-  # GPU env, so there is deliberately NO fresh checkout here.
-  # NOTE: requires a self-hosted runner with a CUDA GPU (no CPU fallback) and a
-  # running rag-search daemon at 127.0.0.1:8765. Forks are skipped by the `if`.
-  # Run the live suite locally instead: .venv/bin/pytest -m "live and not costly and not exclusive"
-  # ──────────────────────────────────────────────
-  live-fast:
-    name: Live Tests Fast (GPU runner)
-    runs-on: self-hosted
-    needs: quality
-    # Kernel-independent hang guard (pytest-timeout is not a project dep). 20 until 2026-07-31,
-    # where it was calibrated against the old `-m "not slow"` set and a "<5 min" fast smoke. The
-    # marker split moved 31 wall-clock-heavy tests onto every push deliberately, and the number
-    # that settles it needs no new measurement: this job now collects **822 of 844** tests —
-    # 97.4 % of what live-slow's pytest step runs — while allowing a third of live-slow's 60. A
-    # timeout that kills a healthy run is worse than none, because the kill is indistinguishable
-    # from the hang it exists to catch. 45 leaves live-slow's browser-step share as the margin.
-    # **Provisional by construction**: the step below prints its own wall clock, so the first
-    # green run replaces this reasoning with a measurement instead of inviting a fourth re-derive.
-    timeout-minutes: 45
-    # Self-hosted runner = the maintainer's device. Hard-gate to the owner account:
-    # this job may only ever execute when fairyhunter13 is the triggering actor.
-    if: github.actor == 'fairyhunter13' && github.ref == 'refs/heads/main' && github.repository == 'fairyhunter13/rag-search-engine'
-
-    steps:
-      - name: Report what is actually under test
-        # C3. These jobs have NO checkout: they `cd "$RSE_DEV_REPO"` and run the live dev tree,
-        # because that tree is the indexed one the daemon serves. So the SHA GitHub labels this
-        # run with is a claim about a commit, not a statement about the bytes that ran — a green
-        # run has never been evidence that `github.sha` passed. This step makes the claim true or
-        # makes the run fail; it does not merely log it, because a log nobody reads is how the gap
-        # survived this long.
-        #
-        # Failing on a dirty tree is deliberate and will fire in normal use: several agent
-        # sessions develop directly in this checkout, so a push landing while any of them has
-        # uncommitted work turns CI red. That is the correct outcome — the alternative is a green
-        # tick attesting to a commit whose code never ran. Commit or stash, then re-dispatch.
-        run: |
-          : "${RSE_DEV_REPO:?set RSE_DEV_REPO in the runner .env to the indexed repo path}"
-          cd "$RSE_DEV_REPO"
-          head="$(git rev-parse HEAD)"
-          echo "tree under test: $head  (workflow SHA: ${{ github.sha }})"
-          git status --porcelain
-          if [ "$head" != "${{ github.sha }}" ]; then
-            echo "::error::tree is at $head but this run is labelled ${{ github.sha }}"
-            exit 1
-          fi
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "::error::working tree is dirty — the bytes tested are not $head"
-            exit 1
-          fi
-
-      - name: Wait for daemon readiness (bounded, 30s)
-        # C4: a cold daemon and a broken one both fail `curl -sf` with exit 7, so the previous
-        # one-shot check reported "still warming up" as "CI is red". Post-restart recovery is
-        # measured at ~21 s, ~17 s of which is the GPU embedder warm-up (GPU-only, no CPU
-        # fallback), so a single probe could lose that race whenever anything had just restarted
-        # the daemon. Poll to 30 s, then fail loudly with the actual curl diagnostics so the two
-        # cases are distinguishable in the log instead of both reading as exit 7.
-        run: |
-          for _ in $(seq 1 30); do
-            curl -sf http://localhost:8765/api/projects > /dev/null && exit 0
-            sleep 1
-          done
-          echo "::error::daemon at :8765 not ready after 30s"
-          curl -sv http://localhost:8765/api/projects 2>&1 | tail -20
-          exit 1
-
-      - name: Run fast live tests (live, not costly, not exclusive)
-        # In the indexed dev tree ($RSE_DEV_REPO) with its .venv. Flags mirror the
-        # documented CLAUDE.md fast smoke command; job-level timeout-minutes bounds
-        # runaway runs (pytest-timeout is not a project dep).
-        #
-        # `--maxfail=5`, not `-x`. Eight of the last twelve runs before this were red, and `-x`
-        # meant each reported exactly one failure — so a push that broke five things looked
-        # identical to one that broke one, and the count you read was the count `-x` chose to
-        # show you. The marker split made this worse rather than better: 31 wall-clock-heavy
-        # tests moved onto every push, so the run now stops earlier in a longer suite. 5 still
-        # fails fast on a broken push and still hands back a list.
-        #
-        # `--durations=25` because the cost distribution of this lane has only ever been
-        # reconstructed from job timestamps and source reading. A speedup that cannot be
-        # attributed is indistinguishable from a deletion.
-        #
-        # The elapsed line is banked to the step summary, and that is not cosmetic: the job's
-        # `timeout-minutes` was set against a test set that no longer exists, and the only reason
-        # nobody noticed is that its duration was never recorded anywhere durable. Reconstructing
-        # it from job timestamps needs a run that reached the pytest step at all — and every run
-        # since the marker split failed in ~10 s on the dirty-tree gate above, so no such run
-        # exists. Printed on failure too (`trap`), because a run that dies at minute 40 is exactly
-        # the one whose duration decides whether the ceiling is right.
-        run: |
-          : "${RSE_DEV_REPO:?set RSE_DEV_REPO in the runner .env to the indexed repo path}"
-          cd "$RSE_DEV_REPO"
-          start=$SECONDS
-          trap 'printf "live-fast pytest step: %dm%02ds (timeout-minutes: %s)\n" \
-            $(( (SECONDS-start)/60 )) $(( (SECONDS-start)%60 )) 45 \
-            | tee -a "$GITHUB_STEP_SUMMARY"' EXIT
-          .venv/bin/pytest \
-            src/tests/live/ \
-            --ignore=src/tests/live/test_browser.py \
-            -m "live and not costly and not exclusive" \
-            --maxfail=5 --durations=25 --strict-markers --strict-config -ra -q --tb=short
-
-  # ──────────────────────────────────────────────
-  # Slow live tests: full E2E, chat quality, browser
-  # MANUAL ONLY — these take 15-30 min and burn real Claude session quota, so they are
-  # never scheduled and never triggered by a push. Trigger with the "Run workflow" button
-  # or `gh workflow run CI`.
-  #
-  # There used to be a second path: a push whose commit message contained a slow-ci tag.
-  # It was removed because `contains()` matches the WHOLE message including the body, so a
-  # commit that merely *mentioned* the tag in prose fired a 60-minute real-model run. That
-  # misfire happened. workflow_dispatch already covers "run it deliberately" and cannot be
-  # triggered by accident, so the tag path was pure footgun.
-  # Same self-hosted GPU runner requirement as live-fast.
-  # ──────────────────────────────────────────────
-  live-slow:
-    name: Live Tests Slow (GPU runner, manual)
-    runs-on: self-hosted
-    needs: quality
-    timeout-minutes: 60  # full suite + browser; bounds runaway/hung runs
-    # Same owner-account hard-gate as live-fast (self-hosted = maintainer's device).
-    if: github.actor == 'fairyhunter13' && github.event_name == 'workflow_dispatch'
-
-    steps:
-      - name: Report what is actually under test
-        # C3, same reasoning as live-fast: no checkout, so the workflow SHA is a claim about a
-        # commit rather than a statement about the bytes that ran. Assert it instead of logging it.
-        run: |
-          : "${RSE_DEV_REPO:?set RSE_DEV_REPO in the runner .env to the indexed repo path}"
-          cd "$RSE_DEV_REPO"
-          head="$(git rev-parse HEAD)"
-          echo "tree under test: $head  (workflow SHA: ${{ github.sha }})"
-          git status --porcelain
-          if [ "$head" != "${{ github.sha }}" ]; then
-            echo "::error::tree is at $head but this run is labelled ${{ github.sha }}"
-            exit 1
-          fi
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "::error::working tree is dirty — the bytes tested are not $head"
-            exit 1
-          fi
-
-      - name: Wait for daemon readiness (bounded, 30s)
-        # C4: a cold daemon and a broken one both fail `curl -sf` with exit 7, so the previous
-        # one-shot check reported "still warming up" as "CI is red". Post-restart recovery is
-        # measured at ~21 s, ~17 s of which is the GPU embedder warm-up (GPU-only, no CPU
-        # fallback), so a single probe could lose that race whenever anything had just restarted
-        # the daemon. Poll to 30 s, then fail loudly with the actual curl diagnostics so the two
-        # cases are distinguishable in the log instead of both reading as exit 7.
-        run: |
-          for _ in $(seq 1 30); do
-            curl -sf http://localhost:8765/api/projects > /dev/null && exit 0
-            sleep 1
-          done
-          echo "::error::daemon at :8765 not ready after 30s"
-          curl -sv http://localhost:8765/api/projects 2>&1 | tail -20
-          exit 1
-
-      - name: Run full live suite (all tests including slow)
-        # Same indexed-dev-tree model as live-fast; job-level timeout-minutes bounds the run.
-        # No failure cap at all here, where live-fast caps at 5: this is the full sweep and it
-        # includes the `exclusive` tests that need a quiescent daemon (CB3's idle-CPU window),
-        # which are the ones most likely to fail for a reason that says nothing about the diff.
-        # Aborting on those would hide every result behind them. Run everything, let `-ra`
-        # summarize; per-test failures still fail the job.
-        run: |
-          : "${RSE_DEV_REPO:?set RSE_DEV_REPO in the runner .env to the indexed repo path}"
-          cd "$RSE_DEV_REPO"
-          .venv/bin/pytest \
-            src/tests/live/ \
-            --ignore=src/tests/live/test_browser.py \
-            -m "live" \
-            --durations=25 --strict-markers --strict-config -ra -q --tb=short
-
-      - name: Run browser tests
-        run: |
-          : "${RSE_DEV_REPO:?set RSE_DEV_REPO in the runner .env to the indexed repo path}"
-          cd "$RSE_DEV_REPO"
-          .venv/bin/pytest src/tests/live/test_browser.py \
-            --browser chromium --tb=short
+# NOTE: there are no GPU or live jobs here, and that is deliberate.
+# They used to run `runs-on: self-hosted` against the maintainer's workstation.
+# GitHub's own guidance is that self-hosted runners "should almost never be used
+# for public repositories", and the mitigation it recommends — runner groups — is
+# unavailable on a personal account. The actor/ref/repository `if:` gates were
+# doing that job, correctly, but one workflow edit away from not being true, on a
+# machine holding SSH keys and a private client index. The runner is deregistered
+# and `-m gpu`, `-m live` and `-m restart` run from the shell, which was already
+# the daily workflow.

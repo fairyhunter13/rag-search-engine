@@ -68,4 +68,8 @@ asyncio_mode = "auto"
 markers = [
     "gpu: needs the real GPU and the real models",
     "live: needs the running daemon and the real fleet; never runs in parallel",
+    # Separate from `live` because tests/live.py refuses to start or stop the daemon
+    # on purpose -- starting one there would hide the unit. A restart test needs the
+    # opposite permission, so it gets its own marker rather than weakening that rule.
+    "restart: restarts the daemon; needs systemd and the real unit",
 ]
