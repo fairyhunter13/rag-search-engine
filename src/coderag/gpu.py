@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import subprocess
 import sys
+import time
 
 import onnxruntime as ort
 
@@ -137,6 +138,49 @@ def free_vram_bytes() -> int:
         return 0
     first = out.stdout.strip().splitlines()
     return int(first[0].strip()) * 1024 * 1024 if first else 0
+
+
+def gpu_temp_c() -> int:
+    """Card temperature, or 0 when it cannot be read.
+
+    0 means "no reading", and every caller treats that as cool. A thermal
+    governor that stalls on a missing sensor would wedge the index on any
+    machine whose nvidia-smi differs.
+    """
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    first = out.stdout.strip().splitlines()
+    return int(first[0].strip()) if first else 0
+
+
+def cool_down(sleep=time.sleep) -> float:
+    """Block until the card is under `INDEX_TEMP_C`, up to `INDEX_TEMP_WAIT_S`.
+
+    Measured on this laptop: the GPU sat at 89 C against a T.Limit of -3, which
+    is three degrees *past* the throttle point, and clocked 460 MHz of 3090 --
+    so the work was already being done at roughly a sixth of the card's rate,
+    just erratically and at 97 C chassis. An index has no deadline; trading a
+    longer wall clock for a card that is not throttling is the cheaper side of
+    that bargain, and it makes the batch time repeatable enough to measure.
+    """
+    if not config.INDEX_TEMP_C:
+        return 0.0
+    waited = 0.0
+    while waited < config.INDEX_TEMP_WAIT_S:
+        temp = gpu_temp_c()
+        if temp < config.INDEX_TEMP_C:
+            break
+        sleep(config.INDEX_TEMP_POLL_S)
+        waited += config.INDEX_TEMP_POLL_S
+    return waited
 
 
 def adaptive_batch(per_item_bytes: int, floor: int = 8, ceiling: int = 128) -> int:
