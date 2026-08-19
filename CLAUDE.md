@@ -1,18 +1,15 @@
 # coderag — Claude Code instructions
 
-The engine is being rebuilt from zero in `src/coderag/`. The old package, its tests, its docs and
-its knowledge bundle are gone. `knowledge/` is the only prose plane; the previous engine's records
-live in git history at `365a235^` and are not a description of anything that exists.
+The engine was rebuilt from zero in `src/coderag/`. The old package, its tests, its docs and its
+knowledge bundle are gone. `knowledge/` is the only prose plane; the previous engine's records live
+in git history at `365a235^` and are not a description of anything that exists.
 
-## While the rebuild is in progress
+## Standing rules
 
-- Build order: `config` → `gpu` → `registry` → `projcfg` → `federation` → `store` → `chunk` →
-  `discover` → `embed` → `index` → `search` → `watch` → `server` → `tools` → `cli` → `systemd`.
-  Each module lands with its tests.
 - **No mocks.** A test either calls the real model on the real GPU or touches no model at all.
-- Every file under 300 lines. The package is 3,278 lines by `wc -l` and **1,874 executable**
-  by AST; the rest is docstrings and comments carrying the whys this repo keeps out of prose.
-  The budget is the executable number.
+- Every file under 300 lines. The package is 3,242 lines by `wc -l` and **1,904 executable**
+  — blanks, comments and docstrings excluded — the rest carrying the whys this repo keeps out of
+  prose. The budget is the executable number, so a `wc` figure alone never reads as over.
 
 ## Knowledge bundle
 
@@ -29,7 +26,9 @@ CPU path silently becomes the production path: it is 30× slower and nothing fai
 
 **The tracked tree is publishable.** This repo is public and MIT. No real company name, device
 name, or absolute home path in tracked content — `NAME_BAN` guards it, and an unset `NAME_BAN` is
-the failing state, not the passing one.
+the failing state, not the passing one. Arm it as **`CODERAG_NAME_BAN`, comma-separated**; a clean
+clone with nothing to hide sets `CODERAG_NAME_BAN=none`. The list itself is never committed, which
+is why the variable has to be named here.
 
 ## Running tests
 
