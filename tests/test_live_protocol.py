@@ -22,6 +22,10 @@ from live import Rpc, require_clear_gpu, require_daemon
 pytestmark = pytest.mark.live
 
 PROTOCOL = "2025-06-18"
+# The revision `mcp` 2.x negotiates. Kept beside the older one on purpose: a
+# server that only answers the version its own SDK prefers is a server that
+# breaks every client that has not upgraded yet.
+CURRENT_PROTOCOL = "2026-07-28"
 
 
 @pytest.fixture(scope="module")
@@ -118,4 +122,52 @@ def test_the_official_inspector_agrees(rpc):
     ours = rpc.call("tools/list")["tools"]
     assert (
         sorted(t["name"] for t in theirs) == sorted(t["name"] for t in ours) == ["index", "search"]
+    )
+
+
+def test_the_current_spec_revision_is_negotiated(rpc):
+    """`2026-07-28` made the protocol core stateless and deprecated Roots,
+    Sampling and Logging. This repo pins `mcp==2.0.*`, which shipped alongside
+    it -- so the pin is only correct if the wire agrees, and nothing else here
+    would notice a server stuck on an older revision."""
+    result = rpc.call(
+        "initialize",
+        {
+            "protocolVersion": CURRENT_PROTOCOL,
+            "capabilities": {},
+            "clientInfo": {"name": "coderag-live-suite", "version": "0.1.0"},
+        },
+    )
+    assert result["protocolVersion"] == CURRENT_PROTOCOL, (
+        f"asked for {CURRENT_PROTOCOL}, server negotiated {result['protocolVersion']!r}"
+    )
+    assert not (set(result["capabilities"]) & {"sampling", "logging", "roots"}), (
+        f"server advertises a deprecated capability: {sorted(result['capabilities'])}"
+    )
+
+
+@pytest.mark.skipif(not shutil.which("npx"), reason="the conformance suite needs npx")
+def test_the_official_conformance_suite_passes():
+    """Separate from the inspector, and it checks what the inspector does not:
+    error shapes, required-field handling and the revision's own rules. The
+    inspector reports what a server said; this reports whether it was allowed
+    to say it."""
+    out = subprocess.run(
+        [
+            "npx",
+            "-y",
+            "@modelcontextprotocol/conformance",
+            "server",
+            "--url",
+            config.MCP_URL,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+    # 0 ok, 4 unreachable, 5 tool error -- a non-zero code that is not 4 means
+    # the daemon answered and the answer was out of spec, which is the finding.
+    assert out.returncode == 0, (
+        f"exit {out.returncode}:\n{out.stdout[-3000:]}\n{out.stderr[-1500:]}"
     )

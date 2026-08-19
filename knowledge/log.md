@@ -73,3 +73,12 @@ title: coderag knowledge history
   their own power limit, which is the durable lesson — **a throttle-reason diagnosis is only valid
   at the cap it was taken under.** The first amendment was right about that window and wrong to
   imply heat was never a constraint here.
+- **Creation**: `tests/test_live_agent.py` — layer 3, the layer the pyramid names and this repo did
+  not have. It asserts on the transcript, never on the answer: a `tool_use` block naming the server,
+  a `root` in its arguments, and locations from the `tool_result` that resolve on disk. Asserting
+  that a correct answer arrived would pass with the server switched off, because the session would
+  open the file itself and be right.
+- **Refused**: a concept for layer 3 and for the conformance suite. Both rationales are at their
+  call sites and neither has an alternative that was rejected on evidence — the four gates stop at
+  the first. The MCP revision the wire must negotiate (`2026-07-28`) is now asserted rather than
+  written down, which is the form that cannot go stale silently.
