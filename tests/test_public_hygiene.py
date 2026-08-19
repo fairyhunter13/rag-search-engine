@@ -100,7 +100,11 @@ def test_no_tracked_line_carries_a_banned_name():
 def test_no_tracked_line_leaks_a_home_directory_path():
     """A machine-local absolute path is not a name, but it identifies the
     machine just as well, and it is the one that survives a rename."""
-    assert HOME_PATH.search("see /home/realuser/git/x"), "the pattern must catch a real one"
+    # Assembled rather than written out: a literal here is a tracked line that
+    # this test then finds, and the guard failing on its own fixture is the
+    # noise that gets a guard disabled.
+    real = "see /home/" + "realuser/git/x"
+    assert HOME_PATH.search(real), "the pattern must catch a real one"
     assert not HOME_PATH.search("see /home/<user>/git/x"), "and must allow the placeholder"
     found = []
     for rel in tracked():
