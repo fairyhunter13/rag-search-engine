@@ -101,6 +101,25 @@ async def test_healthz_reports_what_doctor_would_ask():
     assert body.status_code == 200
 
 
+@pytest.mark.parametrize("on,expected", [(True, 1), (False, 0)])
+async def test_the_startup_sweep_is_the_difference_between_serving_and_indexing(
+    monkeypatch, on, expected
+):
+    """Starting the daemon and starting a fleet-wide index used to be one act.
+    They are two intentions, and the second is an overnight run on one card --
+    so a live suite or a bake-off could not have the daemon up without it."""
+    called = []
+    monkeypatch.setattr(config, "RECONCILE_ON_START", on)
+    monkeypatch.setattr(index, "reconcile_all", lambda: called.append(1) or 1)
+    monkeypatch.setattr(index, "start_worker", lambda: None)
+    monkeypatch.setattr(watch, "start", lambda: None)
+    monkeypatch.setattr(server, "_notify", lambda _msg: None)
+
+    async with server.lifespan(None):
+        pass
+    assert len(called) == expected
+
+
 def test_the_notifier_is_silent_without_a_socket(monkeypatch):
     monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
     server._notify("READY=1")  # must not raise outside systemd
