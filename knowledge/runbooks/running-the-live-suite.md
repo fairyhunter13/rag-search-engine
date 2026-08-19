@@ -1,8 +1,8 @@
 ---
 type: Runbook
-resource: tests/eval.py, src/coderag/gpu.py
+resource: tests/eval.py, src/coderag/gpu.py, src/coderag/server.py, tests/test_restart.py
 title: Running anything that touches the real GPU
-description: Two preconditions — a clear lock and ≥10 GiB free VRAM — plus the one-at-a-time rule, because editing parallelises across sessions and live testing does not.
+description: Two preconditions — a clear lock and ≥10 GiB free VRAM — the one-at-a-time rule, and the switch that separates starting the daemon from starting an overnight fleet index.
 tags: [gpu, testing, operations]
 status: stable
 generated: { by: claude/opus-5, at: 2026-08-19T10:25:00Z }
@@ -19,6 +19,16 @@ generated: { by: claude/opus-5, at: 2026-08-19T10:25:00Z }
 2. **≥10 GiB free VRAM.** Not "the daemon says it released" — the freed number. The old engine's
    `/api/gpu/release` returned 200 without freeing anything, so a check on its status code passed
    over a full card. Read `nvidia-smi`.
+
+# Starting the daemon is not the same act as indexing the fleet
+
+`lifespan` sweeps every enabled project into the queue at startup, so
+`systemctl --user start coderag` on a registry of 148 rows *is* the fleet index — which is how the
+fleet index is meant to be run, and is also why the live suite could not have a daemon up without
+one. `CODERAG_RECONCILE_ON_START=0` starts a daemon that serves and watches but sweeps nothing; the
+60 s tick still picks up anything submitted, so a live test that submits its own project is
+unaffected. Use it for the live suite and for any bake-off that needs the card. Leave it unset to
+index the fleet.
 
 # Running it
 

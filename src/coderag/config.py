@@ -71,6 +71,13 @@ MCP_URL = f"http://{HOST}:{PORT}/mcp"
 MODEL_IDLE_UNLOAD_S = _env_int("MODEL_IDLE_UNLOAD_S", 900)
 BRIDGE_IDLE_S = _env_int("BRIDGE_IDLE_S", 0)
 SCHEDULER_TICK_S = _env_int("SCHEDULER_TICK_S", 60)
+
+# On by default: a daemon back after a week has to catch up, and this is the
+# only reconcile there is. Off is for when starting the daemon and starting a
+# fleet-wide index are two different intentions -- serving during a bake-off,
+# or a live suite on a card that has to stay free. The tick still picks up
+# anything submitted; only the sweep of everything enabled is skipped.
+RECONCILE_ON_START = _env_flag("RECONCILE_ON_START", True)
 WATCH_DEBOUNCE_MS = _env_int("WATCH_DEBOUNCE_MS", 1500)
 
 # --------------------------------------------------------------------- models

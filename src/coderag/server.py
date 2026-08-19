@@ -68,7 +68,7 @@ def _tick() -> None:
 @contextlib.asynccontextmanager
 async def lifespan(_app) -> AsyncIterator[None]:
     index.start_worker()
-    queued = index.reconcile_all()
+    queued = index.reconcile_all() if config.RECONCILE_ON_START else 0
     watch.start()
 
     global _ticker

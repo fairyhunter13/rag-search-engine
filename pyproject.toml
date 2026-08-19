@@ -71,5 +71,5 @@ markers = [
     # Separate from `live` because tests/live.py refuses to start or stop the daemon
     # on purpose -- starting one there would hide the unit. A restart test needs the
     # opposite permission, so it gets its own marker rather than weakening that rule.
-    "restart: restarts the daemon; needs systemd and the real unit",
+    "restart: kills and restarts a daemon of its own; needs the GPU, not the unit",
 ]
