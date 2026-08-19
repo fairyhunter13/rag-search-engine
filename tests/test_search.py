@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from coderag import config, federation, index, registry, search
+from coderag import config, federation, filters, index, registry, search
 from coderag.search import Hit, SearchError
 
 
@@ -77,6 +77,28 @@ def test_an_unknown_mode_errors_and_names_the_valid_set():
     """A silently widened corpus reads exactly like an engine defect."""
     with pytest.raises(SearchError, match="hybrid"):
         search.search("anything", mode="fuzzy")
+
+
+def test_an_unknown_lang_errors_rather_than_returning_nothing():
+    """`mode` refused an unknown value from the start; `lang` narrowed the
+    corpus to nothing and reported it as no matches -- the one failure a caller
+    cannot tell from an honest empty result."""
+    with pytest.raises(SearchError, match="did you mean 'python'"):
+        search.search("anything", lang="pyton")
+    with pytest.raises(SearchError, match="valid:"):
+        search.search("anything", lang="cobol")
+
+
+def test_the_unlabeled_are_reachable_only_with_no_lang_filter():
+    """Discovery is a denylist, so a file with an unrecognised extension is
+    indexed and searchable with `lang=""`. That empty label is deliberately not
+    a selectable value: offering it would imply a group, and the group is
+    "everything we have no name for"."""
+    assert "" not in set(filters.LANGS.values())
+    unlabeled = _hit("notes.zig")
+    unlabeled.lang = ""
+    assert search._filter([unlabeled], None, "python") == []
+    assert search._filter([unlabeled], None, "") == [unlabeled], "empty means unfiltered, not zig"
 
 
 def test_an_unindexed_root_names_what_to_call_rather_than_widening(tmp_path):
