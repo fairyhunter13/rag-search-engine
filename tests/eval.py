@@ -55,18 +55,28 @@ def _clean(raw: str) -> str:
     return " ".join(text.split())
 
 
-def _docstring(head: str) -> str:
+def _docstring(head: str) -> tuple[str, int]:
+    """The leading doc block, and where it ends -- because it has to be removed.
+
+    CodeSearchNet strips the docstring out of the code before indexing, and
+    without that step the query is a verbatim substring of the chunk it is
+    looking for. Every arm then scores near 1.000, the ranking collapses to
+    string identity, and the measurement reads as a strong result.
+    """
     if match := _PY_DOC.search(head):
-        return _clean(match.group(2))
+        return _clean(match.group(2)), match.end()
     if match := _BLOCK_COMMENT.search(head):
-        return _clean(match.group(1))
-    lines = []
-    for line in head.splitlines():
+        return _clean(match.group(1)), match.end()
+    lines, end = [], 0
+    for line in head.splitlines(keepends=True):
         if match := _LINE_COMMENT.match(line):
             lines.append(match.group(1))
+            end += len(line)
         elif lines or line.strip():
             break
-    return _clean(" ".join(lines))
+        else:
+            end += len(line)
+    return _clean(" ".join(lines)), end if lines else 0
 
 
 def build_queries(project: Path, limit: int = 0) -> list[Query]:
@@ -80,8 +90,8 @@ def build_queries(project: Path, limit: int = 0) -> list[Query]:
             # most of the query set on a doc-heavy repo, measuring prose recall
             # under a name that says code.
             continue
-        head = "\n".join(meta.text.splitlines()[:HEAD_LINES])
-        text = _docstring(head)
+        head = "".join(meta.text.splitlines(keepends=True)[:HEAD_LINES])
+        text, _end = _docstring(head)
         words = text.split()
         if len(words) < MIN_WORDS:
             continue
@@ -115,8 +125,21 @@ ARMS = {
         "DOCUMENT_PREFIX": " ",
         "QUERY_PREFIX": " ",
     },
-    "gte-modernbert": {"EMBED_MODEL": "Alibaba-NLP/gte-modernbert-base"},
-    "bge-base": {"EMBED_MODEL": "BAAI/bge-base-en-v1.5"},
+    # Each model carries its own prefix and its own context limit. Handing one
+    # model another's prefixes measures the mismatch, and reads as the model
+    # losing: gte scored 0.029 that way, and bge failed to run at all against
+    # nomic's 768-token budget with 512 position embeddings.
+    "gte-modernbert": {
+        "EMBED_MODEL": "Alibaba-NLP/gte-modernbert-base",
+        "DOCUMENT_PREFIX": " ",
+        "QUERY_PREFIX": " ",
+    },
+    "bge-base": {
+        "EMBED_MODEL": "BAAI/bge-base-en-v1.5",
+        "EMBED_MAX_TOKENS": "512",
+        "DOCUMENT_PREFIX": " ",
+        "QUERY_PREFIX": "Represent this sentence for searching relevant passages: ",
+    },
     "overlap-300": {"CHUNK_OVERLAP": "300"},
     "no-header": {"CHUNK_HEADER": "0"},
 }
@@ -145,16 +168,38 @@ def run_arm(name: str, project: Path, scratch: Path, lane: str, limit: int) -> d
 LANES = {"dense": "semantic", "lexical": "lexical", "hybrid": "hybrid"}
 
 
+def materialize(project: Path, dest: Path) -> Path:
+    """A copy of the corpus with every leading doc block removed.
+
+    Held to the same candidate set and the same relative paths as the real walk,
+    so a positive means the same file in both. It is a copy rather than an
+    in-place edit for the obvious reason.
+    """
+    cfg = projcfg.effective(project, ())
+    dest.mkdir(parents=True, exist_ok=True)
+    for rel in discover.candidates(project, cfg):
+        meta = discover.read(project, rel)
+        if meta is None:
+            continue
+        head = "".join(meta.text.splitlines(keepends=True)[:HEAD_LINES])
+        _text, end = _docstring(head)
+        out = dest / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(meta.text[end:], encoding="utf-8")
+    return dest
+
+
 def _worker(project: Path, lane: str, limit: int) -> int:
     from coderag import index, registry, search
 
     lane = LANES[lane]
-    registry.claim(project, direct=True)
-    index.index_project(project)
     queries = build_queries(project, limit)
+    corpus = materialize(project, config.STATE_DIR / "corpus")
+    registry.claim(corpus, direct=True)
+    index.index_project(corpus)
     ranks: list[int | None] = []
     for query in queries:
-        hits = search.search(query.text, project, k=K, mode=lane, rerank=False, max_per_file=K)[
+        hits = search.search(query.text, corpus, k=K, mode=lane, rerank=False, max_per_file=K)[
             "results"
         ]
         paths = [hit["rel_path"] for hit in hits]
