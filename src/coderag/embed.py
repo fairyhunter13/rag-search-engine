@@ -37,6 +37,7 @@ _reranker: Reranker | None = None
 _lock = threading.Lock()
 
 DOCUMENT, QUERY = "document", "query"
+MEAN, CLS = "mean", "cls"
 MIN_BATCH = 4
 log = logging.getLogger(__name__)
 
@@ -94,17 +95,27 @@ def _feed(session: ort.InferenceSession, encodings) -> dict[str, np.ndarray]:
     return {k: v for k, v in feed.items() if k in declared}
 
 
-def _mean_pool(hidden: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Masked mean over tokens, then L2 normalise.
+def _pool(hidden: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Pool per `EMBED_POOLING`, then L2 normalise.
 
-    The mask is not optional: padding tokens carry real activations, so a plain
-    mean makes a chunk's vector depend on how much padding its batch happened
-    to need -- the same text embeds differently in two different batches.
+    Pooling is a property of the model, not of this pipeline: bge and
+    gte-modernbert are trained on the CLS position and nomic and jina on the
+    masked mean, and reading a CLS-trained model's mean is the same class of
+    error as handing a model another model's prefixes -- it runs, it scores,
+    and it reads as the model losing.
+
+    The mask is not optional in the mean branch: padding tokens carry real
+    activations, so a plain mean makes a chunk's vector depend on how much
+    padding its batch happened to need -- the same text embeds differently in
+    two different batches.
     """
-    weights = mask[..., None].astype(np.float32)
-    summed = (hidden * weights).sum(axis=1)
-    counts = np.clip(weights.sum(axis=1), 1e-9, None)
-    vectors = summed / counts
+    if config.EMBED_POOLING == CLS:
+        vectors = hidden[:, 0, :]
+    else:
+        weights = mask[..., None].astype(np.float32)
+        summed = (hidden * weights).sum(axis=1)
+        counts = np.clip(weights.sum(axis=1), 1e-9, None)
+        vectors = summed / counts
     if config.EMBED_TRUNCATE_DIMS:
         # Renormalising after the cut is the whole technique -- a truncated
         # unit vector is not a unit vector, and cosine over it silently ranks
@@ -155,7 +166,7 @@ class Embedder:
         with _GPU_INFER_LOCK:
             _mark_used()
             hidden = np.asarray(self.session.run(None, feed)[0], dtype=np.float32)
-        return _mean_pool(hidden, feed["attention_mask"])
+        return _pool(hidden, feed["attention_mask"])
 
 
 class Reranker:
