@@ -72,6 +72,22 @@ def _walked_files(project: Path) -> list[str]:
     return found
 
 
+def indexable(rel: str, cfg: ProjectConfig) -> bool:
+    """Every filter that needs no disk read, ordered by cost.
+
+    Shared with the watcher rather than restated there: a watcher that decides
+    differently from the indexer wakes it for files it will then refuse, and the
+    two copies drift on the first pattern anyone adds.
+    """
+    if cfg.use_default_ignores and filters.matches_any(rel, config.DEFAULT_IGNORES):
+        return False
+    if filters.matches_any(rel, cfg.exclude) and not filters.matches_any(rel, cfg.include):
+        return False
+    if filters.is_secret_path(rel) or filters.is_image_path(rel):
+        return False
+    return not filters.is_binary_ext(rel)
+
+
 def candidates(project: Path | str, cfg: ProjectConfig) -> list[str]:
     """Relative paths worth opening, after every filter that needs no read.
 
@@ -88,13 +104,7 @@ def candidates(project: Path | str, cfg: ProjectConfig) -> list[str]:
 
     kept: list[str] = []
     for rel in paths:
-        if cfg.use_default_ignores and filters.matches_any(rel, config.DEFAULT_IGNORES):
-            continue
-        if filters.matches_any(rel, cfg.exclude) and not filters.matches_any(rel, cfg.include):
-            continue
-        if filters.is_secret_path(rel) or filters.is_image_path(rel):
-            continue
-        if filters.is_binary_ext(rel):
+        if not indexable(rel, cfg):
             continue
         full = project / rel
         try:
