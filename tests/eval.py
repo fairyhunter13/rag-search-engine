@@ -137,6 +137,25 @@ ARMS = {
         "DOCUMENT_PREFIX": " ",
         "QUERY_PREFIX": " ",
     },
+    # 2,000 non-whitespace chars is a robust chunk and 768 tokens is a measured
+    # recall peak, but on this corpus they do not fit each other: chunks land at
+    # p50 904 / p95 1373 tokens, 70% clear the window, and 27% of all tokens are
+    # dropped before they reach the model. These two arms take the mismatch from
+    # both ends -- widen the window, or cut the chunk to fit it.
+    "gte-win1536": {
+        "EMBED_MODEL": "Alibaba-NLP/gte-modernbert-base",
+        "EMBED_POOLING": "cls",
+        "EMBED_MAX_TOKENS": "1536",
+        "DOCUMENT_PREFIX": " ",
+        "QUERY_PREFIX": " ",
+    },
+    "gte-chunk1000": {
+        "EMBED_MODEL": "Alibaba-NLP/gte-modernbert-base",
+        "EMBED_POOLING": "cls",
+        "CHUNK_CHARS": "1000",
+        "DOCUMENT_PREFIX": " ",
+        "QUERY_PREFIX": " ",
+    },
     "bge-base": {
         "EMBED_MODEL": "BAAI/bge-base-en-v1.5",
         "EMBED_POOLING": "cls",

@@ -108,3 +108,14 @@ title: coderag knowledge history
   person looking to speed up indexing will meet it.
 - **Refused**: a concept for `progress.snapshot`'s ETA algebra. The reasoning is three lines at the
   call site and there is no rejected alternative — the "clever" form reduced to the naive one.
+- **Corrected** `decisions/the-thermal-pause-is-not-what-indexing-costs.md` the same day it was
+  written. Its profile stood, but the cause it inferred did not: batching the embed call across 64
+  files instead of one per file measured **2–3% slower** on an ABBA run with a warm model
+  (32.7/33.0 s against 32.0/32.0 s), and was reverted. Vectors were equivalent — min cosine
+  0.9999997 — so the result is throughput, not correctness. A profile localises time; it does not
+  name a cause, and eight minutes of A/B beat a plausible reading of a flame graph.
+- **Added** `defects/chunks-are-cut-before-the-model-sees-them.md`, which is what the refuted
+  experiment found instead. Padding waste at batch 128 is 0.0% because every chunk arrives at
+  exactly `EMBED_MAX_TOKENS`; untruncated, they run p50 904 / p95 1373, so 70% of chunks are cut and
+  27% of tokens never reach the dense lane. Two arms (`gte-win1536`, `gte-chunk1000`) are in flight
+  to decide whether it costs recall, and both constants are frozen until they land.
