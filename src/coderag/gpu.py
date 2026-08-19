@@ -9,6 +9,7 @@ string, and an EP that accepted the session and then declined to run it.
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
 import sys
 
@@ -22,6 +23,32 @@ _FATAL = (
     "CPU inference is forbidden -- install onnxruntime-gpu against a working "
     "CUDA driver, or stop the daemon."
 )
+
+
+_preloaded = False
+
+
+def preload() -> None:
+    """Put the CUDA and cuDNN shared libraries on the loader path.
+
+    The CUDA runtime arrives as pip packages under `site-packages/nvidia/*/
+    lib/`, which the dynamic loader does not search. Without this, ORT still
+    *reports* CUDAExecutionProvider as available -- the check is for the
+    provider bridge, not its dependencies -- and then fails to load
+    libonnxruntime_providers_cuda.so at session creation and silently hands
+    back a CPU session. That is precisely the failure `verify_session` catches,
+    and this is the fix for it rather than a second guard.
+
+    Idempotent, and called before every session rather than at import: the
+    daemon loads models long after start, and an import-time side effect that
+    opens CUDA libraries makes every `coderag --help` pay for a GPU.
+    """
+    global _preloaded
+    if _preloaded:
+        return
+    with contextlib.suppress(Exception):
+        ort.preload_dlls()
+    _preloaded = True
 
 
 def ep_ladder() -> list[str]:
