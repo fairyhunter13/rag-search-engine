@@ -105,6 +105,29 @@ maximum. See [restoring Dynamic Boost](../runbooks/restoring-dynamic-boost.md), 
 
 What this changes for measurement: **recall verdicts taken before the fix remain valid** — all arms
 were capped equally and recall@k is not a timing metric, which is what the original entry got right
-for the wrong reason. **Latency verdicts stay inadmissible until the cap is lifted** — which it now is, so the
-sqlite-vec kill criterion is testable for the first time, on runs taken *after* 2026-08-19T14:28Z
-and not before.
+for the wrong reason. **Latency verdicts stay inadmissible**, and the reason changed under the fix.
+
+# Second amendment — lifting the cap moved the constraint, it did not remove it
+
+Sampled over three minutes at the new 130 W limit, under the same sustained load:
+
+| | at 80 W | at 130 W |
+|---|---|---|
+| power draw | 75–80 W (pinned at the cap) | **83–90 W** |
+| SM clock | 435–1507 MHz | 945–1492 MHz |
+| GPU temp | 66–70 °C | **87 °C** |
+| `SW Power Cap` | **Active** | Not Active |
+| `SW Thermal Slowdown` | Not Active | **Active** |
+
+Draw above 80 W is the proof the fix engaged. But the card spends the new headroom into heat and
+runs into the thermal limit, so the throttle is now the one the original entry named — at 87 °C,
+against a 3090 MHz rating it still does not approach.
+
+So the first amendment's correction was right about **why the card was slow in that window**, and
+wrong to imply heat was never a constraint here. The truthful statement is sequential: **power was
+binding at 80 W; heat is binding at 130 W.** A diagnosis that names one throttle reason is only
+valid for the power limit it was taken at, and both readings above are correct at their own.
+
+The consequence for this repo is unchanged from the original entry, by a different route: **this
+host still cannot produce an admissible latency number**, and the sqlite-vec kill criterion stays
+un-testable here. What it can produce is arm-to-arm recall, and that is what the bake-off reads.
