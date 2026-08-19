@@ -11,6 +11,7 @@ import subprocess
 
 import numpy as np
 import pytest
+from onnxruntime.capi.onnxruntime_pybind11_state import Fail as OrtFail
 
 from coderag import embed, gpu
 
@@ -85,6 +86,40 @@ def test_batching_matches_a_single_pass(monkeypatch):
     monkeypatch.setattr(e, "batch", 2)
     many = e.embed(texts, side="document")
     assert np.allclose(one, many, atol=1e-3)
+
+
+def test_an_allocator_failure_halves_the_batch_instead_of_ending_the_build(monkeypatch):
+    """The batch is sized from a per-item guess about a model this code has not
+    seen; on nomic that guess was ~10x under and the first batch OOMed. Without
+    the retry an overnight fleet index dies on file one."""
+    e = embed.get_embedder()
+    monkeypatch.setattr(e, "batch", 8)
+    real, calls = e._forward, []
+
+    def once_too_big(window):
+        calls.append(len(window))
+        if len(calls) == 1:
+            raise OrtFail("Failed to allocate memory for requested buffer of size 1207959552")
+        return real(window)
+
+    monkeypatch.setattr(e, "_forward", once_too_big)
+    out = e.embed(DOCS * 4, side="document")
+
+    assert out.shape == (12, 768), "every input must still come back"
+    assert calls[0] == 8 and calls[1] == 4, f"the batch must halve, got {calls}"
+    assert e.batch == 4, "and the smaller batch has to stick, or the next call OOMs too"
+
+
+def test_a_failure_that_is_not_an_oom_is_raised_rather_than_retried(monkeypatch):
+    """Retrying a shape error four times reports the fourth one."""
+    e = embed.get_embedder()
+
+    def broken(_window):
+        raise OrtFail("right operand cannot broadcast on dim 1")
+
+    monkeypatch.setattr(e, "_forward", broken)
+    with pytest.raises(OrtFail):
+        e.embed(DOCS, side="document")
 
 
 def test_the_reranker_separates_a_match_from_a_miss():

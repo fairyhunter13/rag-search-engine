@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import gc
+import logging
 import threading
 import time
 
@@ -36,6 +37,18 @@ _reranker: Reranker | None = None
 _lock = threading.Lock()
 
 DOCUMENT, QUERY = "document", "query"
+MIN_BATCH = 4
+log = logging.getLogger(__name__)
+
+
+def _is_oom(exc: Exception) -> bool:
+    """Matched on the message because ORT raises a bare `Fail` for everything.
+
+    Narrow on purpose: a shape or provider error retried at half the batch is
+    the same error four times over, and the loop would report the fourth.
+    """
+    return "Failed to allocate memory" in str(exc)
+
 
 _last_used = time.monotonic()
 
@@ -111,16 +124,33 @@ class Embedder:
             return np.zeros((0, config.EMBED_DIMS), dtype=np.float32)
 
         prefix = config.DOCUMENT_PREFIX if side == DOCUMENT else config.QUERY_PREFIX
-        out = []
-        for start in range(0, len(texts), self.batch):
+        out: list[np.ndarray] = []
+        start = 0
+        while start < len(texts):
             window = [prefix + t for t in texts[start : start + self.batch]]
-            encodings = self.tokenizer.encode_batch(window)
-            feed = _feed(self.session, encodings)
-            with _GPU_INFER_LOCK:
-                _mark_used()
-                hidden = np.asarray(self.session.run(None, feed)[0], dtype=np.float32)
-            out.append(_mean_pool(hidden, feed["attention_mask"]))
+            try:
+                out.append(self._forward(window))
+            except Exception as exc:  # ORT's Fail derives from Exception, not RuntimeError
+                if not _is_oom(exc) or self.batch <= MIN_BATCH:
+                    raise
+                # The batch is sized from free VRAM against a per-item estimate,
+                # and that estimate is a guess about a model this code has never
+                # seen: nomic's peak is one MLP intermediate per live layer, and
+                # the guess was ~10x under it. Halving on the allocator's own
+                # answer is the only sizing that stays right for the next model.
+                self.batch = max(MIN_BATCH, self.batch // 2)
+                log.warning("embed batch OOM; retrying at %d", self.batch)
+                continue
+            start += len(window)
         return np.concatenate(out).astype(np.float32)
+
+    def _forward(self, window: list[str]) -> np.ndarray:
+        encodings = self.tokenizer.encode_batch(window)
+        feed = _feed(self.session, encodings)
+        with _GPU_INFER_LOCK:
+            _mark_used()
+            hidden = np.asarray(self.session.run(None, feed)[0], dtype=np.float32)
+        return _mean_pool(hidden, feed["attention_mask"])
 
 
 class Reranker:
