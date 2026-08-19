@@ -7,6 +7,20 @@ title: coderag knowledge history
 
 ## 2026-08-19
 
+- **Update**: the bundle audited against the shipped engine rather than against the plan's table.
+  All 21 paths named in a `resource:` key resolve, so nothing here describes deleted code — which
+  was the failure mode of the v1 bundle and is the check `tests/test_okf_bundle.py` now holds. Nine
+  concepts against a target of thirteen, and the four remaining gaps were closed as refusals, each
+  after reading the file that would be restated: **a federation is discovery, never a merged index**
+  (`federation.py` carries the resolved-path rule and the 202→135 dedup, `watch.py` carries the
+  inotify-symlink trap, the joining-a-root Constraint carries the excludes union, and the sqlite-vec
+  Decision carries why there is no merged index — four homes, none of them missing); **the two-tool
+  MCP surface as an Interface** (the contraction and its refusals are a Decision already written,
+  and the signatures are `tools.py`, so the file would be a schema copy that goes stale silently);
+  **the registry lost update as a Defect** (`runbooks/restoring-the-registry.md` already carries the
+  34-of-180 under its traps, and the runbook is where the reader who needs it arrives). The target
+  of thirteen was an estimate made before the code was written; the count that matters is how many
+  survive the gates, and four fewer is the gates working rather than the bundle being unfinished.
 - **Deprecation**: `docs/` — all 70 files, the previous engine's architecture records and dated decisions. It was kept through the v1 bundle delete as the source the load-bearing numbers were transcribed from; every one of those numbers now sits in a concept here or in a module docstring, so the directory was a second prose plane describing code deleted in `365a235`. `knowledge/` is the only one. The content is in git history at `365a235^`, and a copy was zipped out of the tree rather than committed: a tracked binary duplicates what git already holds and is opaque to the `NAME_BAN` scan, which reads tracked *text*.
 - **Creation**: [a model carries three things, and pooling is the one that fails invisibly](constraints/a-model-carries-three-things-and-pooling-is-the-invisible-one.md). Found while answering "why not the same Alibaba-NLP family for both stages" — `gte-modernbert-base` and both `bge` arms are CLS-pooled and `embed.py` hardcoded a masked mean, so three arms of the running bake-off were void. Written as a Constraint rather than an `embed.py` comment because its consequence is a procedure for adding an arm, and the person adding one is reading `tests/eval.py`.
 - **Update**: `tests/eval.py` gains `jina-code`. The plan's claim that no code-specific embedder clears both the licence and official-ONNX filters was wrong: `jina-embeddings-v2-base-code` is apache-2.0 with an fp16 ONNX sibling, 768 dims and mean-pooled, so it is a drop-in arm. Missed by anchoring on the newer CC-BY-NC `jina-code-embeddings-0.5b`.
