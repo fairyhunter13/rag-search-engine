@@ -97,10 +97,21 @@ DISABLE_TENSORRT = _env_flag("DISABLE_TENSORRT", True)
 
 # ------------------------------------------------------------------- chunking
 
-# Sliding window, line-aligned. Measured in non-whitespace characters so that
-# indented and dense code get comparable amounts of content per chunk.
+# Non-whitespace characters, so that indented and dense code get comparable
+# amounts of content per chunk. 2,000 is measured, not chosen: "across both
+# benchmarks, 2,000 non-whitespace characters is a robust default"
+# (arXiv:2605.04763), which is also the unit cAST defines.
 CHUNK_CHARS = _env_int("CHUNK_CHARS", 2000)
-CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 300)
+
+# Zero, and the same study is why: overlap is negligible (<=0.5 pp) at sizes
+# >=2,000, and at 1,000 it *degrades* EM by 1.2 pp by cutting new content per
+# chunk. It also manufactures the near-duplicates that search._diversify then
+# has to clean up. Kept as a knob because Phase 3 measures 0 against 300.
+CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 0)
+
+# The scope header prepended to the embedded and FTS text (never the stored
+# body). Off is the other arm of the Phase 3 chunker measurement.
+CHUNK_HEADER = _env_flag("CHUNK_HEADER", True)
 
 # ------------------------------------------------------------------ retrieval
 
