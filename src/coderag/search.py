@@ -21,12 +21,13 @@ when either list changes shape.
 
 from __future__ import annotations
 
+import difflib
 import time
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
 
-from . import config, embed, federation, lexical, registry, store
+from . import config, embed, federation, filters, lexical, registry, store
 
 
 class SearchError(ValueError):
@@ -168,6 +169,24 @@ def _project_candidates(project: Path, query: str, vector, mode: str, limit: int
     return hits
 
 
+def _check_lang(lang: str) -> None:
+    """An unknown `lang` is a caller error, the same as an unknown `mode`.
+
+    Without this it returns an empty list -- indistinguishable from "nothing
+    matched", which is the one failure a caller cannot debug. Note what is *not*
+    in the valid set: a file whose extension carries no label gets `lang=""` and
+    is matched by no filter at all. That is the denylist discovery paying off --
+    a new language is indexed with no change here -- and the cost is that it is
+    reachable only by leaving `lang` unset.
+    """
+    valid = sorted(set(filters.LANGS.values()))
+    if lang in valid:
+        return
+    near = difflib.get_close_matches(lang, valid, n=1, cutoff=0.6)
+    hint = f" -- did you mean {near[0]!r}?" if near else f" -- valid: {valid}"
+    raise SearchError(f"unknown lang {lang!r}{hint}")
+
+
 def _filter(hits: list[Hit], path_glob: str | None, lang: str | None) -> list[Hit]:
     if path_glob:
         hits = [h for h in hits if fnmatch(h.rel_path, path_glob)]
@@ -219,6 +238,8 @@ def search(
         raise SearchError(f"mode must be one of {list(config.MODES)}, got {mode!r}")
     if not query.strip():
         raise SearchError("query is empty")
+    if lang:
+        _check_lang(lang)
     k = max(1, min(int(k), config.MAX_K))
 
     root = registry.resolve(root or Path.cwd())
