@@ -80,6 +80,11 @@ SCHEDULER_TICK_S = _env_int("SCHEDULER_TICK_S", 60)
 RECONCILE_ON_START = _env_flag("RECONCILE_ON_START", True)
 WATCH_DEBOUNCE_MS = _env_int("WATCH_DEBOUNCE_MS", 1500)
 
+# How often the watcher loop surfaces from Rust to look at the re-arm flag. It
+# is not a re-arm interval: surfacing is free, re-arming is not (see `watch`),
+# so this only bounds how long a newly registered project waits to be watched.
+WATCH_POLL_MS = _env_int("WATCH_POLL_MS", 5000)
+
 # --------------------------------------------------------------------- models
 
 # Provisional until the bake-off replaces it. Whatever wins, the pair below

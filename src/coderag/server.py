@@ -58,7 +58,11 @@ def _tick() -> None:
     while not _stop.wait(config.SCHEDULER_TICK_S):
         _notify("WATCHDOG=1")
         with contextlib.suppress(Exception):
-            watch.rearm()
+            # `start` before the rearm check: a rearm only sets a flag, and a
+            # thread that died reads no flags. `start` is a no-op while one is
+            # alive. `rearm_if_changed`, never `rearm` -- see the docstring.
+            watch.start()
+            watch.rearm_if_changed()
         idle = config.MODEL_IDLE_UNLOAD_S
         if idle and embed.loaded() and embed.idle_seconds() > idle:
             log.info("idle for %ds, releasing models", idle)
@@ -100,8 +104,24 @@ async def healthz(_request) -> JSONResponse:
 
 
 def build_app():
-    app = mcp.streamable_http_app()
-    app.router.lifespan_context = lifespan
+    # Stateless: a fresh transport per request, no session id to carry. It is
+    # what makes the `2026-07-28` per-request envelope reachable at all -- the
+    # stateful path only negotiates up to the last handshake revision -- and
+    # this daemon has no subscriptions or sampling for a session to hold.
+    app = mcp.streamable_http_app(stateless_http=True)
+    served = app.router.lifespan_context
+
+    @contextlib.asynccontextmanager
+    async def both(scope) -> AsyncIterator[None]:
+        # Nested, never replaced. The SDK's lifespan is what enters the session
+        # manager's task group, and assigning over it left every `/mcp` call
+        # answering 500 "Task group is not initialized" while `/healthz` stayed
+        # green -- so the daemon read as up from every check that was not a
+        # request.
+        async with served(scope), lifespan(scope):
+            yield
+
+    app.router.lifespan_context = both
     app.add_route("/healthz", healthz, methods=["GET"])
     return app
 

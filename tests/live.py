@@ -24,6 +24,7 @@ import pytest
 from coderag import config
 
 MIN_FREE_MIB = 10 * 1024
+MODERN_PROTOCOL = "2026-07-28"
 OTHER_GPU_WORK = ("tests/eval.py", "coderag.cli serve", "coderag serve")
 HEADERS = {
     "content-type": "application/json",
@@ -60,14 +61,42 @@ def other_gpu_runs(exclude_daemon: bool = True) -> list[str]:
     return found
 
 
+def daemon_held_mib() -> int:
+    """What the daemon under test is already holding.
+
+    The process half of this check excludes the daemon on purpose, and the VRAM
+    half has to agree with it or the two contradict: the first live search loads
+    12 GB of models, after which every later module reads the suite's own
+    working set as somebody else's. Held-by-us is headroom, not contention.
+    """
+    pids = subprocess.run(
+        ["pgrep", "-f", "coderag.cli serve"], capture_output=True, text=True, check=False
+    ).stdout.split()
+    if not pids:
+        return 0
+    out = subprocess.run(
+        ["nvidia-smi", "--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    held = 0
+    for line in out.stdout.splitlines():
+        pid, _, used = line.partition(",")
+        if pid.strip() in pids:
+            held += int(used.strip())
+    return held
+
+
 def require_clear_gpu() -> None:
     if busy := other_gpu_runs():
         pytest.fail("another GPU run is live; this suite never interleaves:\n" + "\n".join(busy))
     free = free_vram_mib()
-    if free < MIN_FREE_MIB:
+    ours = daemon_held_mib()
+    if free + ours < MIN_FREE_MIB:
         pytest.fail(
-            f"{free} MiB free, need {MIN_FREE_MIB}. Stop the daemon rather than trusting the "
-            "idle timer -- and assert the freed number, never a release call's status code."
+            f"{free} MiB free + {ours} MiB held by the daemon, need {MIN_FREE_MIB}. Stop whatever "
+            "else is on the card -- and assert the freed number, never a release call's status code."
         )
 
 
@@ -88,17 +117,76 @@ class Rpc:
     def __init__(self, url: str):
         self.url = url
         self._id = 0
+        self._session: dict[str, str] = {}
         self.client = httpx.Client(timeout=120.0)
 
+    def _post(self, content: str, headers: dict):
+        """One retry, and only on a transport error on a reused connection.
+
+        The server closes idle keep-alive connections, and a poll loop that
+        happens to hit that window gets `Connection reset by peer` on a request
+        the server never saw. Retried once on a fresh connection it either
+        succeeds or fails for a reason worth reading -- and a retry on a
+        *response* would be the thing that hides a real intermittent fault, so
+        this catches only `TransportError`.
+        """
+        try:
+            return self.client.post(self.url, content=content, headers=headers)
+        except httpx.TransportError:
+            self.client.close()
+            self.client = httpx.Client(timeout=120.0)
+            return self.client.post(self.url, content=content, headers=headers)
+
     def call(self, method: str, params: dict | None = None) -> dict:
+        if method != "initialize" and not self._session:
+            self.handshake()
         self._id += 1
         body = {"jsonrpc": "2.0", "id": self._id, "method": method, "params": params or {}}
-        response = self.client.post(self.url, content=json.dumps(body), headers=HEADERS)
+        headers = HEADERS | self._session
+        response = self._post(json.dumps(body), headers)
         assert response.status_code == 200, f"{method} -> {response.status_code} {response.text}"
         payload = _payload(response.text)
         assert payload.get("id") == self._id, f"reply id {payload.get('id')} != {self._id}"
         assert "error" not in payload, payload["error"]
+        if method == "initialize":
+            self._adopt(response, payload["result"])
         return payload["result"]
+
+    def handshake(self, version: str = "2025-06-18") -> dict:
+        """Called lazily so a single test is a valid run.
+
+        The session used to come from whichever earlier test in the module
+        happened to call `initialize` first, so `-k` on any one of them failed
+        on a missing session ID -- a suite that only passes whole.
+        """
+        return self.call(
+            "initialize",
+            {
+                "protocolVersion": version,
+                "capabilities": {},
+                "clientInfo": {"name": "coderag-live-suite", "version": "0.1.0"},
+            },
+        )
+
+    def _adopt(self, response, result: dict) -> None:
+        """A handshake is three messages, not one.
+
+        The server issues `Mcp-Session-Id` on the initialize *response header*
+        and rejects every later call without it, and it stays uninitialised
+        until the notification arrives. Sending the header back is also what
+        makes this a client rather than a curl: a stateful transport that only
+        ever sees first messages is never exercised past its first branch.
+        """
+        session = response.headers.get("mcp-session-id")
+        if session:
+            self._session["mcp-session-id"] = session
+        self._session["mcp-protocol-version"] = result["protocolVersion"]
+        ack = self.client.post(
+            self.url,
+            content=json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+            headers=HEADERS | self._session,
+        )
+        assert ack.status_code in (200, 202), f"initialized -> {ack.status_code} {ack.text}"
 
     def tool(self, name: str, **arguments) -> dict:
         """The tool's own return value, unwrapped from the protocol envelope.
@@ -109,6 +197,34 @@ class Rpc:
         result = self.call("tools/call", {"name": name, "arguments": arguments})
         assert not result.get("isError"), result
         return result["structuredContent"]
+
+    def modern(self, method: str, params: dict | None = None) -> dict:
+        """One call in the `2026-07-28` era: no handshake, no session.
+
+        Three things carry what the handshake used to: the protocol-version
+        header, an `mcp-method` header the server checks against the body, and
+        the `_meta` envelope. Sending only one of them fails with a message
+        about the other, which is why this is a method rather than a flag.
+        """
+        self._id += 1
+        envelope = {
+            "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL,
+            "io.modelcontextprotocol/clientCapabilities": {},
+        }
+        body = {
+            "jsonrpc": "2.0",
+            "id": self._id,
+            "method": method,
+            "params": {"_meta": envelope} | (params or {}),
+        }
+        response = self._post(
+            json.dumps(body),
+            HEADERS | {"mcp-protocol-version": MODERN_PROTOCOL, "mcp-method": method},
+        )
+        assert response.status_code == 200, f"{method} -> {response.status_code} {response.text}"
+        payload = _payload(response.text)
+        assert "error" not in payload, payload["error"]
+        return payload["result"]
 
     def close(self) -> None:
         self.client.close()
