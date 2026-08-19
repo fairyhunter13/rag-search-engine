@@ -144,6 +144,20 @@ CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 0)
 # body). Off is the other arm of the Phase 3 chunker measurement.
 CHUNK_HEADER = _env_flag("CHUNK_HEADER", True)
 
+# Use MarkdownSplitter (same wheel) for doc-langs. Off by default and a bake-off
+# arm, not an edit: it removed every broken boundary in the 50-file sample -- 4
+# unbalanced code fences and 2 mid-table starts, both to 0 -- for 30% more,
+# smaller chunks. Fragmentation is what sank the semantic chunker, so this is a
+# trade and `--corpus docs` is what settles it.
+CHUNK_MD_SPLITTER = _env_flag("CHUNK_MD_SPLITTER", False)
+
+# Bump on any change to boundaries or to the header, including the per-type
+# arms. Neither is covered by `ProjectConfig.signature()`, which versions
+# excludes, so before this existed a header change rewrote what gets embedded
+# while every store on disk still read as current -- stale in the one direction
+# nothing reports.
+CHUNK_ALGO = 2
+
 # ------------------------------------------------------------------ retrieval
 
 RRF_K = _env_int("RRF_K", 60)

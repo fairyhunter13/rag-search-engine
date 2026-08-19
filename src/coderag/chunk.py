@@ -36,7 +36,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 
-from semantic_text_splitter import TextSplitter
+from semantic_text_splitter import MarkdownSplitter, TextSplitter
 
 from . import config, filters
 
@@ -212,7 +212,15 @@ def chunk_text(
     if not text.strip():
         return []
 
-    splitter = TextSplitter.from_callback(nonwhitespace, size, overlap=overlap, trim=False)
+    # One splitter unless an arm says otherwise. `MarkdownSplitter` respects
+    # fences and tables, which is a real gain and a real cost -- see
+    # config.CHUNK_MD_SPLITTER -- so it is opt-in and stamped into the store.
+    kind = (
+        MarkdownSplitter
+        if config.CHUNK_MD_SPLITTER and filters.lang_of(rel_path) in filters.DOC_LANGS
+        else TextSplitter
+    )
+    splitter = kind.from_callback(nonwhitespace, size, overlap=overlap, trim=False)
     lines = text.splitlines()
 
     chunks: list[Chunk] = []

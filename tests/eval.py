@@ -41,6 +41,7 @@ _PY_DOC = re.compile(r'^\s*(?:r|u|b)?("""|\'\'\')(.*?)\1', re.DOTALL)
 _LINE_COMMENT = re.compile(r"^\s*(?://+|#+|--)\s?(.*)$")
 _BLOCK_COMMENT = re.compile(r"/\*+(.*?)\*/", re.DOTALL)
 _NOISE = re.compile(r"[*/#\-=_]{2,}|<[^>]+>|https?://\S+")
+_ATX = re.compile(r"^(#{1,6})\s+(\S.*?)\s*#*$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,19 +80,53 @@ def _docstring(head: str) -> tuple[str, int]:
     return _clean(" ".join(lines)), end if lines else 0
 
 
-def build_queries(project: Path, limit: int = 0) -> list[Query]:
+def _doc_lead(head: str) -> tuple[str, int]:
+    """A doc file's first heading plus its lead paragraph, and where it ends.
+
+    The prose analogue of `_docstring`, and it exists for the same reason: the
+    lead has to be removable, or the query is a verbatim substring of the chunk
+    it is hunting and every arm scores near 1.000 on string identity.
+
+    Deliberately the *first* heading rather than the first H1 -- plenty of files
+    in this corpus open at `##`, and a rule that requires `#` silently selects
+    for files whose author wrote one.
+    """
+    lines = head.splitlines(keepends=True)
+    start = end = 0
+    title = ""
+    for i, line in enumerate(lines):
+        if match := _ATX.match(line.rstrip("\n")):
+            title, start = match.group(2), i
+            break
+        end += len(line)
+    if not title:
+        return "", 0
+    end += len(lines[start])
+    body: list[str] = []
+    for line in lines[start + 1 :]:
+        if _ATX.match(line.rstrip("\n")) or (body and not line.strip()):
+            break
+        end += len(line)
+        if line.strip():
+            body.append(line)
+    return _clean(" ".join([title, *body])), end
+
+
+def build_queries(project: Path, limit: int = 0, corpus: str = "code") -> list[Query]:
     """One query per file, sorted by path so two runs get the same set."""
     cfg = projcfg.effective(project, ())
     queries: list[Query] = []
     for rel in sorted(discover.candidates(project, cfg)):
         meta = discover.read(project, rel)
-        if meta is None or meta.lang in filters.DOC_LANGS:
-            # A markdown H1 matches the line-comment pattern and would supply
-            # most of the query set on a doc-heavy repo, measuring prose recall
-            # under a name that says code.
+        if meta is None or (meta.lang in filters.DOC_LANGS) != (corpus == "docs"):
+            # The two corpora are disjoint on purpose. A markdown H1 matches the
+            # line-comment pattern, so leaving doc files in the code set would
+            # measure prose recall under a name that says code -- and the
+            # reverse set is the one that was missing, which left every
+            # prose-side change in this engine unfalsifiable.
             continue
         head = "".join(meta.text.splitlines(keepends=True)[:HEAD_LINES])
-        text, _end = _docstring(head)
+        text, _end = (_doc_lead if corpus == "docs" else _docstring)(head)
         words = text.split()
         if len(words) < MIN_WORDS:
             continue
@@ -137,8 +172,10 @@ ARMS = {
         "DOCUMENT_PREFIX": " ",
         "QUERY_PREFIX": " ",
     },
-    # 2,000 non-whitespace chars is a robust chunk and 768 tokens is a measured
-    # recall peak, but on this corpus they do not fit each other: chunks land at
+    # 2,000 non-whitespace chars is a round number in a flat region -- the 864-
+    # config study finds chunk size has "a weaker, non-monotonic effect" and names
+    # no default -- and 768 tokens is a measured recall peak. On this corpus they
+    # do not fit each other: chunks land at
     # p50 904 / p95 1373 tokens, 70% clear the window, and 27% of all tokens are
     # dropped before they reach the model. These two arms take the mismatch from
     # both ends -- widen the window, or cut the chunk to fit it.
@@ -174,6 +211,11 @@ ARMS = {
     },
     "overlap-300": {"CHUNK_OVERLAP": "300"},
     "no-header": {"CHUNK_HEADER": "0"},
+    # Prose arms. Only readable under `--corpus docs`, which is the point:
+    # the code protocol excludes doc files, so both of these were unfalsifiable
+    # until that mode existed. `md-splitter` is the second splitter the "one
+    # chunker" decision refuses to ship without a number.
+    "md-splitter": {"CHUNK_MD_SPLITTER": "1"},
     # The "lighter model" arms. Three distinct levers, and only the last is a
     # different model -- so a flat result on the first two is the cheap win and
     # a flat result on the third is a smaller store forever.
@@ -190,7 +232,7 @@ ARMS = {
 }
 
 
-def run_arm(name: str, project: Path, scratch: Path, lane: str, limit: int) -> dict:
+def run_arm(name: str, project: Path, scratch: Path, lane: str, limit: int, kind: str) -> dict:
     """One arm, one subprocess, one throwaway STATE_DIR.
 
     An arm that fails to load is a result, not a bug to fix -- `gte-base` was
@@ -199,7 +241,18 @@ def run_arm(name: str, project: Path, scratch: Path, lane: str, limit: int) -> d
     env = os.environ | {f"CODERAG_{k}": v for k, v in ARMS[name].items()}
     env["CODERAG_STATE_DIR"] = str(scratch / name)
     out = subprocess.run(
-        [sys.executable, __file__, "--worker", str(project), "--lane", lane, "--limit", str(limit)],
+        [
+            sys.executable,
+            __file__,
+            "--worker",
+            str(project),
+            "--lane",
+            lane,
+            "--limit",
+            str(limit),
+            "--corpus",
+            kind,
+        ],
         env=env,
         capture_output=True,
         text=True,
@@ -213,12 +266,17 @@ def run_arm(name: str, project: Path, scratch: Path, lane: str, limit: int) -> d
 LANES = {"dense": "semantic", "lexical": "lexical", "hybrid": "hybrid"}
 
 
-def materialize(project: Path, dest: Path) -> Path:
+def materialize(project: Path, dest: Path, corpus: str = "code") -> Path:
     """A copy of the corpus with every leading doc block removed.
 
     Held to the same candidate set and the same relative paths as the real walk,
     so a positive means the same file in both. It is a copy rather than an
     in-place edit for the obvious reason.
+
+    Only the half the queries came from is stripped, and the other half is
+    copied whole: the distractors stay the files the engine really holds, which
+    is the point of measuring against a corpus rather than against a folder of
+    positives.
     """
     cfg = projcfg.effective(project, ())
     dest.mkdir(parents=True, exist_ok=True)
@@ -227,19 +285,22 @@ def materialize(project: Path, dest: Path) -> Path:
         if meta is None:
             continue
         head = "".join(meta.text.splitlines(keepends=True)[:HEAD_LINES])
-        _text, end = _docstring(head)
+        if (meta.lang in filters.DOC_LANGS) != (corpus == "docs"):
+            end = 0
+        else:
+            _text, end = (_doc_lead if corpus == "docs" else _docstring)(head)
         out = dest / rel
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(meta.text[end:], encoding="utf-8")
     return dest
 
 
-def _worker(project: Path, lane: str, limit: int) -> int:
+def _worker(project: Path, lane: str, limit: int, kind: str) -> int:
     from coderag import index, registry, search
 
     lane = LANES[lane]
-    queries = build_queries(project, limit)
-    corpus = materialize(project, config.STATE_DIR / "corpus")
+    queries = build_queries(project, limit, kind)
+    corpus = materialize(project, config.STATE_DIR / "corpus", kind)
     registry.claim(corpus, direct=True)
     index.index_project(corpus)
     ranks: list[int | None] = []
@@ -249,7 +310,12 @@ def _worker(project: Path, lane: str, limit: int) -> int:
         ]
         paths = [hit["rel_path"] for hit in hits]
         ranks.append(paths.index(query.positive) + 1 if query.positive in paths else None)
-    print(json.dumps(score(ranks) | {"lane": lane, "model": config.EMBED_MODEL}))
+    # The ranks ride along, not just the aggregates. Two arms differing by 0.02
+    # recall@10 differ by ~7 queries out of 300, and a bootstrap CI or McNemar
+    # over the disagreements needs the paired per-query outcome -- which this
+    # function used to compute and throw away, making every arm comparison an
+    # eyeball on four decimals.
+    print(json.dumps(score(ranks) | {"lane": lane, "model": config.EMBED_MODEL, "ranks": ranks}))
     return 0
 
 
@@ -270,19 +336,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lane", default="dense", choices=("dense", "lexical", "hybrid"))
     parser.add_argument("--arms", default="", help="comma-separated; default all")
     parser.add_argument("--limit", type=int, default=300)
+    # `docs` measures the prose half, which the code protocol excludes by design.
+    # The two are not comparable to each other -- only arm to arm within one.
+    parser.add_argument("--corpus", default="code", choices=("code", "docs"))
     parser.add_argument("--scratch", type=Path, default=Path("/tmp/coderag-eval"))
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     if args.worker:
-        return _worker(args.project.resolve(), args.lane, args.limit)
+        return _worker(args.project.resolve(), args.lane, args.limit, args.corpus)
 
     names = [a for a in (args.arms.split(",") if args.arms else ARMS) if a]
     args.scratch.mkdir(parents=True, exist_ok=True)
     partial = args.scratch / "results.json"
     rows = []
     for name in names:
-        rows.append(run_arm(name, args.project.resolve(), args.scratch, args.lane, args.limit))
+        rows.append(
+            run_arm(name, args.project.resolve(), args.scratch, args.lane, args.limit, args.corpus)
+        )
         # stdout only arrives at the end, and an arm costs ~25 min of GPU time.
         partial.write_text(json.dumps(rows, indent=2), encoding="utf-8")
     print(json.dumps(rows, indent=2))
