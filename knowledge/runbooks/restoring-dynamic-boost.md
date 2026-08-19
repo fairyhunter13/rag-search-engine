@@ -2,26 +2,24 @@
 type: Runbook
 resource: knowledge/constraints/this-host-cannot-produce-an-admissible-latency-number.md
 title: Restoring Dynamic Boost, and the two files the driver package does not install
-description: The laptop GPU sits at 46% of its power budget because nvidia-powerd is shipped as a bare binary with neither a systemd unit nor a D-Bus policy; assembling both raises the enforced limit from 80 W to 130 W.
+description: nvidia-powerd ships as a bare binary on noble with neither its systemd unit nor its D-Bus policy in a place either daemon looks; assembling both raises the enforced limit from 80 W to 130 W, which is worth about +10 W of real draw and not a TGP unlock.
 tags: [gpu, power, thermal, measurement, ubuntu]
 status: stable
-generated: { by: claude/opus-5, at: 2026-08-19T14:30:00Z }
+generated: { by: claude/opus-5, at: 2026-08-19T14:45:00Z }
 ---
 
 # Symptom
 
-Every latency number on this host is a host measurement. The GPU holds ~15% of rated SM clock, and
-the live `Clocks Event Reasons` block reads **SW Power Cap: Active** with both thermal slowdowns
-**Not Active** — so it is not heat. `nvidia-smi -q -d POWER` shows a **Current Power Limit of 80 W**
-against a **Max Power Limit of 175 W**.
+The GPU holds a fraction of its rated SM clock, the live `Clocks Event Reasons` block reads
+**SW Power Cap: Active**, and both thermal slowdowns read Not Active — so it is not heat.
+`enforced.power.limit` sits at **80 W** while `power.max_limit` reads **175 W**.
 
-`/proc/driver/nvidia/gpus/0000:01:00.0/power` reports `Notebook Dynamic Boost: Supported`, but
-`systemctl status nvidia-powerd` answers *"could not be found"*. Nothing is negotiating the budget,
-so the board sits on its floor.
+`/proc/driver/nvidia/gpus/<dom:bus:dev.fn>/power` reports `Notebook Dynamic Boost: Supported`, but
+`systemctl status nvidia-powerd` answers *"could not be found"*.
 
-# Cause
+# Cause — an Ubuntu packaging gap, fixed upstream but not on noble
 
-Ubuntu 24.04's `nvidia-kernel-common-595` installs the daemon and **nothing it needs to run**:
+`nvidia-kernel-common-595` on **noble installs the daemon and nothing it needs to run**:
 
 ```
 $ dpkg -L nvidia-kernel-common-595 | grep -Ei 'dbus|powerd'
@@ -29,75 +27,107 @@ $ dpkg -L nvidia-kernel-common-595 | grep -Ei 'dbus|powerd'
 /usr/share/doc/nvidia-kernel-common-595/nvidia-powerd.service
 ```
 
-The systemd unit is under `/usr/share/doc/`, where systemd never looks. There is no D-Bus policy in
-the package at all, so even once the unit is in place the daemon starts and immediately fails:
+The unit is under `/usr/share/doc/`, where systemd never looks, and there is **no D-Bus policy in
+the package at all** — so once the unit is placed the daemon starts and immediately fails:
 
 ```
 Error requesting D-Bus name (... not allowed to own the service "nvidia.powerd.server" ...)
-Failed to acquire D-Bus name
 ```
 
-Both files must be placed by hand. Ubuntu ships the unit enabled only from 25.04.
+The same source package on later Ubuntu installs both correctly (`nvidia-dbus.conf` →
+`usr/share/dbus-1/system.d`, the unit → `lib/systemd/system`, with `dh_installsystemd`). It is a
+noble-only omission, tracked as [LP #2111825](https://bugs.launchpad.net/ubuntu/+source/nvidia-graphics-drivers-570/+bug/2111825)
+(RTX 5080 Laptop, 80 W on Ubuntu against 170 W on Fedora, **New**),
+[LP #2144603](https://bugs.launchpad.net/ubuntu/+source/nvidia-graphics-drivers-595/+bug/2144603)
+(**New**) and [Debian #1118399](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1118399)
+(**open**). NVIDIA's own forum position: Ubuntu enables `nvidia-powerd` from 25.04.
+
+If `nvidia-driver-595` (non-open) is installed, the policy already exists at
+`/usr/share/doc/nvidia-driver-595/nvidia-dbus.conf` — **check before writing your own.**
 
 # Fix
 
+The policy is the upstream 595 file verbatim. Do **not** paste a copy from a pre-2022 post: those
+carried bare `send_requested_reply`/`receive_requested_reply` allows under `context="default"`, a
+system-wide D-Bus hole fixed in [CVE-2022-31608](https://forums.developer.nvidia.com/t/nvidia-dbus-conf-lead-to-high-security-concerns/215303).
+
 ```bash
 sudo cp /usr/share/doc/nvidia-kernel-common-595/nvidia-powerd.service /etc/systemd/system/
+# the noble doc copy omits this; without it a clean "unsupported" exit is logged
+# as a failure and Restart=on-abort churns
+sudo sed -i '/^Restart=on-abort/i SuccessExitStatus=1' /etc/systemd/system/nvidia-powerd.service
+
 sudo tee /usr/share/dbus-1/system.d/nvidia-dbus.conf >/dev/null <<'EOF'
-<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
- "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
 <busconfig>
-    <policy user="root">
-        <allow own="nvidia.powerd.server"/>
-        <allow send_destination="nvidia.powerd.server"/>
-        <allow receive_sender="nvidia.powerd.server"/>
-    </policy>
-    <policy context="default">
-        <deny own="nvidia.powerd.server"/>
-        <deny send_destination="nvidia.powerd.server"/>
-    </policy>
+  <type>system</type>
+  <policy user="root">
+    <allow own="nvidia.powerd.server"/>
+  </policy>
+  <policy context="default">
+    <allow send_destination="nvidia.powerd.server"/>
+  </policy>
 </busconfig>
 EOF
 sudo chmod 644 /usr/share/dbus-1/system.d/nvidia-dbus.conf
-sudo systemctl daemon-reload && sudo systemctl reload dbus
-sudo systemctl enable --now nvidia-powerd
+
+python3 -c "import xml.dom.minidom;xml.dom.minidom.parse('/usr/share/dbus-1/system.d/nvidia-dbus.conf')"
+sudo systemctl reload dbus
+systemctl is-active dbus systemd-logind NetworkManager
+
+sudo systemctl daemon-reload && sudo systemctl enable --now nvidia-powerd
 ```
 
-The policy grants ownership to `root` only and denies everyone else, so it adds no reachable surface
-beyond the daemon systemd already runs as root.
+**Validate the XML and reload before you reboot.** A malformed or zero-byte `nvidia-dbus.conf`
+makes dbus-broker refuse to start, taking `systemd-logind` and NetworkManager with it — an
+unbootable system ([nixpkgs #545966](https://github.com/NixOS/nixpkgs/issues/545966), on this exact
+driver branch). The `is-active` line above is the cheap proof it is safe to reboot.
 
-# Verify — and do not read `power.limit`
+`/usr/share/dbus-1/system.d/` is the correct directory. `man dbus-daemon` marks `/etc/dbus-1/system.d`
+deprecated and reserved for the administrator; upstream's README still says `/etc`, and is legacy.
+
+`nvidia-powerd` shells out to **`lscpu`**, so `util-linux` must be on its PATH.
+
+# Verify — and `power.limit` is not the field
 
 ```bash
-journalctl -u nvidia-powerd -n 5   # want: "DBus Connection is established"
-nvidia-smi -q -d POWER | grep -E 'Current Power Limit|Max Power Limit'
+journalctl -u nvidia-powerd -b            # want: "DBus Connection is established"
+nvidia-smi --query-gpu=power.draw,enforced.power.limit,power.default_limit,\
+clocks_event_reasons.sw_power_cap --format=csv -l 1
 ```
 
-Measured here: **80 W → 130 W**, against a 175 W maximum.
+**`enforced.power.limit` is the field that moves.** Measured here: **80 W → 130 W**, and
+`sw_power_cap` went `Active` → `Not Active`.
 
-**`nvidia-smi --query-gpu=power.limit` is the wrong probe.** On this laptop it prints `[N/A]` both
-before and after the fix, because that field maps to *Requested* Power Limit, which Dynamic Boost
-never sets — the negotiated value only appears as **Current Power Limit** in the `-q -d POWER`
-block. A check built on `--query-gpu=power.limit` reports failure on a working system.
+`power.limit` is the *software-requested* ceiling, per `man nvidia-smi`. It reads `[N/A]` on a mobile
+GPU because no software-settable limit exists on the board — the same reason `nvidia-smi -pl` is
+refused. **It reads `[N/A]` before and after a successful fix, so it is not a symptom and not a
+check.** A verification built on it reports failure on a working system.
 
-# Two fixes that cannot work here
+# What to expect, which is less than the headline
 
-* **`nvidia-smi -pl`** — laptop GPUs answer *"Changing power management limit is not supported in
-  current scope"*. The knob is absent, not root-gated. Do not retry it.
-* **`power-profiles-daemon`** — `/sys/firmware/acpi/platform_profile` does not exist on this
-  machine, which is why PPD reports `PlatformDriver: placeholder`. It has no channel to the dGPU and
-  is CPU-only here.
+Dynamic Boost shifts budget between CPU and GPU. It is worth roughly **+5 to +25 W**, not a TGP
+unlock: measured draw here went from 75–80 W to 83–90 W, about +10 W. The 80 W → 175 W gap is the
+**platform power mode**, not powerd — and this machine cannot reach it, because
+`/sys/firmware/acpi/platform_profile` does not exist, which is also why `power-profiles-daemon`
+reports `PlatformDriver: placeholder` and has no channel to the dGPU at all.
 
-`msi-wmi-platform` is read-only telemetry (hwmon channels `0444`, no write callback in mainline), so
-the fan curve is EC firmware and not tunable from Linux either. The noise this produces is the
-chassis behaving as reviewed, not a symptom of this problem.
+If powerd runs and nothing moves, the remaining gates are SBIOS-side and not user-fixable: the NPCF
+ACPI device may never bind ([open-gpu-kernel-modules #1162](https://github.com/NVIDIA/open-gpu-kernel-modules/issues/1162),
+open), or the SBIOS may veto outright (`"Client (presumably SBIOS) has requested to disable Dynamic
+Boost DC controller"`). Record that as the result.
+
+**`nvidia-smi -pl` is not an alternative.** Laptop GPUs answer *"Changing power management limit is
+not supported"*. The knob is absent, not root-gated. Do not retry it.
 
 # What it does not fix
 
-**It does not make this host admissible for latency.** At 130 W the card draws 83–90 W and reaches
-87 °C, at which point `SW Power Cap` goes Not Active and **`SW Thermal Slowdown` goes Active**. The
-budget was the binding constraint at 80 W; heat is the binding constraint at 130 W. Expect a real
-but partial gain, not a rated card.
+**It does not make this host admissible for latency.** At 130 W the card reaches 87 °C, at which
+point `SW Power Cap` goes Not Active and **`SW Thermal Slowdown` goes Active**. The budget was the
+binding constraint at 80 W; heat is the binding constraint at 130 W.
+
+`msi-wmi-platform` is read-only telemetry (hwmon channels `0444`, no write callback in mainline), so
+the fan curve is EC firmware and not tunable from Linux. The noise is the chassis behaving as
+reviewed, not a symptom of this.
 
 Recall verdicts taken under the 80 W cap **remain valid** — all arms were capped equally and
 recall@k is not a timing metric. Any arm-to-arm *timing* comparison that straddles the change is
