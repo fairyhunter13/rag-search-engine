@@ -24,7 +24,9 @@ dependencies = [
     "huggingface-hub>=1.0",
     # sqlite3 and tomllib come from the stdlib.
     "sqlite-vec>=0.1.9",
-    "mcp>=1.27",
+    # Pinned for the same reason onnxruntime-gpu is: `>=1.27` resolved to 2.0.0,
+    # where FastMCP is renamed MCPServer and the old import path is simply gone.
+    "mcp==2.0.*",
     "uvicorn>=0.34",
     "httpx>=0.28",
     "watchfiles>=1.0",
@@ -56,6 +58,9 @@ ignore = ["E501"]
 "tests/*" = ["ARG001", "T20"]
 "src/coderag/cli.py" = ["T20"]
 "src/coderag/systemd.py" = ["T20"]
+# The bridge's only channel to a human is stderr: stdout carries framed
+# JSON-RPC, so a logger writing there would desynchronise the client.
+"src/coderag/bridge.py" = ["T20"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
