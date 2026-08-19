@@ -21,6 +21,7 @@ import contextlib
 import ctypes
 import gc
 import threading
+import time
 
 import numpy as np
 import onnxruntime as ort
@@ -35,6 +36,13 @@ _reranker: Reranker | None = None
 _lock = threading.Lock()
 
 DOCUMENT, QUERY = "document", "query"
+
+_last_used = time.monotonic()
+
+
+def _mark_used() -> None:
+    global _last_used
+    _last_used = time.monotonic()
 
 
 def _session(repo: str, filename: str) -> ort.InferenceSession:
@@ -109,6 +117,7 @@ class Embedder:
             encodings = self.tokenizer.encode_batch(window)
             feed = _feed(self.session, encodings)
             with _GPU_INFER_LOCK:
+                _mark_used()
                 hidden = np.asarray(self.session.run(None, feed)[0], dtype=np.float32)
             out.append(_mean_pool(hidden, feed["attention_mask"]))
         return np.concatenate(out).astype(np.float32)
@@ -137,6 +146,7 @@ class Reranker:
             encodings = self.tokenizer.encode_batch([(query, t) for t in window])
             feed = _feed(self.session, encodings)
             with _GPU_INFER_LOCK:
+                _mark_used()
                 logits = self.session.run(None, feed)[0]
             out.append(np.asarray(logits, dtype=np.float32).reshape(len(window), -1)[:, -1])
         return np.concatenate(out)
@@ -160,6 +170,16 @@ def get_reranker() -> Reranker:
 
 def loaded() -> bool:
     return _embedder is not None or _reranker is not None
+
+
+def idle_seconds() -> float:
+    """How long since the GPU last ran anything.
+
+    Kept here rather than on the server because the thing being unloaded is
+    what knows when it was last used: a request-level clock counts a search
+    that never reached a model, and misses an hour-long index build entirely.
+    """
+    return time.monotonic() - _last_used
 
 
 def release_models() -> None:
