@@ -1,9 +1,0 @@
-# The lint config lives in `src/pyproject.toml`, beside the package it governs. This file exists
-# so that paths *outside* `src/` are governed by it too.
-#
-# ruff resolves config by walking up from each file. There is no `pyproject.toml` at the repo root,
-# so `scripts/*.py` used to walk past it and fall back to ruff's built-in defaults — a different,
-# much smaller ruleset. `ruff check scripts` reported 3 findings under those defaults and 15 under
-# the rules this repo actually declares. A gate that silently weakens itself for one directory is
-# the same shape of hole as an assertion that only checks a status code.
-extend = "src/pyproject.toml"
