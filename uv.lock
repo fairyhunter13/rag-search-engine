@@ -171,7 +171,7 @@ dev = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "huggingface-hub", specifier = ">=1.0" },
-    { name = "mcp", specifier = ">=1.27" },
+    { name = "mcp", specifier = "==2.0.*" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "onnxruntime-gpu", extras = ["cuda", "cudnn"], specifier = "==1.29.*" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
