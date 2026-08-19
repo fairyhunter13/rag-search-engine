@@ -82,3 +82,18 @@ title: coderag knowledge history
   call sites and neither has an alternative that was rejected on evidence — the four gates stop at
   the first. The MCP revision the wire must negotiate (`2026-07-28`) is now asserted rather than
   written down, which is the form that cannot go stale silently.
+- **Correction** to `runbooks/restoring-dynamic-boost.md`, same day as its creation. The policy I
+  shipped in it was one I wrote defensively — a DOCTYPE, explicit `deny` under the default context,
+  extra allows under root — not the file the driver actually ships. Upstream's 595 policy is a
+  216-byte form that *allows* `send_destination` in the default context, and the difference matters
+  in both directions: a pre-2022 copy is [CVE-2022-31608](https://forums.developer.nvidia.com/t/nvidia-dbus-conf-lead-to-high-security-concerns/215303),
+  and a malformed one makes dbus-broker refuse to start and takes logind and NetworkManager with it
+  ([nixpkgs #545966](https://github.com/NixOS/nixpkgs/issues/545966)) — an unbootable machine from a
+  file written to make a GPU faster. The runbook now validates the XML and proves the bus survived
+  *before* the reboot that would otherwise discover it.
+  Three smaller things the first draft had wrong or missing: the scriptable probe is
+  `enforced.power.limit`, and `power.limit` reads `[N/A]` because it is the *Requested* limit and no
+  software-settable limit exists on a mobile board — normal before and after the fix, not a
+  Dynamic Boost symptom; the unit needs `SuccessExitStatus=1`, which the noble doc copy omits; and
+  the honest expectation is **+5 to +25 W**, not the 80 → 175 W the numbers invite, because the rest
+  of that gap is platform power mode and this machine has no `platform_profile` to reach it.
