@@ -44,6 +44,27 @@ def test_the_same_repo_linked_twice_is_one_member(tmp_path):
     assert federation.discover(root) == [members[0]]
 
 
+def test_the_collapse_holds_at_fleet_scale(tmp_path):
+    """The 202-links-to-135-repos figure lives in the docstring above, measured
+    on the live registry and asserted at n=1. Neither half is safe to assert
+    directly: the registry names client paths, and one duplicate pair does not
+    exercise a collapse.
+
+    So the shape is reproduced instead -- many links, several repos reached
+    twice, half of those through a link to a link -- and the assertion is the
+    count, which is what a de-duplication working on one pair but not on a
+    fan-out breaks.
+    """
+    root, members = _tree(tmp_path, n=135)
+    for i in range(67):
+        (root / "links" / f"dup{i}").symlink_to(root / "links" / f"m{i}")
+
+    found = federation.discover(root)
+    assert len(found) == 135
+    assert found == sorted(members)
+    assert not any(p.is_symlink() for p in found)
+
+
 def test_a_link_pointing_back_inside_the_root_is_not_a_member(tmp_path):
     root, _ = _tree(tmp_path, n=0)
     (root / "self").symlink_to(root / "src")
