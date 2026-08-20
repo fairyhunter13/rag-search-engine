@@ -81,7 +81,7 @@ def test_broken_links_and_cycles_are_skipped_not_fatal(tmp_path):
 
 def test_federation_excludes_drop_a_member(tmp_path):
     root, members = _tree(tmp_path, n=2)
-    (root / config.PROJECT_CONFIG_NAME).write_text('[federation]\nexclude = ["links/m0"]\n')
+    (root / config.PROJECT_CONFIG_NAME).write_text("federation:\n  exclude: [links/m0]\n")
 
     found = federation.discover(root)
     assert members[0] not in found
@@ -102,7 +102,7 @@ def test_a_federation_exclude_matches_where_the_link_points(tmp_path):
     plain = _repo(tmp_path / "elsewhere" / "svc")
     (root / "repositories" / "worktrees" / "svc").symlink_to(wt)
     (root / "repositories" / "svc").symlink_to(plain)
-    (root / config.PROJECT_CONFIG_NAME).write_text('[federation]\nexclude = ["*/_worktrees/*"]\n')
+    (root / config.PROJECT_CONFIG_NAME).write_text('federation:\n  exclude: ["*/_worktrees/*"]\n')
 
     found = federation.discover(root)
     assert wt not in found, "the exclude must match the resolved target"

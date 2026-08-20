@@ -96,7 +96,7 @@ def test_inherited_excludes_are_counted_not_inferred(repo, tmp_path):
     """
     root = tmp_path / "root"
     root.mkdir()
-    (root / config.PROJECT_CONFIG_NAME).write_text('[index]\nexclude = ["*.js"]\n')
+    (root / config.PROJECT_CONFIG_NAME).write_text('index:\n  exclude: ["*.js"]\n')
 
     assert index.suppressed_by_excludes(repo) == 0
     assert index.suppressed_by_excludes(repo, (str(root),)) == 1
@@ -154,7 +154,7 @@ def test_a_root_joining_shrinks_an_existing_index_without_a_rebuild(repo, tmp_pa
     """
     root = tmp_path / "root"
     root.mkdir()
-    (root / config.PROJECT_CONFIG_NAME).write_text('[index]\nexclude = ["*.js"]\n')
+    (root / config.PROJECT_CONFIG_NAME).write_text('index:\n  exclude: ["*.js"]\n')
     registry.claim(repo, direct=True)
 
     index.index_project(repo)
@@ -171,7 +171,7 @@ def test_a_root_joining_shrinks_an_existing_index_without_a_rebuild(repo, tmp_pa
 def test_leaving_the_root_widens_it_back(repo, tmp_path):
     root = tmp_path / "root"
     root.mkdir()
-    (root / config.PROJECT_CONFIG_NAME).write_text('[index]\nexclude = ["*.js"]\n')
+    (root / config.PROJECT_CONFIG_NAME).write_text('index:\n  exclude: ["*.js"]\n')
     registry.claim(repo, direct=True)
     registry.claim(repo, root=root)
     index.index_project(repo)

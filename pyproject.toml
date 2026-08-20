@@ -22,7 +22,11 @@ dependencies = [
     "tokenizers>=0.23",
     "numpy>=2.0",
     "huggingface-hub>=1.0",
-    # sqlite3 and tomllib come from the stdlib.
+    # The per-project config format. Already present transitively via
+    # huggingface-hub, and declared anyway: a library this imports directly
+    # is one that has to survive a dependency dropping it.
+    "pyyaml>=6.0",
+    # sqlite3 comes from the stdlib.
     "sqlite-vec>=0.1.9",
     # Pinned for the same reason onnxruntime-gpu is: `>=1.27` resolved to 2.0.0,
     # where FastMCP is renamed MCPServer and the old import path is simply gone.

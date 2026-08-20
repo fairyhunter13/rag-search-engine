@@ -53,18 +53,23 @@ corpus. `root` names one root; the federation expansion is the engine's job.
 
 ## Per-project config
 
-`.coderag.toml` at a project root, parsed with `tomllib`. **Unknown keys are errors** with a
+`.coderag.yaml` at a project root, parsed with `yaml.safe_load`. **Unknown keys are errors** with a
 "did you mean" — a silently ignored exclude typo is how an index ends up three times too large.
+Quote patterns that YAML would read as something else: bare `no`, `on` and `off` are booleans, and
+arrive as a type error rather than as a pattern.
 
-```toml
-[index]
-exclude = ["wiki/*", "*.min.js", "public/assets/plugins/*"]
-respect_gitignore = true
-use_default_ignores = true
+```yaml
+index:
+  exclude: ["wiki/*", "*.min.js", "public/assets/plugins/*"]
+  respect_gitignore: true
+  use_default_ignores: true
 
-[federation]
-exclude = ["*/legacy-mirror"]
+federation:
+  exclude: ["*/legacy-mirror"]
 ```
+
+A leftover `.coderag.toml` is **refused**, not ignored: ignoring it would drop its excludes and the
+only symptom would be a store that grew. Rename it and convert the sections to mappings.
 
 A member inherits the excludes of **every** root that claims it, unioned with its own. Narrowing or
 widening that set makes the next index pass a reconcile rather than a no-op — see

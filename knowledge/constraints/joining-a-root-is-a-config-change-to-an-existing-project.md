@@ -34,6 +34,13 @@ same content-hash diff, so the cost is one walk.
 Without this, a project that joins a root excluding 70.9% of its content keeps serving what it was
 indexed with, and nothing anywhere notices.
 
+**It hashes the parsed values, not the file.** That is what made the config format switchable: the
+per-project file moved from `.coderag.toml` to `.coderag.yaml` and every signature in the fleet came
+out byte-identical — `633d0eb003bb8a5b` for the documented shape under both parsers — so not one of
+the 256 rows reconciled. A change that starts folding anything syntactic into the digest reindexes
+the whole fleet on a whitespace edit; `test_the_signature_did_not_move_when_the_format_did` pins the
+digest so that lands as a failure rather than as an overnight rebuild.
+
 It runs in **both directions**. Removing or unflagging a root drops it from each member's `roots`,
 which widens the effective config, and the same reconcile re-adds what the root was suppressing. A
 member survives its root's removal if `direct` is set or another root still claims it; otherwise the
