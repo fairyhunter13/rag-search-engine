@@ -164,6 +164,33 @@ def test_a_restart_mid_index_drains_the_queue_without_rebuilding(daemon, tmp_pat
     assert progress["files_total"] <= N_FILES - killed_at
 
 
+def test_sigterm_exits_promptly_with_a_client_connected(daemon):
+    """The connection is the whole test.
+
+    MCP streamable HTTP holds its stream open, so uvicorn's graceful shutdown
+    waits on a client that is not going to disconnect; systemd SIGKILLs at
+    TimeoutStopSec instead, which fires OnFailure on every deliberate stop and
+    skips `_shutdown_exit` entirely. `Daemon.stop` cannot see any of that -- it
+    kills after 30 s and reports success -- so this drives the process directly.
+    """
+    rpc = Rpc(daemon.url)
+    rpc.call("tools/list")  # a live stream, not just an open socket
+
+    proc = daemon.proc
+    started = time.monotonic()
+    proc.send_signal(signal.SIGTERM)
+    try:
+        returncode = proc.wait(timeout=25)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        pytest.fail("SIGTERM did not stop the daemon in 25 s; systemd would SIGKILL at 90 s")
+    finally:
+        rpc.close()
+
+    assert time.monotonic() - started < 20
+    assert returncode == 0, "a non-zero code here is OnFailure firing on an ordinary stop"
+
+
 def test_the_second_pass_after_a_clean_restart_writes_nothing(daemon, tmp_path):
     """Idempotence across a process boundary. In-process this is
     `test_index.py`'s signature check; the thing it cannot see is a store whose
