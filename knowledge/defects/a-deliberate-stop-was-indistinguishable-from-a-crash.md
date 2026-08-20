@@ -54,3 +54,31 @@ does not reproduce — and asserts the exit code is 0, not merely that the proce
 
 `TimeoutStopSec` stays at the systemd default. Shortening it would convert this class of hang into a
 faster SIGKILL, which is the same wrong ending sooner.
+
+# Corrected, 2026-08-20 — the exit was still unreachable
+
+Two claims on this page were wrong, and its own test proved it: run today,
+`test_sigterm_exits_promptly_with_a_client_connected` **fails**, `-15 != 0`. It has presumably
+never passed.
+
+*"uvicorn then returns, `_shutdown_exit` runs"* — it does not. uvicorn's `capture_signals` collects
+the signal it caught, restores the handler it replaced, and then `signal.raise_signal`s it, all
+inside `Server.run` and therefore **before** `uvicorn.run` returns. The restored handler is the
+default disposition, so the process dies by SIGTERM and the `os._exit(0)` below is dead code — which
+means the CUDA-134 protection the module docstring calls a lifecycle fact "bought with an outage"
+was not in force either. It happened not to matter: a default-disposition SIGTERM does not run
+CPython finalization, so the abort had nothing to abort in. The protection was absent, not
+unnecessary.
+
+Nor is this a production failure. systemd's `is_clean_exit` treats a daemon killed by SIGHUP, SIGINT,
+SIGTERM or SIGPIPE as clean, so `code=killed, status=15/TERM` fires no `OnFailure`. The journal's
+`status=9/KILL` and `result 'timeout'` were a different thing entirely, and this page's diagnosis of
+*that* stands.
+
+Fixed by installing our own SIGTERM handler in `serve` before `uvicorn.run`, so that ours is the
+handler uvicorn restores and re-raises into. One line, and it is what makes every assertion on this
+page and on [[a-cancelled-task-group-cannot-reach-a-shielded-thread]] mean what it says.
+
+*"The new test ... holds a live MCP stream open"* — it holds no stream. `stateless_http=True` means
+a fresh transport per request, and `tools/list` runs no user code. See the linked page for the shape
+that does reproduce.
