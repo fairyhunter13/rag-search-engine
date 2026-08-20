@@ -6,6 +6,8 @@ verdict on the model. The fixture below makes the two poolings disagree by
 construction, so an assertion cannot be satisfied by both.
 """
 
+import importlib
+
 import numpy as np
 import pytest
 
@@ -98,7 +100,9 @@ def test_truncation_composes_with_cls(hidden, mask, monkeypatch):
     assert np.allclose(np.linalg.norm(out, axis=1), 1.0)
 
 
-def test_default_is_mean(monkeypatch):
-    """The incumbent's pooling is the default, so an unset env is not a change."""
+def test_default_is_cls(monkeypatch):
+    """The shipping model's pooling is the default, so an unset env is not a
+    change. gte-modernbert is trained on CLS; the mean is nomic's and reads as
+    a plausible unit vector when wrong, which is why this is asserted."""
     monkeypatch.delenv("CODERAG_EMBED_POOLING", raising=False)
-    assert config._env("EMBED_POOLING", "mean") == "mean"
+    assert importlib.reload(config).EMBED_POOLING == "cls"
