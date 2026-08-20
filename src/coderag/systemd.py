@@ -58,11 +58,6 @@ Environment=PYTHONUNBUFFERED=1
 # The governor is off by default and this is the run it exists for: unattended,
 # overnight, on a card that throttles at 87 C. It costs 0.04% of run time.
 Environment=CODERAG_INDEX_TEMP_C=84
-# One rollout, and this line is the whole of it. The code fails closed; Claude
-# Code negotiates the era that makes a pin reachable behind a flag, so an
-# unpinned client would be refused outright. Delete this once journald shows a
-# real pin from every profile -- the default behind it is already `1`.
-Environment=CODERAG_REQUIRE_CLIENT_ROOTS=0
 
 [Install]
 WantedBy=default.target

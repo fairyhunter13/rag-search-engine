@@ -174,8 +174,7 @@ def test_the_client_roots_pin_arrives_and_bounds_the_search(rpc, tmp_path):
 
     Two synthetic paths, neither of which needs to exist: `resolve` is all the
     server does with them, and a real project must never appear in an assertion
-    here. The unit runs `CODERAG_REQUIRE_CLIENT_ROOTS=0`, so this is also what
-    proves the switch means "no pin arrived" and not "no checking".
+    here.
     """
     mine, theirs = tmp_path / "mine", tmp_path / "theirs"
     args = {"query": "handler", "root": str(theirs), "mode": "lexical"}
@@ -185,9 +184,9 @@ def test_the_client_roots_pin_arrives_and_bounds_the_search(rpc, tmp_path):
 
     # The discriminator. Without it a server that refused every call would pass
     # the assertion above, and "the pin bounded the search" would be unearned:
-    # declare no `roots` and the same call has to fail for a different reason.
+    # declare no `roots` and the same call has to fail for a *different* reason.
     unpinned = rpc.modern_tool("search", **args)
-    assert "is not indexed" in unpinned["structuredContent"]["error"]
+    assert "sent no workspace roots" in unpinned["structuredContent"]["error"]
 
 
 @pytest.mark.skipif(not shutil.which("npx"), reason="the conformance suite needs npx")

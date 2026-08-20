@@ -207,8 +207,15 @@ class Rpc:
 
         `structuredContent` is what a caller actually consumes; asserting on the
         text block instead passes while the schema is wrong.
+
+        Pinned at the call's own `root`, over the modern envelope. The legacy
+        handshake cannot carry a pin at all -- `roots/list` rides inside
+        `InputRequiredResult` only from 2026-07-28 -- so with the flag shipped
+        at `1` a legacy client is refused before any tool runs. Every call site
+        already names the root it means, and that is the pin.
         """
-        result = self.call("tools/call", {"name": name, "arguments": arguments})
+        root = arguments.get("root")
+        result = self.modern_tool(name, roots=[root] if root else None, **arguments)
         assert not result.get("isError"), result
         return result["structuredContent"]
 
