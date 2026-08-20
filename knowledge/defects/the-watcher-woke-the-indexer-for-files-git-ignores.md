@@ -4,7 +4,7 @@ resource: src/coderag/watch.py, src/coderag/discover.py
 title: The watcher woke the indexer for files git ignores, forever
 description: "`discover.indexable` is the shared predicate, but it never sees gitignore -- the indexer gets that from `git ls-files --exclude-standard`. So a gitignored build cache, which no pass will ever index, submitted a full-project job on every write to it. Caught mid-fleet-index: `3 changes detected` every ~4 s and a queue that grew while the worker drained it."
 tags: [watcher, indexer, inotify]
-status: resolved
+status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T18:20:00Z }
 ---
 

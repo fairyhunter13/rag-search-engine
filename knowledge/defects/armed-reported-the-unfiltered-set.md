@@ -4,7 +4,7 @@ resource: src/coderag/watch.py, tests/test_watch.py, tests/test_live_federation.
 title: watch.armed() answered for projects the watcher had just refused to watch
 description: "`_armed` was assigned the unfiltered intent list, so a project dropped four lines earlier for an unparseable config still reported `watching: True` through `tools._status` — and the live federation test waits on exactly that flag, so its green never proved an inotify watch existed."
 tags: [watcher, tests, resolved]
-status: resolved
+status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T23:40:00Z }
 ---
 
