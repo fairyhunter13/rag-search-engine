@@ -108,6 +108,7 @@ async def healthz(_request) -> JSONResponse:
             "status": "ok",
             "projects": len(registry.enabled_projects()),
             "models_loaded": embed.loaded(),
+            "providers": embed.bound_providers(),
             "watching": watch.watching(),
             "indexer": index.status(),
         }

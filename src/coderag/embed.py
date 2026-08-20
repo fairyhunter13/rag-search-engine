@@ -59,6 +59,18 @@ def _mark_used() -> None:
     _last_used = time.monotonic()
 
 
+def session_options() -> ort.SessionOptions:
+    """The options every session gets, exported so a probe cannot drift from it.
+
+    `session.disable_cpu_ep_fallback` is deliberately *not* set: measured
+    2026-08-20 it refuses both exports outright, over nine shape-plumbing nodes
+    ORT pins to CPU on purpose. `gpu.check_placement` is the enforcement instead.
+    """
+    opts = ort.SessionOptions()
+    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    return opts
+
+
 def _session(repo: str, filename: str) -> ort.InferenceSession:
     gpu.preload()
     path = hf_hub_download(repo_id=repo, filename=filename)
@@ -67,9 +79,7 @@ def _session(repo: str, filename: str) -> ort.InferenceSession:
     # or the session fails at Run with a missing-initializer error.
     with contextlib.suppress(Exception):
         hf_hub_download(repo_id=repo, filename=f"{filename}_data")
-    opts = ort.SessionOptions()
-    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    return ort.InferenceSession(path, opts, providers=gpu.providers())
+    return ort.InferenceSession(path, session_options(), providers=gpu.providers())
 
 
 def _tokenizer(repo: str, max_tokens: int) -> Tokenizer:
@@ -216,6 +226,19 @@ def get_reranker() -> Reranker:
 
 def loaded() -> bool:
     return _embedder is not None or _reranker is not None
+
+
+def bound_providers() -> dict[str, str]:
+    """Which EP each resident model is actually on, for `/healthz`.
+
+    Read off the live session rather than off the config: the whole class of
+    bug this answers is the one where the two disagree.
+    """
+    return {
+        name: model.session.get_providers()[0]
+        for name, model in (("embedder", _embedder), ("reranker", _reranker))
+        if model is not None
+    }
 
 
 def idle_seconds() -> float:
