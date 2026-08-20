@@ -83,6 +83,24 @@ def test_churn_in_an_excluded_directory_never_reaches_the_queue(tmp_path):
     assert [j.paths for j in _jobs()] == [["src/a.py"]]
 
 
+def test_a_gitignored_build_cache_never_reaches_the_queue(tmp_path):
+    """The measured loop: a turbo cache, gitignored and so never indexed, woke
+    the indexer for a full-project diff every few seconds across the fleet.
+    `indexable` alone cannot see this -- only `git ls-files` did."""
+    project = tmp_path / "p"
+    (project / "src").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    (project / ".gitignore").write_text(".turbo\n", encoding="utf-8")
+    batch = {
+        ("x", str(project / ".turbo" / "cache" / "a-meta.json")),
+        ("x", str(project / "src" / "a.py")),
+    }
+
+    watch._dispatch(batch, [project], {project: projcfg.ProjectConfig()})
+
+    assert [j.paths for j in _jobs()] == [["src/a.py"]], "the tracked write must still wake it"
+
+
 def test_a_secret_file_is_dropped_by_the_watcher_too(tmp_path):
     """An indexed .env is a secret in a searchable store, and a watcher that
     forwards it hands the indexer a path it only refuses by luck."""

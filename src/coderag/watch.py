@@ -144,7 +144,10 @@ def _dispatch(batch, roots: list[Path], configs: dict) -> None:
         grouped.setdefault(project, set()).add(rel)
 
     for project, paths in grouped.items():
-        index.submit(project, sorted(paths), reason="watch")
+        if configs[project].respect_gitignore:
+            paths -= discover.git_ignored(project, sorted(paths))
+        if paths:
+            index.submit(project, sorted(paths), reason="watch")
 
 
 def start() -> threading.Thread:
