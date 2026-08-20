@@ -165,3 +165,14 @@ def stop(timeout: float = 5.0) -> None:
 
 def watching() -> bool:
     return _thread is not None and _thread.is_alive()
+
+
+def armed(project: Path | str) -> bool:
+    """Whether this project's watches are actually in place.
+
+    A live thread says nothing about one project: registration sets a flag and
+    the rebuild lands up to `WATCH_POLL_MS` plus ~5 s later, and a write inside
+    that window is gone -- inotify replays nothing. So the honest answer to
+    "is this being watched" is membership in the armed set, not thread liveness.
+    """
+    return registry.resolve(project) in _armed

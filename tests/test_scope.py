@@ -141,12 +141,22 @@ def test_index_is_pinned_too(two, pin):
 
 
 def test_an_empty_root_resolves_from_thepin(two, pin):
-    """The default was the *daemon's* cwd -- `$HOME`, unregistered and forbidden
-    besides -- so it could only ever error, which is what forced every caller to
-    type an absolute path. That is the habit the pin exists to constrain."""
+    """The default was the *daemon's* cwd, which is `$HOME`. That is the habit
+    the pin exists to constrain."""
     _, theirs = two
     out = tools.search_code("handler", pin(theirs), mode="lexical")
     assert "outside" not in out.get("error", ""), "root='' did not resolve to the pin"
+
+
+def test_a_rootless_call_with_no_pin_names_the_fix_rather_than_home():
+    """The `$HOME` reply, at both tools. With the cwd fallback a rootless call
+    from a client that sends no roots came back as `index(root=$HOME)` --
+    advice a real session took. `enforce` never saw it: an unregistered `$HOME`
+    fails the indexed gate first, so the error blamed the wrong thing."""
+    empty = ListRootsResult(roots=[])
+    for out in (tools.search_code("handler", empty), tools.index_project(empty)):
+        assert "no workspace root" in out["error"], out
+        assert str(Path.home()) not in out["error"]
 
 
 # ------------------------------------------------------- when the ask is made

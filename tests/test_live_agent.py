@@ -233,8 +233,12 @@ def _results(block) -> list[dict]:
 
 def test_the_locations_the_session_was_handed_resolve(transcript, workspace):
     """A ranked list of stale line numbers looks identical to a working one."""
-    hits = [hit for block in _blocks(transcript, "tool_result") for hit in _results(block)]
-    assert hits, "the session's tool calls returned no parseable results"
+    blocks = _blocks(transcript, "tool_result")
+    hits = [hit for block in blocks for hit in _results(block)]
+    # The payload, not just its absence: an error envelope, an empty result set
+    # and a shape this cannot parse all reduce to `[]` here, and they are three
+    # different bugs in three different places.
+    assert hits, f"no parseable results in {[str(b.get('content'))[:300] for b in blocks]}"
 
     for hit in hits[:5]:
         # `path`, not `rel_path`: a federated hit is relative to the member that
