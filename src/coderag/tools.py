@@ -85,7 +85,7 @@ def index_project(pinned: scope.Pinned, root: str = "", enabled: bool = True) ->
             if project != target and registry.get(project) is not None:
                 index.submit(project, reason="index tool")
         index.start_worker()
-        watch.rearm()
+        watch.rearm_if_changed()
         # The rows themselves, not a count: the question after a teardown is
         # always *which* ones moved, and `Path` is not JSON.
         return {
@@ -98,7 +98,7 @@ def index_project(pinned: scope.Pinned, root: str = "", enabled: bool = True) ->
     try:
         members = federation.register(target)
     except projcfg.ConfigError as exc:
-        # A broken `.coderag.toml` is the caller's own mistake and it has to
+        # A broken `.coderag.yaml` is the caller's own mistake and it has to
         # reach them as something they can act on. Raised, it arrives as an
         # `isError` envelope with no status attached and no record of which
         # project is stuck; recorded, the next `index` call still says it.
@@ -108,7 +108,7 @@ def index_project(pinned: scope.Pinned, root: str = "", enabled: bool = True) ->
         return {"root": str(target), "error": str(exc), "last_error": str(exc)}
     for project in [target, *members]:
         index.submit(project, reason="index tool")
-    watch.rearm()
+    watch.rearm_if_changed()
     watch.start()
     index.start_worker()
 
