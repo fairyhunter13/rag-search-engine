@@ -51,20 +51,20 @@ def _roots() -> list[Path]:
     return [e.path for e in registry.enabled_projects() if e.path.is_dir()]
 
 
-def rearm() -> None:
-    """Ask the watcher to re-read the registry. Callers that changed it call this."""
-    _rearm.set()
-
-
 def rearm_if_changed() -> None:
-    """The periodic tick's version, and the reason it is not just `rearm`.
+    """Re-arm only when the watch set actually differs. The only entry point.
 
     Re-arming tears down every inotify watch and rebuilds it, and on this fleet
-    that is ~120,000 of them -- 5.4 s measured over 151 projects. Called
-    unconditionally every 60 s, the watcher spent a tenth of its life blind, and
-    inotify has no replay: a file deleted inside one of those windows stayed
-    searchable forever while the watcher reported itself healthy. That is how a
-    deleted file survived a 60 s poll here three runs running.
+    that is ~120,000 of them -- 5.4 s measured over 151 projects, plus up to
+    `WATCH_POLL_MS` before the loop even notices the flag. inotify has no
+    replay, so everything inside that window is lost for good.
+
+    An unconditional `rearm` existed beside this and the `index` tool called it
+    on **every** call, registry change or not. A caller polling `index` -- which
+    is what every live test and every agent checking on a build does -- held the
+    watcher blind more or less continuously, which is how a deleted file
+    survived a 300 s poll three runs running while the watcher reported itself
+    healthy and the delivery path tested correct at every layer.
     """
     if tuple(_roots()) != _armed:
         _rearm.set()

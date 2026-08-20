@@ -2,9 +2,9 @@
 type: Defect
 resource: src/coderag/watch.py, src/coderag/index.py, tests/test_live_results.py
 title: A delete is lost while a project is still settling, and delivered in 10 s once it has
-description: "The same tree, the same shape, the same fleet: a file deleted shortly after the project was registered stayed searchable past 300 s, and one deleted after a 90 s quiet period left the store in 10 s. Dispatch, the scoped delete branch and small-scale notify are each proven correct, so the fault is in the settling window and nothing else."
-tags: [watcher, inotify, federation, indexer, open]
-status: open
+description: "The same tree, the same shape, the same fleet: a file deleted shortly after the project was registered stayed searchable past 300 s, and one deleted after a 90 s quiet period left the store in 10 s. The settling window was the probe's own doing -- the `index` tool re-armed every inotify watch on every call, and the test polled it."
+tags: [watcher, inotify, federation, indexer, resolved]
+status: resolved
 generated: { by: claude/opus-5, at: 2026-08-20T16:40:00Z }
 ---
 
@@ -64,10 +64,22 @@ Both were made, and both inverted the answer:
   can still pass without the watcher ever firing. Waiting for the member's store to go quiet first is
   what makes the write assertion mean what it says.
 
-# Still owed
+# The mechanism: the probe was blinding the watcher
 
-The mechanism inside the settling window is not identified, so this stays open. What is established
-is that it is not the delivery path and not the delete branch, which is where three earlier sessions
-looked. The compensating control is the startup reconcile: a content-hash diff is correct after a
-missed event, so a daemon restart clears it — but it is the *only* reconcile, and inotify replays
-nothing, so nothing clears it while the daemon stays up.
+`tools.index_project` called `watch.rearm()` unconditionally, on **every** `index` call, registry
+change or not. Re-arming tears down every inotify watch and rebuilds it — ~120,000 of them on this
+fleet, 5.4 s measured over 151 projects — and the loop only notices the flag after up to
+`WATCH_POLL_MS` (5 s). So each `index` call opened a blind window of up to ~10.4 s, and inotify
+replays nothing that falls inside one.
+
+Everything the two probes disagreed on follows from that. The failing test polls `index` while it
+waits, so the window was open more or less continuously and the delete never landed; the 90 s-idle
+probe made no `index` call in its window, so the delete arrived in 10 s. Three earlier sessions
+looked at the delivery path because every layer of it *was* correct — the events were being dropped
+before any of it ran.
+
+The fix is that `rearm_if_changed` — which compares the watch set and existed already — is now the
+only entry point, and `rearm` is deleted. `test_the_index_tool_does_not_rearm_a_registry_it_did_not_change`
+asserts both halves: a repeat call must not re-arm, and a call that registers something must.
+`tests/test_live_results.py` now runs to green in 12 s from a cold registration, where it timed out
+at 300 s.

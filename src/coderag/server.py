@@ -63,7 +63,7 @@ def _tick() -> None:
         with contextlib.suppress(Exception):
             # `start` before the rearm check: a rearm only sets a flag, and a
             # thread that died reads no flags. `start` is a no-op while one is
-            # alive. `rearm_if_changed`, never `rearm` -- see the docstring.
+            # alive.
             watch.start()
             watch.rearm_if_changed()
         idle = config.MODEL_IDLE_UNLOAD_S
