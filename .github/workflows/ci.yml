@@ -53,7 +53,7 @@ jobs:
 
       # Pinned: `@latest` lets this gate's verdict change with no commit in this repo.
       - name: Install okfrules
-        run: go install github.com/fairyhunter13/okf/cmd/okfrules@v0.3.0
+        run: go install github.com/fairyhunter13/okf/cmd/okfrules@v0.4.1
 
       # Here rather than in the unit job, which is the only place the checker is
       # installed. These tests shell out to it and fail closed when it is
