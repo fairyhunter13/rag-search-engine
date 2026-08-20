@@ -172,3 +172,14 @@ title: coderag knowledge history
   The code corpus has no such echo and pays -0.1233 anyway, so the decision stands on code. Re-scoring
   the docs path arm on the low-slug-overlap stratum is zero-GPU and still owed.
 
+
+## 2026-08-20
+
+- **Wired** `decisions/the-embedder-is-settled-by-a-tie-break.md`, a day after it went `stable`:
+  `EMBED_MODEL` to `Alibaba-NLP/gte-modernbert-base`, `EMBED_POOLING` to `cls`, `EMBED_ONNX_FILE` to
+  `onnx/model_fp16.onnx`, both prefixes to `""`. fp16 was the tie-break's first criterion, so it was
+  verified rather than assumed — the whole `-m gpu` lane (30 tests) passes on the fp16 export.
+- **Replaced** `test_the_two_prefixes_produce_different_vectors`, false by construction once the
+  prefixes are blank, with one that asserts both halves: the sides agree under blank prefixes and
+  stop agreeing under a prefix. Deleting it would have deleted the assertion that `side` is
+  load-bearing.

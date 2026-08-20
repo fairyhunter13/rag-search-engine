@@ -1,12 +1,12 @@
 """ONNX Runtime on the GPU: one embedder, one reranker, one lock.
 
-The prefixes are a precondition, not a tuning knob. A local A/B over 10 arms,
-2 projects and 330 queries measured a candidate embedder at +0.008 recall@1
-without them -- a tie -- and +0.062 with them. The entire margin was the
-prefix. FastEmbed supplies none of this (`query_embed` and `passage_embed`
-fall through to `embed` unchanged in 0.8.0), so the pipeline must, and an
-unknown `side` raises rather than defaulting: embedding a query into the
-document space is silent, plausible, and costs a full re-embed to discover.
+The prefixes are a precondition wherever a model has them, not a tuning knob:
+a local A/B over 10 arms, 2 projects and 330 queries measured nomic at +0.008
+recall@1 without them -- a tie -- and +0.062 with them, the entire margin. The
+model that ships now, gte-modernbert, is trained with none, so both strings are
+blank and only the mechanism remains. FastEmbed supplies none of this, so the
+pipeline must, and an unknown `side` raises rather than defaulting: embedding a
+query into the document space is silent and costs a full re-embed to discover.
 
 `_GPU_INFER_LOCK` is the single GPU serializer and the *innermost* lock. It is
 held around ORT `Run` and nothing else -- never around SQLite I/O, never while
