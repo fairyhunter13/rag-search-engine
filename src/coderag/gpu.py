@@ -1,15 +1,20 @@
-"""GPU-only inference, asserted four independent times.
+"""GPU-only inference, asserted at four points on two different questions.
 
 A working CPU path silently becomes the production path: it is 30x slower and
-nothing fails, so the only symptom is an engine that everyone stops using. Each
-assertion below closes a different way CPU inference has actually arrived --
-a wheel swap, a driver that vanished mid-session, a caller passing a device
-string, and an EP that accepted the session and then declined to run it.
+nothing fails, so the only symptom is an engine that everyone stops using.
+
+Three of the assertions answer *which providers the session got* -- an empty
+ladder raises rather than letting ORT append CPU, the daemon exits before it
+binds a socket, and a loaded session is re-read because ORT reports the truth
+only afterwards. The fourth answers a question the first three cannot see:
+*where the nodes actually went*. Measured 2026-08-20, both exports place nine
+shape-plumbing nodes on the CPU EP while the EP list still reads CUDA-first, so
+`verify_session` passes over them. `check_placement` is the one that looks.
 """
 
 from __future__ import annotations
 
-import contextlib
+import logging
 import subprocess
 import sys
 import time
@@ -17,6 +22,8 @@ import time
 import onnxruntime as ort
 
 from . import config
+
+log = logging.getLogger(__name__)
 
 GPU_EPS = ("TensorrtExecutionProvider", "CUDAExecutionProvider")
 _FATAL = (
@@ -47,8 +54,12 @@ def preload() -> None:
     global _preloaded
     if _preloaded:
         return
-    with contextlib.suppress(Exception):
+    try:
         ort.preload_dlls()
+    except Exception as exc:  # never fatal: ORT may already have found them
+        # Said out loud because a silent one is the precondition of
+        # `defects/a-floating-range-changed-the-cuda-major.md`.
+        sys.stderr.write(f"preload_dlls failed, CUDA may be unreachable: {exc}\n")
     _preloaded = True
 
 
@@ -92,17 +103,6 @@ def assert_gpu_available() -> None:
         sys.exit(1)
 
 
-def check_device(device: str) -> str:
-    """Assertion 3: reject any caller-supplied device naming CPU.
-
-    Takes the whole string, because "cpu", "CPU:0" and "cuda:0,cpu" have all
-    been passed at some point and only the first is obviously wrong.
-    """
-    if "cpu" in device.lower():
-        raise ValueError(f"device {device!r} names CPU; CPU inference is forbidden")
-    return device
-
-
 def verify_session(session: ort.InferenceSession, what: str) -> None:
     """Assertion 4: the loaded session is actually running on the GPU.
 
@@ -110,12 +110,65 @@ def verify_session(session: ort.InferenceSession, what: str) -> None:
     afterwards, so this is checked post-load. It runs for the reranker as well
     as the embedder -- the reranker is the larger model and the one that
     quietly landed on CPU when only the embedder was checked.
+
+    Necessary and not sufficient: ORT registers the CPU EP as an implicit
+    fallback, so a healthy session reports `[CUDA, CPU]` and this passes however
+    many individual nodes CUDA declined. `check_placement` is that half.
     """
     got = session.get_providers()
     if not got or got[0] not in GPU_EPS:
         raise RuntimeError(
             f"FATAL: {what} loaded on {got or ['nothing']}, not a GPU provider. "
             "CPU inference is forbidden."
+        )
+    log.info("%s bound to %s", what, got[0])
+
+
+# Ops ORT pins to the CPU EP because their inputs are shape scalars, not
+# tensors: a GPU kernel for them would cost two device copies to move an integer.
+# Concat/Equal/Gather/Unsqueeze/Where are measured -- nine nodes, both exports,
+# 2026-08-20. Range/Shape/Squeeze are the rest of the same family, listed so a
+# neighbouring export does not fail for a reason we already accept.
+SHAPE_ONLY_OPS = frozenset(
+    {"Concat", "Equal", "Gather", "Range", "Shape", "Squeeze", "Unsqueeze", "Where"}
+)
+
+# Measured CPU share of node time: 0.059% embedder, 0.184% reranker. 1% is five
+# times the worse of the two and orders of magnitude under any real tensor op.
+MAX_CPU_TIME_SHARE = 0.01
+
+
+def check_placement(nodes, what: str) -> None:
+    """Assertion 4: no *tensor math* ran on the CPU EP.
+
+    `nodes` is `(op_type, provider, duration_us)` per node, from an ORT profile.
+
+    Two halves, because either alone is defeated. The op set alone is weak --
+    `Gather` is on it and `Gather` is also how an embedding table is read, so a
+    whole embedding lookup could hide behind an allowlisted name. The time bound
+    alone is weak -- it says nothing about *which* op moved. Together, a new op
+    type trips the first and a big op hiding behind an old name trips the second.
+    """
+    gpu_nodes = [n for n in nodes if n[1] in GPU_EPS]
+    if not gpu_nodes:
+        raise RuntimeError(
+            f"FATAL: {what} profiled no GPU node at all; CPU inference is forbidden."
+        )
+
+    strays = sorted({op for op, ep, _ in nodes if ep not in GPU_EPS and op not in SHAPE_ONLY_OPS})
+    if strays:
+        raise RuntimeError(
+            f"FATAL: {what} ran {strays} on {sorted({ep for _, ep, _ in nodes if ep not in GPU_EPS})}. "
+            "Only shape plumbing may leave the GPU; CPU inference is forbidden."
+        )
+
+    total = sum(d for _, _, d in nodes)
+    off = sum(d for _, ep, d in nodes if ep not in GPU_EPS)
+    share = off / total if total else 0.0
+    if share > MAX_CPU_TIME_SHARE:
+        raise RuntimeError(
+            f"FATAL: {what} spent {share:.2%} of node time off the GPU, over the "
+            f"{MAX_CPU_TIME_SHARE:.0%} bound. CPU inference is forbidden."
         )
 
 

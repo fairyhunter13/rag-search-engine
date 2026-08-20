@@ -24,6 +24,9 @@ from . import config, embed, federation, gpu, index, registry, search, store, sy
 def _serve(args) -> int:
     from . import server
 
+    # Before the socket, not inside the lifespan: a raise in there is logged as
+    # a failed startup that still leaves the port bound and answering.
+    gpu.assert_gpu_available()
     server.serve(args.host, args.port)
     return 0
 
@@ -59,7 +62,7 @@ def _list(_args) -> int:
 
 def _doctor(_args) -> int:
     problems = 0
-    print(f"gpu: {gpu.ep_ladder()[0]}, {gpu.free_vram_bytes() // 2**20} MiB free")
+    print(f"gpu: {gpu.providers()[0]}, {gpu.free_vram_bytes() // 2**20} MiB free")
     for entry in registry.enabled_projects():
         if not entry.path.is_dir():
             print(f"MISSING {entry.key}")
