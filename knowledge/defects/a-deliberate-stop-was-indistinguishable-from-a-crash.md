@@ -77,7 +77,7 @@ SIGTERM or SIGPIPE as clean, so `code=killed, status=15/TERM` fires no `OnFailur
 
 Fixed by installing our own SIGTERM handler in `serve` before `uvicorn.run`, so that ours is the
 handler uvicorn restores and re-raises into. One line, and it is what makes every assertion on this
-page and on [[a-cancelled-task-group-cannot-reach-a-shielded-thread]] mean what it says.
+page and on [a-cancelled-task-group-cannot-reach-a-shielded-thread](a-cancelled-task-group-cannot-reach-a-shielded-thread.md) mean what it says.
 
 *"The new test ... holds a live MCP stream open"* — it holds no stream. `stateless_http=True` means
 a fresh transport per request, and `tools/list` runs no user code. See the linked page for the shape

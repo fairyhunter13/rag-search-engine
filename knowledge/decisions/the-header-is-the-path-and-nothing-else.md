@@ -10,7 +10,7 @@ generated: { by: claude/opus-5, at: 2026-08-20T13:40:00Z }
 
 # The 2x2, complete
 
-[[the-header-dispatches-on-type-the-splitter-does-not]] built the derived line as four arms inside
+[the-header-dispatches-on-type-the-splitter-does-not](the-header-dispatches-on-type-the-splitter-does-not.md) built the derived line as four arms inside
 `scope_header` and closed by naming its own falsification: *"If they lose or tie, the path-only prose
 header and the one-splitter decision come back strengthened, having been tested on the corpus they
 were never argued over."* They tied. This is that.
