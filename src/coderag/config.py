@@ -72,6 +72,12 @@ MODEL_IDLE_UNLOAD_S = _env_int("MODEL_IDLE_UNLOAD_S", 900)
 BRIDGE_IDLE_S = _env_int("BRIDGE_IDLE_S", 0)
 SCHEDULER_TICK_S = _env_int("SCHEDULER_TICK_S", 60)
 
+# An absolute deadline on stopping, because nothing downstream of the advisory
+# 5 s joins is bounded: a tool call runs in a shielded anyio thread the session
+# manager's cancel cannot reach, and its task group then waits for that thread.
+# 15 s is above the 5+5 joins and below any TimeoutStopSec worth setting.
+SHUTDOWN_DEADLINE_S = _env_int("SHUTDOWN_DEADLINE_S", 15)
+
 # On by default: a daemon back after a week has to catch up, and this is the
 # only reconcile there is. Off is for when starting the daemon and starting a
 # fleet-wide index are two different intentions -- serving during a bake-off,

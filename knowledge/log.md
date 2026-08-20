@@ -183,3 +183,26 @@ title: coderag knowledge history
   prefixes are blank, with one that asserts both halves: the sides agree under blank prefixes and
   stop agreeing under a prefix. Deleting it would have deleted the assertion that `side` is
   load-bearing.
+
+## 2026-08-20
+
+- **Creation**: [a cancelled task group cannot reach a shielded thread](defects/a-cancelled-task-group-cannot-reach-a-shielded-thread.md).
+  The stop hung again after the previous fix. `timeout_graceful_shutdown` bounds the connection wait
+  and nothing else; the 90 s was the lifespan shutdown waiting on a plain-`def` tool running under
+  `anyio.to_thread.run_sync`'s shield, which the session manager's cancel cannot reach — and the tool
+  then restarted the threads the finally had just stopped. Fixed with `SHUTDOWN_DEADLINE_S = 15` and
+  a `threading.Timer` armed as the first statement after `STOPPING=1`, in the inner context, strictly
+  before the session manager is entered.
+- **Corrected** [a deliberate stop was indistinguishable from a crash](defects/a-deliberate-stop-was-indistinguishable-from-a-crash.md),
+  by running its own test: it fails, `-15 != 0`, and has presumably never passed. uvicorn's
+  `capture_signals` restores the handler it replaced and re-raises the caught signal before
+  `uvicorn.run` returns, so `_shutdown_exit` was dead code and the CUDA-134 protection the module
+  docstring calls a lifecycle fact was not in force. Not a production failure — systemd's
+  `is_clean_exit` treats a daemon killed by SIGTERM as clean — but every `returncode == 0` assertion
+  in the restart suite was unreachable. One line: install our own SIGTERM handler before
+  `uvicorn.run`, so ours is the one uvicorn restores into.
+- **Measured** the unbounded stop at **5.7 s** with a cold-load `search` in flight, with the daemon's
+  own log showing both ONNX sessions being built after `"StreamableHTTP session manager shutting
+  down"`. The first version of the new test asserted 25 s and passed with the deadline neutralised —
+  decoration. It now runs its daemon at a 2 s deadline and asserts under 4.5 s, between the two
+  numbers, because at the shipped 15 s neither is reachable.

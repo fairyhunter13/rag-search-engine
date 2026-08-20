@@ -31,7 +31,8 @@ okf_version: "0.2"
 
 * [A released member kept the excludes of the root that released it](defects/a-released-member-kept-the-roots-excludes.md) - Narrowing on join was never mirrored by widening on leave, and `unregister` reported only the rows it deleted — hiding the one member that survives the release.
 
-* [A deliberate stop was indistinguishable from a crash](defects/a-deliberate-stop-was-indistinguishable-from-a-crash.md) - uvicorn waited on MCP's open streams, so systemd SIGKILLed at 90 s and fired OnFailure on every ordinary stop; the restart tests' own stop helper hid it.
+* [A deliberate stop was indistinguishable from a crash](defects/a-deliberate-stop-was-indistinguishable-from-a-crash.md) - uvicorn waited on MCP's open streams, so systemd SIGKILLed at 90 s and fired OnFailure on every ordinary stop; the restart tests' own stop helper hid it. Corrected 08-20: the exit it claimed to reach was still unreachable.
+* [A cancelled task group cannot reach a shielded thread](defects/a-cancelled-task-group-cannot-reach-a-shielded-thread.md) - The stop hung again. timeout_graceful_shutdown bounds the connection wait and nothing else, and a plain-`def` tool runs under anyio's shield where the cancel cannot reach it.
 
 * [The chunk budget and the token window do not fit each other](defects/chunks-are-cut-before-the-model-sees-them.md) - REFUTED: 70% of chunks are cut and it costs no recall — widening the window past the p95 moved the number by nothing, and cutting the chunk to fit made it worse.
 
