@@ -59,3 +59,12 @@ and a `pass` passes the "unchanged set does not re-arm" half.
 The routing test feeds `_dispatch` a synthetic batch rather than driving real notify. Driving it
 through inotify would test which of the two paths happened to register last, which is the thing
 nothing controls.
+
+# Not the whole cause
+
+The symptom came back — see
+[[a-delete-is-lost-while-a-project-is-still-settling]]. Both fixes here still hold and both were
+re-verified against real inotify: a delete through a symlink reaches the queue under the member's
+resolved path, and the tick no longer re-arms an unchanged set. What they do not cover is a delete
+issued while the project is still settling after registration, which is the case the live test has
+and the one that is still open.

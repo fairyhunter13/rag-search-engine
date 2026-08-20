@@ -127,6 +127,33 @@ def test_a_write_through_a_symlink_still_reaches_the_queue(tmp_path, monkeypatch
     assert job.paths == ["src/new.py"]
 
 
+def test_a_delete_through_a_symlink_still_reaches_the_queue(tmp_path, monkeypatch):
+    """The write direction had a test and the delete direction had none, which
+    is the direction that fails silently: an index that only ever adds keeps
+    answering with line ranges that no longer exist. The file is created before
+    the watcher starts, so the only event this can pass on is the removal."""
+    monkeypatch.setattr(config, "WATCH_DEBOUNCE_MS", 100)
+    member = tmp_path / "member"
+    (member / "src").mkdir(parents=True)
+    (member / "src" / "gone.py").write_text("def gone():\n    return 1\n")
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "linked").symlink_to(member)
+    registry.claim(member, direct=True)
+
+    watch.start()
+    try:
+        time.sleep(1.0)
+        (root / "linked" / "src" / "gone.py").unlink()
+        job = _wait_for_job()
+    finally:
+        watch.stop()
+
+    assert job is not None, "a delete through a symlink was not seen"
+    assert job.project == member
+    assert job.paths == ["src/gone.py"]
+
+
 def test_the_watcher_reports_whether_it_is_actually_running(tmp_path):
     registry.claim(tmp_path, direct=True)
     assert not watch.watching()

@@ -207,3 +207,31 @@ title: coderag knowledge history
   down"`. The first version of the new test asserted 25 s and passed with the deadline neutralised —
   decoration. It now runs its daemon at a 2 s deadline and asserts under 4.5 s, between the two
   numbers, because at the shipped 15 s neither is reachable.
+
+- **Creation**: [the search unit is the caller's own workspace](constraints/the-search-unit-is-the-callers-own-workspace.md)
+  and [an unflagged project stayed fully searchable](defects/an-unflagged-project-stayed-fully-searchable.md).
+  The scoping downstream of `root` was already right — one level of federation, no fleet-wide mode —
+  and the hole was that `root` is a string the model writes. The boundary now comes from the client's
+  own `roots` through the SDK's `ListRoots` resolver, which the framework fills and the schema never
+  shows. `search`'s own predicate went from "the row exists" to registered **and** enabled **and**
+  indexed, which is two live bugs in one line.
+- **Verified over the wire**, against a real daemon at the fail-closed default: round one answers
+  `input_required` with `{"coderag.scope:_ask": {"method": "roots/list"}}` and an opaque
+  `requestState`; the retry carrying the pin is served; the retry carrying a *different* pin is
+  refused. `live.Rpc.modern_tool` is that round-trip, and `tests/test_live_protocol.py` asserts both
+  arms plus the discriminator — an unpinned call has to fail for a different reason, or "the pin
+  bounded the search" is unearned.
+- **Recorded** SEP-2577: `2026-07-28` deprecated `roots` in the same revision that made it reachable
+  from a stateless server. Twelve-month floor, removal eligible no earlier than 2027-07-28, and the
+  successors the spec names are the two things this rejected — a tool parameter and server
+  configuration. Not a reason to change course now; a reason to have written the date down.
+- **Shipped the flag open in the unit and closed in the code.** Claude Code negotiates the
+  `2026-07-28` era for `http` behind a default-off flag, so an unpinned client would be refused
+  outright. `scope.enforce` logs the pinned root count on every call; journald decides the flip, and
+  the log line goes when the unit line does.
+- **Not changed**: the watcher still watches `enabled_projects()`, a superset of the indexed set.
+  inotify has no replay, so tightening it for symmetry with the search gate would lose every write
+  during a project's first pass.
+- **Creation**: [a delete is lost while a project is still settling](defects/a-delete-is-lost-while-a-project-is-still-settling.md), `status: open`. The one red test in the live lane, and not caused by the scoping change beside it. Same tree, same shape, same fleet: a delete a minute after registration survives 300 s, and one after a 90 s quiet period leaves the store in 10 s. Delivery, `_dispatch` and the scoped delete branch are each now held by a test rather than by an argument. Two probe designs inverted the answer before that — polling `index` submits a full pass and repairs what it measures, and `/healthz`'s `completed` counter is fleet-wide, so a `+1` never attributes to the tree under test.
+- **Update**: two tests for paths that had none. `test_a_delete_through_a_symlink_still_reaches_the_queue` is the twin of the write test that already existed — the delete direction is the one that fails silently, and its file is created before the watcher starts so only the removal can satisfy it. `test_a_scoped_pass_removes_the_file_the_watcher_named` covers `index_project(project, paths)`, the call shape the watcher actually makes, where the content-hash diff never runs; the pre-existing delete test only ever drove the full walk.
+- **Correction**: `test_a_write_reached_only_through_a_symlink_is_noticed` can pass without the watcher firing. The fixture waits on the **root's** chunk count and writes into the **member**, whose own first walk has not run and sweeps the file in. Written the awkward way and still not awkward enough; the member's store has to go quiet first.

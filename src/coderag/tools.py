@@ -5,9 +5,12 @@ exposed as a third and fourth tool was an operator concern -- reindex, doctor,
 list, orphan cleanup -- and operator concerns belong on the CLI, where a human
 runs them deliberately and an agent never sees them.
 
-Both tools take `root=""` meaning the session's cwd, and neither takes a list.
-The federation expansion is the engine's job: a caller that had to name the
-members would have to discover them, which is the work this engine exists to do.
+Both tools take `root=""` meaning the caller's own workspace, and neither takes
+a list. The federation expansion is the engine's job: a caller that had to name
+the members would have to discover them, which is the work this engine exists to
+do. The workspace arrives through `scope.Pinned`, which the framework fills and
+the model never sees -- so the root a model can write is checked against a root
+it cannot.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
-from . import config, federation, index, projcfg, registry, search, watch
+from . import config, federation, index, projcfg, registry, scope, search, watch
 
 INSTRUCTIONS = """\
 Code retrieval over the current project and the repos it federates.
@@ -34,7 +37,8 @@ Code retrieval over the current project and the repos it federates.
   the ranges you want. Pass include_body=True only when you need bodies inline.
 - Use mode="lexical" for an exact identifier, signature or error string, and
   mode="semantic" for a question in English. The default fuses both.
-- Never index a project the user did not ask you to index.
+- `index` is the fix when `search` says a root is not indexed, and the reply
+  names it. Any other project, ask the user first.
 """
 
 mcp = MCPServer(
@@ -53,8 +57,14 @@ mcp = MCPServer(
     # the concrete `dict[str, Any]`: a bare `dict` is refused at import.
     structured_output=True,
 )
-def index_project(root: str = "", enabled: bool = True) -> dict[str, Any]:
-    target = registry.resolve(root or Path.cwd())
+def index_project(pinned: scope.Pinned, root: str = "", enabled: bool = True) -> dict[str, Any]:
+    # Pinned here too, or the gate on `search` is a formality: a caller that can
+    # index anything can make anything searchable.
+    target = registry.resolve(root or scope.default_root(pinned))
+    try:
+        scope.enforce(target, pinned)
+    except scope.ScopeError as exc:
+        return {"error": str(exc)}
     if not target.is_dir():
         return {"error": f"{target} is not a directory"}
 
@@ -135,6 +145,7 @@ def _status(target: Path, members: list[Path]) -> dict[str, Any]:
 )
 def search_code(
     query: str,
+    pinned: scope.Pinned,
     root: str = "",
     k: int = 10,
     mode: str = "hybrid",
@@ -146,9 +157,11 @@ def search_code(
     include_body: bool = False,
 ) -> dict[str, Any]:
     try:
+        target = registry.resolve(root or scope.default_root(pinned))
+        scope.enforce(target, pinned)
         return search.search(
             query,
-            root,
+            target,
             k=k,
             mode=mode,
             rerank=rerank,
@@ -158,7 +171,7 @@ def search_code(
             preview_lines=preview_lines,
             include_body=include_body,
         )
-    except search.SearchError as exc:
+    except (search.SearchError, scope.ScopeError) as exc:
         # Returned rather than raised: an error that names what to call next is
         # actionable to an agent, where a transport-level failure is not.
         return {"error": str(exc), "results": []}

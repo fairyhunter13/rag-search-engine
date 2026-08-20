@@ -9,9 +9,10 @@ okf_version: "0.2"
 * [Joining a root is a configuration change to an existing project, and it has to reach the index](constraints/joining-a-root-is-a-config-change-to-an-existing-project.md) - One registry row per resolved path records why it is there, and the config signature turns the next index pass into a reconcile rather than a no-op.
 * [A model carries three things, and pooling is the one that fails invisibly](constraints/a-model-carries-three-things-and-pooling-is-the-invisible-one.md) - Prefixes and context limits fail loudly; a mispooled model returns a plausible unit vector and reads as the model losing.
 * [This host cannot produce an admissible latency number while it throttles](constraints/this-host-cannot-produce-an-admissible-latency-number.md) - The card runs at ~15% of rated clock, so a timing figure measured here measures the host; recall survives, latency does not — and the amendment corrects a lifetime counter read as live state.
+* [The search unit is the caller's own workspace plus what it federates](constraints/the-search-unit-is-the-callers-own-workspace.md) - The root was a string the model wrote, so any of ~159 registered projects was reachable by naming it; the boundary now comes from the client's own roots, and the honest claim for it is containment rather than authorization.
 * [No amount of served prose makes a client prefer this server over its own grep](constraints/served-prose-does-not-beat-grep.md) - Three escalations lost to grep on a literal string, so the agent layer asks what the client's own tools cannot answer — plus what `--allowedTools` does not do.
-
 * [Nine nodes run on the CPU EP in both exports, so the GPU rule is written about tensor math rather than about nodes](constraints/nine-nodes-run-on-the-cpu-and-that-is-the-design.md) - `disable_cpu_ep_fallback` refuses both models over shape plumbing ORT pins to CPU on purpose; an op allowlist plus a 1% time bound is what enforces the rule instead.
+
 # Decision
 
 * [The embedder is settled by a tie-break, because the two finalists are not distinguishable](decisions/the-embedder-is-settled-by-a-tie-break.md) - bge-base and gte-modernbert differ by 0.023 recall@10 at p=0.39, so a pre-committed order decides it; the header arm is the one result that is not a tie.
@@ -30,10 +31,14 @@ okf_version: "0.2"
 
 * [A deleted file stayed searchable in a federated member, from two independent causes](defects/a-deleted-file-stayed-searchable-in-a-member.md) - inotify keys a directory by inode and reports the last-registered path; and the 60 s tick re-armed 120,000 watches unconditionally, which is a blind window with no replay.
 
+* [A delete is lost while a project is still settling](defects/a-delete-is-lost-while-a-project-is-still-settling.md) - OPEN: the same tree loses a delete issued a minute after registration and delivers one in 10 s after a 90 s quiet period; delivery, dispatch and the scoped delete branch are each proven correct.
+
 * [A released member kept the excludes of the root that released it](defects/a-released-member-kept-the-roots-excludes.md) - Narrowing on join was never mirrored by widening on leave, and `unregister` reported only the rows it deleted — hiding the one member that survives the release.
 
 * [A deliberate stop was indistinguishable from a crash](defects/a-deliberate-stop-was-indistinguishable-from-a-crash.md) - uvicorn waited on MCP's open streams, so systemd SIGKILLed at 90 s and fired OnFailure on every ordinary stop; the restart tests' own stop helper hid it. Corrected 08-20: the exit it claimed to reach was still unreachable.
 * [A cancelled task group cannot reach a shielded thread](defects/a-cancelled-task-group-cannot-reach-a-shielded-thread.md) - The stop hung again. timeout_graceful_shutdown bounds the connection wait and nothing else, and a plain-`def` tool runs under anyio's shield where the cancel cannot reach it.
+
+* [An unflagged project stayed fully searchable](defects/an-unflagged-project-stayed-fully-searchable.md) - `registry.get` returns disabled rows and unflagging deletes no store, so an explicitly turned-off project answered by name; and 147 registered-but-never-indexed rows passed a gate whose message said they did not.
 
 * [The chunk budget and the token window do not fit each other](defects/chunks-are-cut-before-the-model-sees-them.md) - REFUTED: 70% of chunks are cut and it costs no recall — widening the window past the p95 moved the number by nothing, and cutting the chunk to fit made it worse.
 

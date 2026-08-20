@@ -85,7 +85,14 @@ class Daemon:
     """One `coderag serve` on a private state dir. `start` twice is the restart."""
 
     def __init__(self, state: Path, port: int, extra: dict[str, str] | None = None):
-        base = {"CODERAG_STATE_DIR": str(state), "CODERAG_PORT": str(port)}
+        # Whatever the unit ships, so this suite tests the daemon the user runs.
+        # `Rpc` handshakes on 2025-06-18 declaring no capabilities, so it sends
+        # no workspace pin, and the code's own default fails closed on that.
+        base = {
+            "CODERAG_STATE_DIR": str(state),
+            "CODERAG_PORT": str(port),
+            "CODERAG_REQUIRE_CLIENT_ROOTS": "0",
+        }
         self.env = os.environ | base | (extra or {})
         self.url = f"http://127.0.0.1:{port}/mcp"
         self.state = state

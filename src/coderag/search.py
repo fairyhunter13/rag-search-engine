@@ -243,7 +243,13 @@ def search(
     k = max(1, min(int(k), config.MAX_K))
 
     root = registry.resolve(root or Path.cwd())
-    if registry.get(root) is None:
+    # Three conditions, and the message has always claimed all three. `get`
+    # returns disabled rows and unflagging deletes no store, so a project the
+    # user explicitly unflagged stayed searchable by name until this line said
+    # `enabled`; `indexed_at` is what the user asked for and what makes the
+    # message true. `members_of` already filters on `enabled`, never the root.
+    entry = registry.get(root)
+    if entry is None or not entry.enabled or entry.indexed_at is None:
         raise SearchError(f"{root} is not indexed -- call index(root={str(root)!r}) first")
     projects = federation.expand(root)
 
