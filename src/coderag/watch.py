@@ -33,6 +33,9 @@ _thread: threading.Thread | None = None
 _stop = threading.Event()
 _rearm = threading.Event()
 _armed: tuple[Path, ...] = ()
+# What this pass is arming, which is what "has the set changed" has to compare
+# against; `_armed` is empty until the watches are actually in place.
+_intent: tuple[Path, ...] = ()
 _lock = threading.Lock()
 
 
@@ -66,7 +69,7 @@ def rearm_if_changed() -> None:
     survived a 300 s poll three runs running while the watcher reported itself
     healthy and the delivery path tested correct at every layer.
     """
-    if tuple(_roots()) != _armed:
+    if tuple(_roots()) != _intent:
         _rearm.set()
 
 
@@ -79,11 +82,12 @@ def _loop() -> None:
             continue
 
         _rearm.clear()
-        global _armed
+        global _armed, _intent
         # The unfiltered list on purpose: a project dropped below for a broken
         # config is still enabled, so comparing against the filtered one would
         # differ on every tick and re-arm forever -- the bug this replaces.
-        _armed = tuple(roots)
+        _intent = tuple(roots)
+        _armed = ()
         configs = {}
         for root in list(roots):
             entry = registry.get(root)
@@ -111,6 +115,10 @@ def _loop() -> None:
             rust_timeout=config.WATCH_POLL_MS,
             yield_on_timeout=True,
         ):
+            # Only now. Establishing ~120,000 watches takes seconds, and a write
+            # in that window is lost -- so anything waiting on `armed` has to
+            # wait for the first yield, not for the decision to rebuild.
+            _armed = _intent
             _dispatch(batch, roots, configs)
             if _rearm.is_set() or _stop.is_set():
                 break
