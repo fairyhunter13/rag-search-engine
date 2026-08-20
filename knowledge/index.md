@@ -17,6 +17,7 @@ okf_version: "0.2"
 
 # Decision
 
+* [The bundle gate asserts that it is wired](decisions/the-bundle-gate-asserts-that-it-is-installed.md) - The bundle tests are a gate only if something runs them, so one arm reads the workflow and fails when the step that invokes them is gone, excused, unpinned, or attached to a trigger that never fires on a change.
 * [The embedder is settled by a tie-break, because the two finalists are not distinguishable](decisions/the-embedder-is-settled-by-a-tie-break.md) - bge-base and gte-modernbert differ by 0.023 recall@10 at p=0.39, so a pre-committed order decides it; the header arm is the one result that is not a tie.
 * [The scope header is the path, and the derived line is deleted](decisions/the-header-is-the-path-and-nothing-else.md) - Flat on docs and on code, and below no-header at all on its own; the census refuted redundancy, which leaves dilution.
 * [Per-type knowledge enters through the header, not through a second splitter](decisions/the-header-dispatches-on-type-the-splitter-does-not.md) - REFUTED by its own falsification condition: the four arms ran and tied, and the dispatch they justified is gone.
