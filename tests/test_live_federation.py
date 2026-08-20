@@ -188,13 +188,19 @@ def test_7_a_typo_in_the_config_is_an_error_that_names_the_nearest_key(rpc, tmp_
     large, so the failure has to be loud and at the call that caused it."""
     project = _repo(tmp_path_factory.mktemp("typo"), {"a.py": "x = 1\n"})
     (project / config.PROJECT_CONFIG_NAME).write_text('index:\n  excludes: ["wiki/*"]\n')
-    out = rpc.tool("index", root=str(project))
-    error = until(
-        lambda: out.get("last_error") or rpc.tool("index", root=str(project)).get("last_error"),
-        timeout=60,
-        what="the config error to surface on the project's status",
-    )
-    assert "excludes" in error and "exclude" in error, error
+    try:
+        out = rpc.tool("index", root=str(project))
+        error = until(
+            lambda: out.get("last_error") or rpc.tool("index", root=str(project)).get("last_error"),
+            timeout=60,
+            what="the config error to surface on the project's status",
+        )
+        assert "excludes" in error and "exclude" in error, error
+    finally:
+        # `finally`, not a trailing line: the row this leaves behind is one the
+        # daemon can never index, so reconcile retries it and logs a traceback
+        # at every start -- forever, and loudest when this test failed.
+        rpc.tool("index", root=str(project), enabled=False)
 
 
 def test_8_teardown_leaves_the_fleet_alone(rpc, root, member):

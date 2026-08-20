@@ -15,6 +15,8 @@ okf_version: "0.2"
 * [The CPU side of an indexing pass is already flat, and six arms failed to move it](constraints/the-cpu-side-of-an-indexing-pass-is-already-flat.md) - A pass costs ~1.1 mean cores and none of six knobs cleared its pre-committed threshold; `MALLOC_ARENA_MAX=2`, the one people reach for first, made it 27% worse.
 * [`watching` answers for one project, and arming is asynchronous](constraints/watching-is-per-project-and-arming-is-asynchronous.md) - Thread liveness was true the instant the watcher started and said nothing about this project; the rebuild lands seconds after registration and inotify replays nothing, so a write inside that window is lost.
 
+* [What a root and 135 federated members cost](constraints/what-a-root-and-135-members-cost.md) - p50 1.46 s, 91% of one core, 2.31 GiB anon — and why `memory.events high == 0` is the wrong thing for a verification block to assert.
+
 # Decision
 
 * [The bundle gate asserts that it is wired](decisions/the-bundle-gate-asserts-that-it-is-installed.md) - The bundle tests are a gate only if something runs them, so one arm reads the workflow and fails when the step that invokes them is gone, excused, unpinned, or attached to a trigger that never fires on a change.
@@ -27,6 +29,8 @@ okf_version: "0.2"
 * [Progress is a file, not a protocol notification](decisions/progress-is-a-file-not-a-protocol-notification.md) - MCP's two mechanisms for long-running work both need a live request or a second status surface; the counter is a throttled JSON file instead.
 * [CI runs no GPU and no live job, and the self-hosted runner is deregistered](decisions/ci-does-not-touch-the-gpu.md) - A runner group is unavailable on a personal account and the GPU lanes contended for the one card; both reasons point the same way.
 * [The thermal pause is not what indexing costs, and the profile says so](decisions/the-thermal-pause-is-not-what-indexing-costs.md) - 80.7% of self-time is the ONNX forward pass and 0.04% is cool_down, so the cooldown stays -- and the batching fix that profile seemed to imply was measured, refuted and reverted.
+
+* [The pin rollout needed a reason, not a count](decisions/the-pin-rollout-needed-a-reason-not-a-count.md) - 4498 zero-pins against 23 real ones could not say whether the pin was one client setting away or unreachable; `_ask` now logs the branch, and the flag waits on that.
 
 # Defect
 
@@ -46,6 +50,12 @@ okf_version: "0.2"
 * [A cancelled task group cannot reach a shielded thread](defects/a-cancelled-task-group-cannot-reach-a-shielded-thread.md) - The stop hung again. timeout_graceful_shutdown bounds the connection wait and nothing else, and a plain-`def` tool runs under anyio's shield where the cancel cannot reach it.
 
 * [An unflagged project stayed fully searchable](defects/an-unflagged-project-stayed-fully-searchable.md) - `registry.get` returns disabled rows and unflagging deletes no store, so an explicitly turned-off project answered by name; and 147 registered-but-never-indexed rows passed a gate whose message said they did not.
+
+* [A project whose directory was gone could not be turned off](defects/a-vanished-project-could-not-be-turned-off.md) - The `is_dir` refusal sat above the unflag branch, so the row an operator most needs to disable was the one row the surface could not act on; two survived every restart.
+
+* [One live test skipped the disable-don't-prune teardown](defects/a-live-test-skipped-the-disable-teardown.md) - The policy was fine and one test was not: its two leaked rows were the whole of `doctor`'s red, and `fleet_unchanged` now counts rows around every live module.
+
+* [doctor walked rows to stores and never stores to rows](defects/doctor-only-walked-the-registry.md) - 144 index directories at 436 MiB had no row to be found from, under a check five consecutive plans quoted as proof of no orphans.
 
 * [The chunk budget and the token window do not fit each other](defects/chunks-are-cut-before-the-model-sees-them.md) - REFUTED: 70% of chunks are cut and it costs no recall — widening the window past the p95 moved the number by nothing, and cutting the chunk to fit made it worse.
 

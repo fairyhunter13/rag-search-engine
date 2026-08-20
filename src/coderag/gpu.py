@@ -1,15 +1,22 @@
-"""GPU-only inference, asserted at four points on two different questions.
+"""GPU-only inference: three assertions in the daemon, and one gate outside it.
 
 A working CPU path silently becomes the production path: it is 30x slower and
 nothing fails, so the only symptom is an engine that everyone stops using.
 
-Three of the assertions answer *which providers the session got* -- an empty
+The three the daemon runs answer *which providers the session got* -- an empty
 ladder raises rather than letting ORT append CPU, the daemon exits before it
 binds a socket, and a loaded session is re-read because ORT reports the truth
-only afterwards. The fourth answers a question the first three cannot see:
+only afterwards. `check_placement` answers a question those three cannot see:
 *where the nodes actually went*. Measured 2026-08-20, both exports place nine
 shape-plumbing nodes on the CPU EP while the EP list still reads CUDA-first, so
-`verify_session` passes over them. `check_placement` is the one that looks.
+`verify_session` passes over them.
+
+It has no production call site, deliberately: reading it costs a profiled batch
+through both models, and what it guards -- a re-export placing tensor math on
+the host -- changes on a model swap, not at runtime. So it is a gate on the
+swap, held by `tests/test_gpu_placement.py` under `-m gpu`, which CI cannot run
+(`decisions/ci-does-not-touch-the-gpu.md`) and a human types. Do not read the
+daemon's green as covering this.
 """
 
 from __future__ import annotations
