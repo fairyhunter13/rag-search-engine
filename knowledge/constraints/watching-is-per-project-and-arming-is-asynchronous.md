@@ -4,7 +4,7 @@ resource: src/coderag/watch.py, src/coderag/tools.py
 title: "`watching` answers for one project, and arming lands seconds after registration"
 description: "The `index` reply's `watching` field used to be thread liveness, which is true the moment the watcher starts and says nothing about whether this project's inotify watches exist. It is `watch.armed(project)` now -- membership in the armed set -- because the rebuild lands up to WATCH_POLL_MS plus ~5 s after registration and a write inside that window is gone for good."
 tags: [watcher, inotify, tools]
-status: active
+status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T18:10:00Z }
 ---
 

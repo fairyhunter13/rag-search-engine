@@ -4,7 +4,7 @@ resource: tests/test_public_hygiene.py, src/coderag/config.py
 title: The publishability guard read a variable nothing set, then a list nothing could match
 description: "Two independent failures in one guard: the installer wrote a differently-named variable, and once that was fixed it wrote a colon-joined value into a comma-split reader. The first is loud, the second is green."
 tags: [hygiene, guards, resolved]
-status: resolved
+status: stable
 generated: { by: claude/opus-5, at: 2026-08-21T04:10:00Z }
 ---
 

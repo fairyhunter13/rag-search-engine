@@ -4,7 +4,7 @@ resource: src/coderag/cli.py, src/coderag/registry.py, src/coderag/config.py
 title: doctor --prune globbed fresh directories against a stale row snapshot
 description: "`registry.load()` releases its lock before returning, so the claimed set was a snapshot and the glob after it was live: a project claimed in between read as unclaimed and its store was deleted under the daemon's open handle, which on Linux keeps committing into the unlinked inode and reports nothing."
 tags: [registry, cli, concurrency, data-loss, resolved]
-status: resolved
+status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T23:40:00Z }
 ---
 

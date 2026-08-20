@@ -4,7 +4,7 @@ resource: src/coderag/search.py, tests/test_search.py
 title: The pre-rerank cut ranked 136 projects by scores that are only meaningful within one
 description: "RRF fuses lanes inside a project, so its scores are per-project ranks: every project's rank-1 hit scores about the same. Truncating the flat pool to CANDIDATES by that score keeps roughly everyone's top one and drops the caller's own rank-3 hit before the reranker sees it — and with rerank=False that order is final."
 tags: [search, federation, ranking, resolved]
-status: resolved
+status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T23:40:00Z }
 ---
 

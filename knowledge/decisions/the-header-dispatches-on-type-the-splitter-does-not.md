@@ -4,7 +4,7 @@ resource: src/coderag/chunk.py, src/coderag/filters.py
 title: Per-type knowledge enters through the header, not through a second splitter
 description: A quarter of the corpus is prose and structured data that the code-only evidence never covered; the fix is four arms inside scope_header, because that is reversible and a second chunker costs a full re-index to compare.
 tags: [chunking, retrieval, evidence, prose]
-status: refuted
+status: deprecated
 generated: { by: claude/opus-5, at: 2026-08-19T21:10:00Z }
 ---
 

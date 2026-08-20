@@ -4,7 +4,7 @@ resource: tests/test_live_federation.py, tests/conftest.py, tests/live.py
 title: One live test skipped the disable-don't-prune teardown, and it was the whole of doctor's red
 description: "The suite's rule is that a live test disables what it registers and never prunes. Ten tests in the module did; one did not, and its two leaked rows were the entire 151-enabled/149-indexed gap, the entire `failed: 2` on `/healthz`, and the two `MISSING` lines `doctor` exited 1 on."
 tags: [tests, registry, federation, resolved]
-status: resolved
+status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T20:15:00Z }
 ---
 

@@ -4,7 +4,7 @@ resource: src/coderag/scope.py, src/coderag/server.py
 title: 1768 zero-root pins were an answered-empty case the log could not name
 description: "Of ~1865 zero-root pins only 97 took the no-capability branch and none took the protocol-era branch; the rest asked and got an empty list back — a third case named nowhere — and no `clientInfo` was logged, so the flag's rollout criterion was gated on evidence the instrumentation could not produce."
 tags: [scope, mcp, observability, resolved]
-status: resolved
+status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T23:40:00Z }
 ---
 

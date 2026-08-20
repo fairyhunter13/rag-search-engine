@@ -4,7 +4,7 @@ resource: src/coderag/watch.py, src/coderag/index.py, tests/test_live_results.py
 title: A delete is lost while a project is still settling, and delivered in 10 s once it has
 description: "The same tree, the same shape, the same fleet: a file deleted shortly after the project was registered stayed searchable past 300 s, and one deleted after a 90 s quiet period left the store in 10 s. The settling window was the probe's own doing -- the `index` tool re-armed every inotify watch on every call, and the test polled it."
 tags: [watcher, inotify, federation, indexer, resolved]
-status: resolved
+status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T16:40:00Z }
 ---
 

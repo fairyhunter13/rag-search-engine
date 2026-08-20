@@ -4,7 +4,7 @@ resource: tests/cpu.py, src/coderag/embed.py, src/coderag/systemd.py
 title: The CPU side of an indexing pass is already flat, and six arms failed to move it
 description: "Measured over three repetitions per arm on a quiet machine: an indexing pass costs ~1.1 mean cores, and none of MALLOC_ARENA_MAX, RAYON_NUM_THREADS, intra/inter-op thread caps, spin-wait or the CPU arena cleared its pre-committed threshold. MALLOC_ARENA_MAX=2 made it 27% worse."
 tags: [performance, onnxruntime, indexer, refuted]
-status: accepted
+status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T17:55:00Z }
 ---
 

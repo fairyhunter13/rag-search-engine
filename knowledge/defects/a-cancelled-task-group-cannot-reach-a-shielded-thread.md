@@ -4,7 +4,7 @@ resource: src/coderag/server.py, src/coderag/config.py, tests/test_restart.py
 title: The stop hung again, because a cancelled task group waits for a thread it cannot cancel
 description: "timeout_graceful_shutdown bounds the connection wait and nothing else. The 90 s was spent in the lifespan shutdown, waiting on a plain-`def` tool running under anyio's shield — and the tool restarted the threads the finally block had just stopped."
 tags: [daemon, shutdown, anyio, mcp, systemd]
-status: fixed
+status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T15:30:00Z }
 ---
 

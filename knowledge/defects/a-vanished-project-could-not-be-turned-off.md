@@ -4,7 +4,7 @@ resource: src/coderag/tools.py, tests/test_server_tools.py
 title: A project whose directory was gone could not be turned off
 description: "`index_project` refused every call for a path that is not a directory, and the refusal sat above the unflag branch -- so the row an operator most needs to disable was the one row the surface could not act on. Two of them survived every restart, and reconcile retried and logged a traceback for each at every start."
 tags: [tools, registry, reconcile, resolved]
-status: resolved
+status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T20:10:00Z }
 ---
 

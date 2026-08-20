@@ -4,7 +4,7 @@ resource: src/coderag/config.py
 title: The chunk budget and the token window do not fit each other
 description: 2,000 non-whitespace chars produces chunks of p50 904 and p95 1373 tokens against a 768-token window, so 70% of chunks are cut — and two arms then showed the cut costs no recall.
 tags: [chunking, embedding, recall]
-status: refuted
+status: deprecated
 generated: { by: claude/opus-5, at: 2026-08-19T16:45:00Z }
 ---
 

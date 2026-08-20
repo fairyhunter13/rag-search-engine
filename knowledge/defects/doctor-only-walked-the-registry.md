@@ -4,7 +4,7 @@ resource: src/coderag/cli.py, tests/test_server_tools.py
 title: doctor walked rows to stores and never stores to rows
 description: "Every plan in the chain verified with `coderag doctor reports no orphans`. It could not see 144 index directories, 436 MiB, whose rows were gone -- because a row-driven walk starts from a row, and these had none."
 tags: [cli, registry, disk, resolved]
-status: resolved
+status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T20:20:00Z }
 ---
 
