@@ -91,8 +91,9 @@ def test_an_unregistered_root_is_told_what_to_call_rather_than_widened(rpc, tmp_
     assert "index" in out["error"], out
 
 
-def test_an_unknown_mode_names_the_valid_set(rpc):
-    out = rpc.tool("search", query="anything", mode="telepathy")
+def test_an_unknown_mode_names_the_valid_set(rpc, tmp_path):
+    # A root, any root: rootless is refused before the mode is ever read.
+    out = rpc.tool("search", query="anything", root=str(tmp_path), mode="telepathy")
     for mode in config.MODES:
         assert mode in out["error"], out
 
