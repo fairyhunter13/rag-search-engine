@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -60,7 +61,7 @@ def _list(_args) -> int:
     return 0
 
 
-def _doctor(_args) -> int:
+def _doctor(args) -> int:
     problems = 0
     print(f"gpu: {gpu.providers()[0]}, {gpu.free_vram_bytes() // 2**20} MiB free")
     for entry in registry.enabled_projects():
@@ -76,6 +77,27 @@ def _doctor(_args) -> int:
         if any(counts.values()):
             print(f"ORPHANS {entry.key}: {counts}")
             problems += 1
+
+    # The other direction, and against every row rather than the enabled ones:
+    # unflagging keeps the store, so a disabled row's directory is claimed. What
+    # is left over is a store whose row is gone -- 143 of them, 0.46 GiB, that a
+    # row-driven walk could not see because there was no row to start from.
+    claimed = {config.index_path(e.path).parent for e in registry.load().values()}
+    for found in sorted(p for p in config.INDEX_DIR.glob("*") if p.is_dir()):
+        if found in claimed:
+            continue
+        size = sum(f.stat().st_size for f in found.rglob("*") if f.is_file())
+        if getattr(args, "prune", False):
+            # Safe by construction and only here: no row names this store, and a
+            # path registered again is indexed from nothing anyway. Unflagging
+            # keeps its store, and unflagging keeps its row -- that is the rule
+            # this does not touch.
+            shutil.rmtree(found)
+            print(f"pruned {found.name}: {size // 2**20} MiB")
+            continue
+        print(f"UNCLAIMED {found.name}: {size // 2**20} MiB")
+        problems += 1
+
     print(f"{problems} problem(s)")
     return 1 if problems else 0
 
@@ -123,7 +145,9 @@ def build_parser() -> argparse.ArgumentParser:
     find.set_defaults(fn=_search)
 
     sub.add_parser("list", help="every registered project").set_defaults(fn=_list)
-    sub.add_parser("doctor", help="GPU, missing projects, orphan rows").set_defaults(fn=_doctor)
+    doctor = sub.add_parser("doctor", help="GPU, missing projects, orphan rows and stores")
+    doctor.add_argument("--prune", action="store_true", help="delete stores no row claims")
+    doctor.set_defaults(fn=_doctor)
     sub.add_parser("release", help="unload the models now").set_defaults(fn=_release)
 
     bridge = sub.add_parser("bridge-stdio", help="forward stdio JSON-RPC to the daemon")

@@ -100,6 +100,17 @@ def require_clear_gpu() -> None:
         )
 
 
+def enabled_count(timeout: float = 5.0) -> int:
+    """How many rows the daemon currently has enabled.
+
+    A count, because the daemon publishes no roster: `/healthz` is the only
+    read of the real registry a test is allowed, and prod state must never be
+    read off disk from here.
+    """
+    base = config.MCP_URL.rsplit("/mcp", 1)[0]
+    return httpx.get(f"{base}/healthz", timeout=timeout).json()["projects"]
+
+
 def require_daemon(url: str = "", timeout: float = 5.0) -> str:
     """The daemon has to be up already. Starting one here would hide the unit."""
     base = (url or config.MCP_URL).rsplit("/mcp", 1)[0]

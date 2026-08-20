@@ -11,6 +11,7 @@ through into `search.search`, which would load a model on the dense lane.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 
@@ -175,20 +176,27 @@ _ROOTS = ClientCapabilities(roots={"listChanged": True})
 
 
 @pytest.mark.parametrize(
-    "caps,version",
+    "caps,version,reason",
     [
-        (None, scope.MRTR),
-        (ClientCapabilities(), scope.MRTR),
-        (_ROOTS, None),
-        (_ROOTS, "2025-06-18"),
+        (None, scope.MRTR, "roots capability"),
+        (ClientCapabilities(), scope.MRTR, "roots capability"),
+        (_ROOTS, None, "below"),
+        (_ROOTS, "2025-06-18", "below"),
     ],
     ids=["no capabilities", "no roots capability", "no version", "below the era"],
 )
-def test_no_ask_is_made_where_the_answer_cannot_arrive(caps, version):
+def test_no_ask_is_made_where_the_answer_cannot_arrive(caps, version, reason, caplog):
     """Below `MRTR` a stateless transport is built `can_send_request=False` and
     asking raises `NoBackChannelError`, which would take down every call rather
-    than falling back to no pin."""
-    assert scope._ask(_Ctx(caps, version)) == ListRootsResult(roots=[])
+    than falling back to no pin.
+
+    The logged reason is asserted because it is the whole of the rollout's
+    evidence: `enforce`'s count says a pin did not arrive and never which of
+    these two branches sent it back empty.
+    """
+    with caplog.at_level(logging.INFO, logger=scope.log.name):
+        assert scope._ask(_Ctx(caps, version)) == ListRootsResult(roots=[])
+    assert reason in caplog.text, caplog.text
 
 
 def test_the_ask_is_made_when_the_client_can_answer_it():

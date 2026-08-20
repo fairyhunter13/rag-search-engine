@@ -5,6 +5,9 @@ against the real registry is what destroyed the fleet's 236 rows once already,
 and the version of that test looked entirely harmless -- it only *read*, until
 a helper it called wrote back a pruned copy. Redirecting the paths for every
 test costs nothing and removes the whole class.
+
+It protects the in-process half only. A `live` test calls the running daemon,
+and the daemon holds the real registry -- which `fleet_unchanged` is for.
 """
 
 from __future__ import annotations
@@ -28,6 +31,32 @@ def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "BACKUP_DIR", state / "backups")
     monkeypatch.setattr(config, "INDEX_DIR", state / "indexes")
     return state
+
+
+@pytest.fixture(scope="module", autouse=True)
+def fleet_unchanged(request):
+    """A live module gives back every row it enabled, or this fails.
+
+    Disabled, never pruned -- the suite's standing rule. What went unwatched is
+    the row a test enabled and forgot: it survives every run, and reconcile
+    retries it and logs a traceback at every start. Two rows did exactly that
+    before this existed, and both were a single test that skipped the teardown
+    its ten siblings had. Per module, so the red names the file.
+    """
+    marks = getattr(request.module, "pytestmark", [])
+    marks = marks if isinstance(marks, list) else [marks]
+    if not any(getattr(m, "name", "") == "live" for m in marks):
+        yield
+        return
+    from live import enabled_count
+
+    before = enabled_count()
+    yield
+    after = enabled_count()
+    assert after == before, (
+        f"{request.module.__name__} left {after - before} row(s) enabled in the real "
+        "registry; disable what you register, in a teardown that runs on failure too"
+    )
 
 
 @pytest.fixture
