@@ -1,10 +1,10 @@
 ---
 type: Decision
-resource: src/coderag/chunk.py, src/coderag/filters.py, tests/test_chunk_header_types.py
+resource: src/coderag/chunk.py, src/coderag/filters.py
 title: Per-type knowledge enters through the header, not through a second splitter
 description: A quarter of the corpus is prose and structured data that the code-only evidence never covered; the fix is four arms inside scope_header, because that is reversible and a second chunker costs a full re-index to compare.
 tags: [chunking, retrieval, evidence, prose]
-status: stable
+status: refuted
 generated: { by: claude/opus-5, at: 2026-08-19T21:10:00Z }
 ---
 
@@ -88,6 +88,13 @@ An unlabeled extension falls to the code arm on purpose. `indexable()` is a deny
 `.mojo` file is discovered, chunked and searchable today with no change; the generic declaration
 regex picks up most curly-brace declarations for free and degrades to the path. The absence of a
 parser is what makes that true, which is why a future "add tree-sitter" proposal has to pay for it.
+
+# Refuted — the arms ran and the derived line lost
+
+`--corpus docs` and then the code 2x2 both measured it flat, so `scope_header` dispatches on nothing
+now and the four arms below are deleted. See [[the-header-is-the-path-and-nothing-else]] for the
+cells, and for the census that refuted the redundancy explanation. The section that follows was the
+falsification condition this file set for itself, and it is the one that fired.
 
 # Still unfalsifiable, and that is the next step
 

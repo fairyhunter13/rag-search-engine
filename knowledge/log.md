@@ -149,3 +149,26 @@ title: coderag knowledge history
   exactly `EMBED_MAX_TOKENS`; untruncated, they run p50 904 / p95 1373, so 70% of chunks are cut and
   27% of tokens never reach the dense lane. Two arms (`gte-win1536`, `gte-chunk1000`) are in flight
   to decide whether it costs recall, and both constants are frozen until they land.
+
+## 2026-08-20
+
+- **Added** `decisions/the-header-is-the-path-and-nothing-else.md`. The code 2x2 completed all four
+  cells: the path arm is worth **-0.1233 recall@1 / -0.1700 recall@10**, and the derived line is an
+  exact 16/16 discordant tie with path on (p = 1.000) and *negative* with path off, where
+  `derived-only` scores 0.1267 against `no-header`'s 0.1467. Deleted `CHUNK_HEADER_DERIVED`, its
+  stamp field, four helpers, five regexes and the per-type dispatch; `chunk.py` 248 -> 137 lines,
+  `CHUNK_ALGO` 2 -> 3.
+- **Refuted** `decisions/the-header-dispatches-on-type-the-splitter-does-not.md`, by the
+  falsification condition it wrote for itself: *"If they lose or tie, the path-only prose header and
+  the one-splitter decision come back strengthened."* They tied.
+- **Refuted the explanation, not just the arm.** A redundancy census over 876 code chunks put the
+  `imports:` line at **15.3%** overlap with the body it labels -- 85% novel tokens -- so the
+  embedder was handed new text and did not use it, and used it *against* itself when the path was
+  absent. Dilution, not redundancy. That generalises where redundancy would only have indicted these
+  particular regexes and invited a fourth attempt.
+- **Recorded and not closed**: the path arm's magnitude on docs is soft. 48.6% of docs eval queries
+  have their heading echoed in the positive's filename, and BLAgent (arXiv:2605.17965), the external
+  corroboration at +17.0 pp, presents query-document string identity as its mechanism approvingly.
+  The code corpus has no such echo and pays -0.1233 anyway, so the decision stands on code. Re-scoring
+  the docs path arm on the low-slug-overlap stratum is zero-GPU and still owed.
+
