@@ -13,6 +13,7 @@ okf_version: "0.2"
 * [No amount of served prose makes a client prefer this server over its own grep](constraints/served-prose-does-not-beat-grep.md) - Three escalations lost to grep on a literal string, so the agent layer asks what the client's own tools cannot answer — plus what `--allowedTools` does not do.
 * [Nine nodes run on the CPU EP in both exports, so the GPU rule is written about tensor math rather than about nodes](constraints/nine-nodes-run-on-the-cpu-and-that-is-the-design.md) - `disable_cpu_ep_fallback` refuses both models over shape plumbing ORT pins to CPU on purpose; an op allowlist plus a 1% time bound is what enforces the rule instead.
 * [The CPU side of an indexing pass is already flat, and six arms failed to move it](constraints/the-cpu-side-of-an-indexing-pass-is-already-flat.md) - A pass costs ~1.1 mean cores and none of six knobs cleared its pre-committed threshold; `MALLOC_ARENA_MAX=2`, the one people reach for first, made it 27% worse.
+* [`watching` answers for one project, and arming is asynchronous](constraints/watching-is-per-project-and-arming-is-asynchronous.md) - Thread liveness was true the instant the watcher started and said nothing about this project; the rebuild lands seconds after registration and inotify replays nothing, so a write inside that window is lost.
 
 # Decision
 
@@ -33,6 +34,8 @@ okf_version: "0.2"
 * [A deleted file stayed searchable in a federated member, from two independent causes](defects/a-deleted-file-stayed-searchable-in-a-member.md) - inotify keys a directory by inode and reports the last-registered path; and the 60 s tick re-armed 120,000 watches unconditionally, which is a blind window with no replay.
 
 * [A delete is lost while a project is still settling](defects/a-delete-is-lost-while-a-project-is-still-settling.md) - RESOLVED: the `index` tool re-armed all ~120,000 inotify watches on every call, and the test polled it, so the events fell in a blind window the probe was opening itself.
+
+* [A rootless call with no pin told the caller to index their home directory](defects/a-rootless-call-told-the-caller-to-index-their-home-directory.md) - `default_root` fell back to the daemon's cwd, so a real session's `search` came back as advice to index `$HOME` -- a root `FORBIDDEN_ROOTS` would have refused anyway.
 
 * [A released member kept the excludes of the root that released it](defects/a-released-member-kept-the-roots-excludes.md) - Narrowing on join was never mirrored by widening on leave, and `unregister` reported only the rows it deleted — hiding the one member that survives the release.
 

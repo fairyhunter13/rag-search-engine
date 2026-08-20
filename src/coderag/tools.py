@@ -60,8 +60,8 @@ mcp = MCPServer(
 def index_project(pinned: scope.Pinned, root: str = "", enabled: bool = True) -> dict[str, Any]:
     # Pinned here too, or the gate on `search` is a formality: a caller that can
     # index anything can make anything searchable.
-    target = registry.resolve(root or scope.default_root(pinned))
     try:
+        target = registry.resolve(root or scope.default_root(pinned))
         scope.enforce(target, pinned)
     except scope.ScopeError as exc:
         return {"error": str(exc)}
@@ -128,7 +128,7 @@ def _status(target: Path, members: list[Path]) -> dict[str, Any]:
         },
         "suppressed_by_inherited_excludes": index.suppressed_by_excludes(target, tuple(roots)),
         "last_error": entry.last_error if entry else None,
-        "watching": watch.watching(),
+        "watching": watch.armed(target),
     }
     return out | index.status()
 

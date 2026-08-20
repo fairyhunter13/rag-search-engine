@@ -62,6 +62,13 @@ def tree(tmp_path_factory, rpc):
         timeout=180,
         what="the member's own first pass to finish",
     )
+    # And the member's watches in place. Registration only sets a flag; the
+    # rebuild lands seconds later, and a write before it is lost for good.
+    until(
+        lambda: rpc.tool("index", root=str(member))["watching"],
+        timeout=60,
+        what="the member's watches to be armed",
+    )
     yield root, member
     rpc.tool("index", root=str(root), enabled=False)
     rpc.tool("index", root=str(member), enabled=False)

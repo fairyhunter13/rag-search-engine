@@ -110,7 +110,14 @@ def test_1_index_returns_before_the_work_does(rpc, root):
     out = rpc.tool("index", root=str(root))
     assert time.perf_counter() - started < 1.0, "index blocked on the build"
     assert out["members"] == 1, out
-    assert out["watching"] is True
+    # `watching` is per-project now and the rebuild is asynchronous, so it is
+    # false here by design -- the arming assertion belongs where something
+    # waits for it.
+    assert until(
+        lambda: rpc.tool("index", root=str(root))["watching"],
+        timeout=60,
+        what="the root's watches to be armed",
+    )
 
 
 def test_2_the_member_is_registered_under_its_real_path(rpc, root, member):
