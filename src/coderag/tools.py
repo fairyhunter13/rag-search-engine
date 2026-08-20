@@ -98,8 +98,10 @@ def index_project(pinned: scope.Pinned, root: str = "", enabled: bool = True) ->
     if not target.is_dir():
         return {"error": f"{target} is not a directory"}
 
-    registry.claim(target, direct=True)
     try:
+        # No claim before this line: `register` claims the root itself once the
+        # config parses, and claiming first left a row for a project that can
+        # never index -- which reconcile then retries at every start.
         members = federation.register(target)
     except projcfg.ConfigError as exc:
         # A broken `.coderag.yaml` is the caller's own mistake and it has to

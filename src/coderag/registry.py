@@ -16,6 +16,7 @@ Removal is always explicit.
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import shutil
 import time
@@ -83,15 +84,73 @@ def _mutate() -> Generator[Rows]:
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
-def load() -> Rows:
-    """A snapshot, shared-locked so it never observes a half-written file."""
+@contextmanager
+def _held(mode: int) -> Generator[Rows]:
+    """The rows, with the lock still held while the caller reads them."""
     config.STATE_DIR.mkdir(parents=True, exist_ok=True)
     with config.REGISTRY_LOCK.open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_SH)
+        fcntl.flock(lock, mode)
         try:
-            return _read_unlocked()
+            yield _read_unlocked()
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def load() -> Rows:
+    """A snapshot, shared-locked so it never observes a half-written file."""
+    with _held(fcntl.LOCK_SH) as rows:
+        return rows
+
+
+def fleet_digest(rows: Rows) -> str:
+    """A hash of what every row *is*, not how many there are.
+
+    A count is blind to a cancelling pair, to the same count over a different
+    set, to a disabled row, and to content drift -- a dead root left in a live
+    project's `roots` narrows its corpus through the excludes it inherits, with
+    the count unmoved. No path is disclosed: the key is hashed with the rest.
+    """
+    material = sorted(
+        (key, e.enabled, e.direct, tuple(sorted(e.roots)), e.last_error is not None)
+        for key, e in rows.items()
+    )
+    return hashlib.sha256(json.dumps(material).encode()).hexdigest()[:16]
+
+
+def _unclaimed(rows: Rows) -> list[Path]:
+    claimed = {config.index_path(e.path).parent for e in rows.values()}
+    return sorted(p for p in config.INDEX_DIR.glob("*") if p.is_dir() and p not in claimed)
+
+
+def _idle_for(store_dir: Path, seconds: float) -> bool:
+    newest = max((f.stat().st_mtime for f in store_dir.rglob("*")), default=0.0)
+    return time.time() - newest >= seconds
+
+
+def unclaimed_stores() -> list[Path]:
+    """Store directories no row names.
+
+    The rows and the glob come from inside one lock. Reading rows first and
+    globbing after enumerates a project claimed in between as unclaimed, and the
+    caller that acts on that answer deletes a store the daemon has open.
+    """
+    with _held(fcntl.LOCK_SH) as rows:
+        return _unclaimed(rows)
+
+
+@contextmanager
+def prunable_stores() -> Generator[tuple[list[Path], list[Path]]]:
+    """The same walk as (prunable, busy), with the registry held exclusively.
+
+    Nothing can be claimed for as long as this is open, so the answer cannot go
+    stale between the glob and the rmtree. Busy is the gap the lock cannot
+    close: an unclaimed store still being written to is a row-less job
+    finishing, not garbage.
+    """
+    with _held(fcntl.LOCK_EX) as rows:
+        found = _unclaimed(rows)
+        idle = [p for p in found if _idle_for(p, config.PRUNE_MIN_IDLE_S)]
+        yield idle, [p for p in found if p not in idle]
 
 
 def get(path: Path | str) -> ProjectEntry | None:

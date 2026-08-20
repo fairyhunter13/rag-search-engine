@@ -24,6 +24,7 @@ client's boundary instead of inventing a second one.
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlparse
@@ -48,6 +49,24 @@ class ScopeError(Exception):
     """The named root is outside the caller's workspace."""
 
 
+# What happened upstream of this request's pin, for the line `enforce` writes.
+# Set in `_ask`, read one call later in the same task; a direct call sets
+# neither and reads the default, which is the honest answer there.
+_ASKED: ContextVar[str] = ContextVar("asked", default="not asked, no resolver ran")
+
+
+def _client(ctx: Context) -> str:
+    """Who is calling, as journald sees it.
+
+    1768 zero-root pins were attributed to nobody because this was never
+    logged, so the population that would decide the flag could not be split by
+    client. `clientInfo` is optional on 2026-07-28+, hence the fallback.
+    """
+    params = getattr(ctx.session, "client_params", None)
+    info = getattr(params, "clientInfo", None)
+    return f"{info.name}/{info.version}" if info else "unidentified"
+
+
 def _ask(ctx: Context) -> ListRoots | ListRootsResult:
     """Ask only where the answer can arrive; anywhere else, no pin.
 
@@ -56,15 +75,25 @@ def _ask(ctx: Context) -> ListRoots | ListRootsResult:
     empty result is not a silent pass: `enforce` refuses it under the flag.
     """
     caps = ctx.client_capabilities
-    # Which of the two, not how many: 4409 calls logged "0 root(s)" and the
-    # count alone cannot say whether the flag is one client setting away or
-    # whether the pin can never arrive at all.
+    client = _client(ctx)
+    # Which of the three, not how many: 4409 calls logged "0 root(s)" and the
+    # count alone cannot say whether the flag is one client setting away,
+    # whether the pin can never arrive at all, or whether the client was asked
+    # and answered with nothing.
     if caps is None or caps.roots is None:
-        log.info("workspace pin: no ask, client advertises no roots capability")
+        _ASKED.set(f"not asked, {client} advertises no roots capability")
+        log.info("workspace pin: no ask, client %s advertises no roots capability", client)
         return ListRootsResult(roots=[])
     if not (ctx.protocol_version and is_version_at_least(ctx.protocol_version, MRTR)):
-        log.info("workspace pin: no ask, protocol %s is below %s", ctx.protocol_version, MRTR)
+        _ASKED.set(f"not asked, {client} speaks {ctx.protocol_version}")
+        log.info(
+            "workspace pin: no ask, client %s protocol %s is below %s",
+            client,
+            ctx.protocol_version,
+            MRTR,
+        )
         return ListRootsResult(roots=[])
+    _ASKED.set(f"asked {client}")
     return ListRoots()
 
 
@@ -103,7 +132,7 @@ def enforce(target: Path, pinned: ListRootsResult) -> None:
     roots = paths(pinned)
     # The rollout's only observable: journald is where "a real pin arrived from
     # this profile" is read before the flag flips. Goes when the unit line goes.
-    log.info("workspace pin: %d root(s)", len(roots))
+    log.info("workspace pin: %d root(s), %s", len(roots), _ASKED.get())
     if not roots:
         if not config.REQUIRE_CLIENT_ROOTS:
             return

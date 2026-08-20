@@ -41,6 +41,10 @@ REGISTRY_PATH = STATE_DIR / "projects.json"
 REGISTRY_LOCK = STATE_DIR / "projects.lock"
 BACKUP_DIR = STATE_DIR / "backups"
 INDEX_DIR = STATE_DIR / "indexes"
+# A store nothing has written to for this long is not being indexed right now.
+# The registry lock cannot answer that question: a job queued before its row was
+# dropped still creates its directory and indexes into it, with no row to hold.
+PRUNE_MIN_IDLE_S = _env_int("PRUNE_MIN_IDLE_S", 60)
 PROJECT_CONFIG_NAME = ".coderag.yaml"
 # One spelling, not two: `.yml` would be a second name to get right in every
 # repo and a second branch in every test that writes one.
@@ -213,13 +217,24 @@ FORBIDDEN_ROOTS = frozenset(
     {
         Path("/"),
         Path("/tmp"),
+        Path.home(),
+    }
+)
+
+# These are refused for their descendants too: nothing under any of them is a
+# project, and an exact-match check never fires because a caller names a
+# subdirectory, not the tree. `/` and `~` are exact-only above for the same
+# reason inverted -- every project on this machine is under both. `/tmp` is
+# exact-only on purpose: the live suite indexes throwaway repos there through
+# the daemon, and disable-never-prune is what keeps those rows honest.
+FORBIDDEN_TREES = frozenset(
+    {
         Path("/var"),
         Path("/usr"),
         Path("/etc"),
         Path("/proc"),
         Path("/sys"),
         Path("/dev"),
-        Path.home(),
         Path.home() / ".cache",
         Path.home() / ".local",
         Path.home() / ".config",

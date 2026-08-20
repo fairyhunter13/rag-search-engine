@@ -131,6 +131,12 @@ def candidates(project: Path | str, cfg: ProjectConfig) -> list[str]:
             continue
         full = project / rel
         try:
+            if full.is_symlink():
+                # `git ls-files` lists a committed symlink as an ordinary path
+                # and `is_file()` follows it, so `notes.md -> ~/private/notes.md`
+                # was read and attributed to this project. The walk lane has
+                # always refused one; the lanes have to agree.
+                continue
             if not full.is_file() or full.stat().st_size > config.MAX_FILE_BYTES:
                 continue
         except OSError:
@@ -149,6 +155,8 @@ def read(project: Path | str, rel: str) -> FileMeta | None:
     """
     full = Path(project) / rel
     try:
+        if full.is_symlink():
+            return None
         stat = full.stat()
         raw = full.read_bytes()
     except (OSError, ValueError):

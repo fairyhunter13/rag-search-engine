@@ -13,6 +13,7 @@ and the daemon holds the real registry -- which `fleet_unchanged` is for.
 from __future__ import annotations
 
 import subprocess
+import warnings
 from pathlib import Path
 
 import pytest
@@ -48,15 +49,28 @@ def fleet_unchanged(request):
     if not any(getattr(m, "name", "") == "live" for m in marks):
         yield
         return
-    from live import enabled_count
+    from live import fleet_state
 
-    before = enabled_count()
+    before = fleet_state()
     yield
-    after = enabled_count()
-    assert after == before, (
-        f"{request.module.__name__} left {after - before} row(s) enabled in the real "
-        "registry; disable what you register, in a teardown that runs on failure too"
-    )
+    after = fleet_state()
+    # Stores first, and as a warning: unregistering a member leaves its store by
+    # design -- disable-never-prune -- so a red here would be red after every
+    # live run. Reported, never repaired: pruning a computed set is what wiped
+    # the fleet registry twice, and `coderag doctor --prune` is a human's call.
+    leaked = after["unclaimed_stores"] - before["unclaimed_stores"]
+    if leaked > 0:
+        warnings.warn(
+            f"{request.module.__name__} left {leaked} unclaimed store(s); "
+            "run `coderag doctor --prune` when the lane is idle",
+            stacklevel=1,
+        )
+    rows = {k: (before[k], after[k]) for k in ("projects", "fleet_digest") if before[k] != after[k]}
+    if rows:
+        pytest.fail(
+            f"{request.module.__name__} changed the real registry {rows}; disable what you "
+            "register, in a teardown that runs on failure too"
+        )
 
 
 @pytest.fixture

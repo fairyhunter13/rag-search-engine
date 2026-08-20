@@ -10,10 +10,16 @@ from coderag import config, federation, filters, index, registry, search
 from coderag.search import Hit, SearchError
 
 
-def _hit(path: str, text: str = "body", rrf: float = 0.5, rerank: float | None = None) -> Hit:
+def _hit(
+    path: str,
+    text: str = "body",
+    rrf: float = 0.5,
+    rerank: float | None = None,
+    project: str = "/p",
+) -> Hit:
     return Hit(
-        project="/p",
-        path=f"/p/{path}",
+        project=project,
+        path=f"{project}/{path}",
         rel_path=path,
         start_line=1,
         end_line=2,
@@ -41,6 +47,46 @@ def test_rrf_is_indifferent_to_the_gap_between_ranks():
 
 
 # -------------------------------------------------------------- diversification
+
+
+def test_the_pool_cut_keeps_more_than_one_hit_from_the_callers_own_project():
+    """RRF fuses *within* a project, so its score is a rank: every member's best
+    hit scores the same as the caller's best hit. Cutting the flat pool by that
+    score across 136 members keeps everyone's top one and drops the caller's
+    own third -- the one the reranker would have ranked first."""
+    own = [_hit(f"mine{i}.py", rrf=0.9 - i / 100, project="/root") for i in range(10)]
+    members = [_hit("theirs.py", rrf=0.95, project=f"/member{i}") for i in range(120)]
+
+    cut = search._pool_cut(own + members, Path("/root"), limit=60)
+
+    assert len(cut) == 60
+    mine = [h for h in cut if h.project == "/root"]
+    assert len(mine) == 10, "the caller's own project was cut down to its top hit"
+    assert [h.rel_path for h in mine[:3]] == ["mine0.py", "mine1.py", "mine2.py"]
+
+
+def test_the_pool_cut_still_reaches_every_member():
+    """The other half: privileging the root must not shut the members out, or
+    federation stops being fan-in."""
+    own = [_hit(f"mine{i}.py", project="/root") for i in range(80)]
+    members = [_hit("theirs.py", project=f"/member{i}") for i in range(5)]
+
+    cut = search._pool_cut(own + members, Path("/root"), limit=60)
+
+    assert {h.project for h in cut} >= {f"/member{i}" for i in range(5)}
+    assert len(cut) == 60
+
+
+def test_a_chunk_the_caller_also_has_is_reported_under_their_own_path():
+    """Vendored copies and `_worktrees` checkouts make this the common case on
+    this fleet. The fingerprint was project-blind, so the higher-scoring copy
+    won and the caller was shown a member's path for code in their own tree."""
+    theirs = _hit("vendor/x.py", "def f():\n    return 1", rrf=0.99, project="/member")
+    mine = _hit("vendor/x.py", "def f():\n\treturn 1", rrf=0.10, project="/root")
+
+    out = search._diversify([theirs, mine], k=5, max_per_file=5, root="/root")
+
+    assert [h.project for h in out] == ["/root"]
 
 
 def test_the_per_file_cap_never_demotes_a_better_result():

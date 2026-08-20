@@ -135,7 +135,9 @@ def is_forbidden_root(path: Path | str) -> bool:
     copies of source already indexed under its real path.
     """
     resolved = Path(path).expanduser().resolve()
-    return resolved in config.FORBIDDEN_ROOTS
+    if resolved in config.FORBIDDEN_ROOTS:
+        return True
+    return any(tree in resolved.parents for tree in config.FORBIDDEN_TREES)
 
 
 def matches_any(rel: str, patterns) -> bool:

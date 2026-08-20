@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -67,6 +68,15 @@ def test_forbidden_roots_are_refused(tmp_path):
     with pytest.raises(ValueError, match="not a project directory"):
         discover.candidates("/", ProjectConfig())
     discover.candidates(tmp_path, ProjectConfig())  # an ordinary dir is fine
+
+
+def test_a_subdirectory_of_a_forbidden_tree_is_refused_too():
+    """An exact-match check never fires: a caller names a directory inside the
+    cache, never the cache itself."""
+    assert filters.is_forbidden_root(Path.home() / ".cache" / "some-tool" / "checkout")
+    assert filters.is_forbidden_root("/usr/share/doc")
+    # And the two that cannot walk: every project on this machine is under both.
+    assert not filters.is_forbidden_root(Path.home() / "git" / "project")
 
 
 def test_gitignored_files_never_reach_the_indexer(repo):
@@ -148,6 +158,39 @@ def test_a_newly_excluded_file_is_reported_for_deletion(repo):
 
     _, delete = discover.changed(repo, ProjectConfig(exclude=("*.js",)), known)
     assert delete == ["src/util.js"]
+
+
+def test_a_committed_file_symlink_is_not_read_through(tmp_path):
+    """The default lane is git's, and `git ls-files` lists a symlink as an
+    ordinary path. `is_file()` follows it, so a link committed into a repo
+    indexed that file's content and attributed it to this project -- reachable
+    by anyone pinned here. The walk lane refused the same file."""
+    secret = tmp_path / "outside" / "notes.md"
+    secret.parent.mkdir()
+    secret.write_text("a private note that is not in this repo\n")
+    proj = tmp_path / "p"
+    proj.mkdir()
+    (proj / "a.py").write_text("x = 1\n")
+    (proj / "notes.md").symlink_to(secret)
+    subprocess.run(["git", "init", "-q"], cwd=proj, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=proj, check=True)
+
+    assert discover._git_files(proj) and "notes.md" in discover._git_files(proj)
+    assert discover.candidates(proj, ProjectConfig()) == ["a.py"]
+    assert discover.read(proj, "notes.md") is None
+
+
+def test_a_file_symlink_is_not_read_through_in_the_walk_lane_either(tmp_path):
+    """The lanes have to agree: which one runs is a config default away."""
+    secret = tmp_path / "outside" / "notes.md"
+    secret.parent.mkdir()
+    secret.write_text("a private note that is not in this repo\n")
+    proj = tmp_path / "p"
+    proj.mkdir()
+    (proj / "a.py").write_text("x = 1\n")
+    (proj / "notes.md").symlink_to(secret)
+
+    assert discover.candidates(proj, ProjectConfig(respect_gitignore=False)) == ["a.py"]
 
 
 def test_symlinks_are_not_followed_into_another_project(tmp_path):

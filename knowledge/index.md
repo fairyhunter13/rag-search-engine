@@ -34,6 +34,12 @@ okf_version: "0.2"
 
 # Defect
 
+* [doctor --prune globbed fresh directories against a stale row snapshot](defects/prune-raced-a-store-the-daemon-was-writing.md) - `load()` unlocks before it returns, so a project claimed between the snapshot and the glob was deleted under the daemon's open handle — which on Linux keeps committing into the unlinked inode and reports nothing.
+* [1768 zero-root pins were an answered-empty case the log could not name](defects/empty-root-answers-from-clients-nothing-identifies.md) - The branch logging stopped one level short and no `clientInfo` was recorded, so the flag's rollout criterion was gated on evidence the instrumentation could not produce.
+* [watch.armed() answered for projects the watcher had just refused to watch](defects/armed-reported-the-unfiltered-set.md) - A project dropped for an unparseable config still reported `watching: True`, and the live federation test waits on exactly that flag.
+* [A committed file symlink was read through, in the lane that runs by default](defects/the-git-lane-read-through-a-file-symlink.md) - `git ls-files` lists a symlink as an ordinary path and `is_file()` follows it, so content outside the project was indexed and attributed to it; the walk lane refused the same file.
+* [The pre-rerank cut ranked 136 projects by scores that are only meaningful within one](defects/per-project-ranks-were-truncated-as-if-comparable.md) - RRF scores are per-project ranks, so a 60-slot flat cut keeps everyone's top one and drops the caller's own third hit; and dedup could show a member's path for the caller's own code.
+
 * [A floating range on onnxruntime-gpu changed the CUDA major version](defects/a-floating-range-changed-the-cuda-major.md) - A resolver bump moved the linked CUDA from 12 to 13, every GPU test failed on a missing shared object, and only the fourth assertion caught the CPU fallback.
 
 * [A deleted file stayed searchable in a federated member, from two independent causes](defects/a-deleted-file-stayed-searchable-in-a-member.md) - inotify keys a directory by inode and reports the last-registered path; and the 60 s tick re-armed 120,000 watches unconditionally, which is a blind window with no replay.

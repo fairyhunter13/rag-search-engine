@@ -253,6 +253,10 @@ def test_one_broken_config_does_not_take_the_whole_watcher_down(tmp_path, monkey
         job = _wait_for_job()
         assert watch.watching(), "the watcher thread died on the broken project"
         assert job is not None and job.project == good, job
+        # The flag has to name what the watcher actually watches: a caller that
+        # waits on `armed` and then writes is told a dropped project is covered.
+        assert watch.armed(good)
+        assert not watch.armed(broken)
     finally:
         watch.stop()
 
@@ -324,6 +328,25 @@ def test_the_tick_does_not_rearm_a_watch_set_that_has_not_changed(tmp_path, monk
     registry.claim(project, direct=True)
     watch.rearm_if_changed()
     assert watch._rearm.is_set(), "a newly registered project was never picked up"
+
+
+def test_the_loop_records_what_it_armed_so_the_tick_can_compare(tmp_path):
+    """Both re-arm tests set `_intent` by hand, so dropping the loop's own
+    assignment leaves them green while the watcher re-arms every tick forever."""
+    project = tmp_path / "watched"
+    project.mkdir()
+    registry.claim(project, direct=True)
+    watch.start()
+    try:
+        deadline = time.time() + 15
+        while not watch.armed(project) and time.time() < deadline:
+            time.sleep(0.1)
+        assert watch.armed(project), "the watcher never armed the one project it has"
+        watch._rearm.clear()
+        watch.rearm_if_changed()
+        assert not watch._rearm.is_set(), "the loop left nothing for the tick to compare"
+    finally:
+        watch.stop()
 
 
 def test_the_index_tool_does_not_rearm_a_registry_it_did_not_change(tmp_path, monkeypatch, pin):

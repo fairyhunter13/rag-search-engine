@@ -12,9 +12,9 @@ Everything else is a CLI subcommand, because everything else is an operator's jo
 
 ## Requirements
 
-An NVIDIA GPU. **CPU inference is forbidden and asserted four times over** — a working CPU path is
-30× slower and fails nothing, so it silently becomes the production path. If the GPU is not
-available the daemon refuses to start.
+An NVIDIA GPU. **CPU inference is forbidden**, by three assertions inside the daemon and one
+placement gate outside it — a working CPU path is 30× slower and fails nothing, so it silently
+becomes the production path. If the GPU is not available the daemon refuses to start.
 
 Python 3.12+, `uv`, and the CUDA 13 runtime wheels that `onnxruntime-gpu==1.29.*` links against.
 The ORT pin is exact on purpose: a floating range moved the linked CUDA major once already.
@@ -23,7 +23,7 @@ The ORT pin is exact on purpose: a floating range moved the linked CUDA major on
 
 ```bash
 uv sync
-uv run coderag doctor            # GPU, registered projects, orphan rows
+uv run coderag doctor            # GPU, registered projects, orphan rows and stores
 uv run coderag install-systemd   # a --user unit on 127.0.0.1:8765
 ```
 
@@ -42,7 +42,8 @@ each under its **resolved** path, arms the watcher, and queues a content-hash pa
 before any of that finishes: the return value is state, not a result — `members`, `queue_depth`,
 `current`, `indexed`, `roots`, `suppressed_by_inherited_excludes`, `last_error`, `watching`.
 Calling it again is how you ask for status; there is no `wait`. `enabled=False` unflags the root
-and its members and **never deletes an index directory**.
+and its members and **never deletes an index directory**; a member left with no root claiming it
+loses its row, and its store then shows up as unclaimed in `doctor`.
 
 **`search(query, root="", k=10, mode="hybrid", …)`** — returns ranked *locations*: `path`,
 `lines`, `lang`, per-lane `scores`, and a short preview. Read the ranges you want; `include_body`
@@ -78,14 +79,27 @@ widening that set makes the next index pass a reconcile rather than a no-op — 
 ## CLI
 
 ```
-coderag serve | index [--full] | search <query> | list | doctor | release
-coderag bridge-stdio | install-systemd
+coderag serve [--host H] [--port P]        run the daemon in the foreground
+coderag index [root] [--full]              index synchronously; --full rebuilds from nothing
+coderag search <query> [root] [-k N] [--mode hybrid|lexical|semantic]
+coderag list                               every registered project
+coderag doctor [--prune]                   GPU, missing projects, orphan rows and stores
+coderag release                            unload the models now
+coderag bridge-stdio [--url U] [--idle S]  forward stdio JSON-RPC to the daemon
+coderag install-systemd [--no-enable]
 ```
+
+`doctor --prune` is the only destructive subcommand: it deletes store directories no registry row
+claims, holding the registry lock so nothing can claim one while it looks, and keeps any store
+written to within `CODERAG_PRUNE_MIN_IDLE_S` (60s) because that is a row-less job still finishing.
+It exits non-zero if anything was kept, and never touches a disabled row's store.
 
 ## Development
 
 ```bash
-uv run pytest -m "not gpu and not live and not restart"   # no model is loaded
+uv run pytest -m "not gpu and not live and not restart" \
+  --ignore=tests/test_okf_bundle.py     # no model is loaded
+uv run pytest tests/test_okf_bundle.py  # needs the Go okf validator on PATH
 uv run pytest -m gpu          # the real models, one run at a time on a machine
 uv run pytest -m live         # needs a daemon already running; never starts one
 uv run pytest -m restart      # starts and kills daemons of its own, on a private state dir

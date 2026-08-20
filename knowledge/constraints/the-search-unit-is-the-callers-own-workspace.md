@@ -77,3 +77,23 @@ on every call; journald is where the flip is decided, and that log line goes whe
 so. inotify has no replay, so a project claimed but still queued must already be watched or writes
 during its first pass are lost until the next reconcile. Do not tighten this for symmetry with the
 search gate; the symmetry is the bug.
+
+# Amendment, 2026-08-20: the load-bearing claim was carried by prose alone
+
+"A member sits outside the pin and is reached through its root anyway" is what this document is
+for, and until now nothing tested it in either direction. Every federation test runs *unpinned* —
+`Rpc.tool` uses the legacy handshake and sends no roots, so `enforce` short-circuits while the flag
+ships `0` — and every other scope test calls below the daemon. A change making `expand` transitive
+and a change making it pin-filtered break the design in opposite directions, and the suite stayed
+green for both.
+
+`tests/test_live_scoping.py` carries it now: one pinned call over the wire, asserting the member's
+own resolved path in the results and `searched.projects == 2`, with the root's own content as the
+control. It also states the boundary exactly — **a member is reachable through its root and is not
+nameable directly**. Reach is not authorization: the same pinned session that is already searching
+the member through the root is refused when it names the member as `root`, because the member is
+physically outside the pin.
+
+Still untested, in descending consequence: the ancestor arm composed with federation, `index`'s
+out-of-pin side effects, `default_root` picking `roots[0]` of a multi-folder workspace, and the
+two-claiming-roots exclude union, which no fleet row exercises.

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import queue
+import threading
 import time
 
 import pytest
@@ -67,6 +69,22 @@ def test_index_on_a_path_that_is_not_a_directory_says_so(tmp_path, pin):
     file = tmp_path / "not-a-dir"
     file.write_text("x")
     assert "error" in tools.index_project(pin(file), str(file))
+
+
+def test_a_config_that_cannot_parse_leaves_no_row_behind(tmp_path, monkeypatch, pin):
+    """The row was written before the config that rejects it, so a project that
+    can never index still landed one -- and reconcile retries it at every start,
+    logging a traceback, forever."""
+    monkeypatch.setattr(watch, "start", lambda: None)
+    monkeypatch.setattr(index, "start_worker", lambda: None)
+    project = tmp_path / "typo"
+    project.mkdir()
+    (project / config.PROJECT_CONFIG_NAME).write_text('index:\n  excludes: ["x/*"]\n')
+
+    out = tools.index_project(pin(project), str(project))
+
+    assert "excludes" in out["error"], out
+    assert registry.get(project) is None, "a project that cannot index kept a row"
 
 
 def test_unflagging_releases_the_row_and_never_the_index_directory(tmp_path, monkeypatch, pin):
@@ -299,9 +317,87 @@ def test_doctor_names_a_store_no_row_claims(tmp_path, monkeypatch, capsys):
     # walk fire on all 88 of them.
     assert "kept" not in out
 
+    # Idle, so prune is allowed to take it: a store still being written to is a
+    # row-less job finishing rather than garbage.
+    os.utime(orphan / "index.db", (0, 0))
+    os.utime(orphan, (0, 0))
     assert cli.main(["doctor", "--prune"]) == 0
+    assert "pruned gone-0123456789abcdef" in capsys.readouterr().out
     assert not orphan.exists()
     assert config.index_path(kept).parent.exists()
+
+
+def test_prune_keeps_an_unclaimed_store_something_is_still_writing_to(
+    tmp_path, monkeypatch, capsys
+):
+    """The one gap the registry lock cannot close: a job queued before its row
+    was dropped still creates its directory and indexes into it."""
+    monkeypatch.setattr(cli.gpu, "providers", lambda: ["CUDAExecutionProvider"])
+    monkeypatch.setattr(cli.gpu, "free_vram_bytes", lambda: 0)
+    busy = config.INDEX_DIR / "rowless-0123456789abcdef"
+    busy.mkdir(parents=True)
+    (busy / "index.db").write_bytes(b"x" * 2048)
+
+    assert cli.main(["doctor", "--prune"]) == 1
+    out = capsys.readouterr().out
+    assert "BUSY rowless-0123456789abcdef" in out
+    assert (busy / "index.db").exists()
+
+
+def _raise_missing(*_args, **_kwargs):
+    raise FileNotFoundError
+
+
+def test_prune_spares_a_store_claimed_while_it_was_looking(tmp_path, monkeypatch, capsys):
+    """The rows and the glob have to come from one view of the registry.
+
+    Reading rows first and globbing after enumerates a project claimed in
+    between as unclaimed, and the rmtree then lands on a store the daemon has
+    open: on Linux its writes keep succeeding into the unlinked inode, commit()
+    returns clean, and the next connect creates an empty database.
+    """
+    monkeypatch.setattr(cli.gpu, "providers", lambda: ["CUDAExecutionProvider"])
+    monkeypatch.setattr(cli.gpu, "free_vram_bytes", lambda: 0)
+    # The row-driven half also resolves store paths; this test is about the walk.
+    monkeypatch.setattr(cli.store, "connect", _raise_missing)
+    incumbent = tmp_path / "incumbent"
+    incumbent.mkdir()
+    registry.claim(incumbent, direct=True)
+    config.index_path(incumbent).parent.mkdir(parents=True)
+
+    latecomer = tmp_path / "latecomer"
+    latecomer.mkdir()
+    store_dir = config.index_path(latecomer).parent
+
+    looking, claimed = threading.Event(), threading.Event()
+
+    def claim_late():
+        looking.wait(10)
+        registry.claim(latecomer, direct=True)
+        store_dir.mkdir(parents=True, exist_ok=True)
+        (store_dir / "index.db").write_bytes(b"a store with a daemon writing to it")
+        claimed.set()
+
+    real_index_path = config.index_path
+
+    def index_path_once(path):
+        """Widen the window between the rows and the glob to the whole claim."""
+        monkeypatch.setattr(config, "index_path", real_index_path)
+        looking.set()
+        claimed.wait(2)
+        return real_index_path(path)
+
+    monkeypatch.setattr(config, "index_path", index_path_once)
+    claimer = threading.Thread(target=claim_late)
+    claimer.start()
+    try:
+        cli.main(["doctor", "--prune"])
+    finally:
+        claimer.join(20)
+
+    out = capsys.readouterr().out
+    assert (store_dir / "index.db").read_bytes().endswith(b"writing to it"), out
+    assert f"pruned {store_dir.name}" not in out, out
 
 
 def test_the_full_flag_is_the_only_thing_that_empties_a_store():
