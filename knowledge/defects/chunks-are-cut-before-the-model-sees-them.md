@@ -21,7 +21,7 @@ own output with truncation disabled:
 
 | corpus | chunks | p50 | p95 | max | over 768 | tokens dropped |
 |---|---|---|---|---|---|---|
-| `gen2_component` | 2,157 | 904 | 1,373 | 1,483 | **70.1%** | **27.2%** |
+| corpus A | 2,157 | 904 | 1,373 | 1,483 | **70.1%** | **27.2%** |
 | corpus B | 4,175 | 881 | 1,154 | 1,416 | **62.8%** | **17.5%** |
 
 `_tokenizer` sets `enable_truncation(max_length=EMBED_MAX_TOKENS)`, so the tail is discarded
@@ -36,7 +36,7 @@ experiment aimed at launch overhead came back flat and pointed here instead.
 
 # The verdict: it costs no recall, and both constants stay
 
-corpus B, 300 queries, semantic lane, one run — the only way these are comparable:
+Corpus B, 300 queries, semantic lane, one run — the only way these are comparable:
 
 | arm | recall@1 | recall@10 | MRR |
 |---|---|---|---|
