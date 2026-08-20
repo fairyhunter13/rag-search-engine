@@ -57,3 +57,11 @@ does not ship.
 The GPU does not come back on its own. `release_models()` and the idle timer exist because an idle
 daemon was measured holding 12.2 GB with 3.5 GB free; if the next thing you do needs the card, stop
 the daemon rather than trusting the timer's window.
+
+# Pruning after a run
+
+Every run that registers a tmp project and releases it leaves a store with no row. Finish with
+`coderag doctor` to see them and `coderag doctor --prune` to delete them. Prune is the only
+destructive subcommand; it holds the registry lock and keeps anything written to in the last 60s,
+so it is safe to run with the daemon up. The rule it does **not** break is disable-never-prune:
+rows are never touched, only stores nothing claims.

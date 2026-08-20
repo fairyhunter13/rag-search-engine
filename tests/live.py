@@ -100,15 +100,18 @@ def require_clear_gpu() -> None:
         )
 
 
-def enabled_count(timeout: float = 5.0) -> int:
-    """How many rows the daemon currently has enabled.
+def fleet_state(timeout: float = 5.0) -> dict:
+    """What the daemon says about the real registry, as a comparable triple.
 
-    A count, because the daemon publishes no roster: `/healthz` is the only
-    read of the real registry a test is allowed, and prod state must never be
-    read off disk from here.
+    `/healthz` is the only read of prod state a test is allowed -- the roster
+    must never be read off disk from here -- so the daemon publishes a digest
+    over every row instead of a roster. The count alone was blind to a
+    cancelling pair, to the same count over a different set, and to a dead root
+    left behind in a live project's `roots`.
     """
     base = config.MCP_URL.rsplit("/mcp", 1)[0]
-    return httpx.get(f"{base}/healthz", timeout=timeout).json()["projects"]
+    health = httpx.get(f"{base}/healthz", timeout=timeout).json()
+    return {k: health[k] for k in ("projects", "fleet_digest", "unclaimed_stores")}
 
 
 def require_daemon(url: str = "", timeout: float = 5.0) -> str:

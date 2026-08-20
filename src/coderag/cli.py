@@ -82,24 +82,31 @@ def _doctor(args) -> int:
     # unflagging keeps the store, so a disabled row's directory is claimed. What
     # is left over is a store whose row is gone -- 143 of them, 0.46 GiB, that a
     # row-driven walk could not see because there was no row to start from.
-    claimed = {config.index_path(e.path).parent for e in registry.load().values()}
-    for found in sorted(p for p in config.INDEX_DIR.glob("*") if p.is_dir()):
-        if found in claimed:
-            continue
-        size = sum(f.stat().st_size for f in found.rglob("*") if f.is_file())
-        if getattr(args, "prune", False):
-            # Safe by construction and only here: no row names this store, and a
-            # path registered again is indexed from nothing anyway. Unflagging
-            # keeps its store, and unflagging keeps its row -- that is the rule
-            # this does not touch.
-            shutil.rmtree(found)
-            print(f"pruned {found.name}: {size // 2**20} MiB")
-            continue
-        print(f"UNCLAIMED {found.name}: {size // 2**20} MiB")
-        problems += 1
+    if not getattr(args, "prune", False):
+        for found in registry.unclaimed_stores():
+            print(f"UNCLAIMED {found.name}: {_size_mib(found)} MiB")
+            problems += 1
+        print(f"{problems} problem(s)")
+        return 1 if problems else 0
 
-    print(f"{problems} problem(s)")
+    pruned = freed = 0
+    with registry.prunable_stores() as (candidates, busy):
+        # Deleting inside the lock is the point: no row can appear for one of
+        # these between the walk that named them and the rmtree that removes it.
+        for found in candidates:
+            freed += _size_mib(found)
+            shutil.rmtree(found)
+            pruned += 1
+            print(f"pruned {found.name}")
+        for found in busy:
+            print(f"BUSY {found.name}: written to within {config.PRUNE_MIN_IDLE_S}s, kept")
+            problems += 1
+    print(f"{problems} problem(s), pruned {pruned} store(s), {freed} MiB")
     return 1 if problems else 0
+
+
+def _size_mib(store_dir: Path) -> int:
+    return sum(f.stat().st_size for f in store_dir.rglob("*") if f.is_file()) // 2**20
 
 
 def _bridge(args) -> int:
