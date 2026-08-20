@@ -184,6 +184,40 @@ def test_the_watcher_reports_whether_it_is_actually_running(tmp_path):
     assert not watch.watching()
 
 
+def test_armed_waits_for_the_first_yield_rather_than_the_decision_to_rebuild(tmp_path, monkeypatch):
+    """The blind window is the rebuild itself: establishing ~120,000 watches
+    takes seconds, and `armed` used to flip before the first watch existed --
+    so a fixture that waited on it wrote into exactly the window it was
+    avoiding."""
+    registry.claim(tmp_path, direct=True)
+    started = threading.Event()
+
+    def _slow_watch(*roots, **kw):
+        started.set()
+        time.sleep(0.5)
+        yield set()
+        while not watch._stop.is_set():
+            time.sleep(0.05)
+
+    monkeypatch.setattr(watch, "_watch", _slow_watch)
+    watch.start()
+    try:
+        assert started.wait(5)
+        assert not watch.armed(tmp_path), "armed before a single watch existed"
+        assert _until(lambda: watch.armed(tmp_path)), "never armed after the first yield"
+    finally:
+        watch.stop()
+
+
+def _until(predicate, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return False
+
+
 def test_a_live_thread_is_not_the_same_answer_as_this_project_being_watched(tmp_path):
     """What `index` reports as `watching`. A registered project is not yet an
     armed one, and a write in between is lost -- so the discriminator is that
@@ -280,7 +314,7 @@ def test_the_tick_does_not_rearm_a_watch_set_that_has_not_changed(tmp_path, monk
     The assertion is in two halves because either alone passes on the broken
     code: unconditional `rearm` passes the second, a `pass` passes the first.
     """
-    monkeypatch.setattr(watch, "_armed", tuple(watch._roots()))
+    monkeypatch.setattr(watch, "_intent", tuple(watch._roots()))
     watch._rearm.clear()
     watch.rearm_if_changed()
     assert not watch._rearm.is_set(), "an unchanged registry re-armed the watcher"
@@ -310,7 +344,7 @@ def test_the_index_tool_does_not_rearm_a_registry_it_did_not_change(tmp_path, mo
 
     workspace = pin(tmp_path)
     tools.index_project(workspace, root=str(project))
-    monkeypatch.setattr(watch, "_armed", tuple(watch._roots()))
+    monkeypatch.setattr(watch, "_intent", tuple(watch._roots()))
     watch._rearm.clear()
 
     tools.index_project(workspace, root=str(project))
