@@ -53,6 +53,15 @@ def tree(tmp_path_factory, rpc):
         timeout=180,
         what="the first pass to finish",
     )
+    # The member's own pass, not just the root's. Every test below writes into
+    # the member, and a member whose first walk has not run yet sweeps the new
+    # file in on its own -- which passes the watcher tests with the watcher
+    # never firing.
+    until(
+        lambda: rpc.tool("index", root=str(member))["indexed"]["chunks"] > 0,
+        timeout=180,
+        what="the member's own first pass to finish",
+    )
     yield root, member
     rpc.tool("index", root=str(root), enabled=False)
     rpc.tool("index", root=str(member), enabled=False)

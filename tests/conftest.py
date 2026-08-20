@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from mcp_types import ListRootsResult, Root
 
 from coderag import config
 
@@ -45,3 +46,18 @@ def repo(tmp_path) -> Path:
     (root / "ignored" / "junk.py").write_text("# should never be indexed\n")
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     return root
+
+
+@pytest.fixture
+def pin():
+    """The caller's workspace, which a tool call arrives with.
+
+    `scope.Pinned` is filled by the framework from `roots/list` and is invisible
+    to the model, so a direct call is the only place it has to be supplied by
+    hand -- and supplying it is what keeps these tests honest about the boundary.
+    """
+
+    def build(*paths: Path) -> ListRootsResult:
+        return ListRootsResult(roots=[Root(uri=f"file://{p}") for p in paths])
+
+    return build

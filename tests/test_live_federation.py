@@ -118,8 +118,12 @@ def test_2_the_member_is_registered_under_its_real_path(rpc, root, member):
     silently never fires."""
     out = rpc.tool("index", root=str(root))
     assert out["members"] == 1
-    listed = rpc.tool("search", query=NEEDLE, root=str(member), mode="lexical")
-    assert "error" not in listed or "index" not in listed.get("error", ""), listed
+    # The row, not a search that happens to answer: `index` returns before the
+    # member's pass runs, so the old proxy -- "it does not error as unregistered"
+    # -- now hits the tightened gate for a few seconds. Naming the member by its
+    # real path is the assertion; had the symlink been stored, this would be a
+    # fresh row carrying no root at all.
+    assert str(root) in rpc.tool("index", root=str(member))["roots"]
 
 
 def test_3_search_from_the_root_reaches_the_member(rpc, root):

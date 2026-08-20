@@ -129,6 +129,20 @@ def test_the_diff_notices_an_edit_and_a_delete(repo):
 
 
 @pytest.mark.gpu
+def test_a_scoped_pass_removes_the_file_the_watcher_named(repo):
+    """The watcher's own call shape, which the full-walk test above does not
+    reach: it passes `paths`, so the content-hash diff never runs and the
+    delete list is computed from the named paths alone."""
+    index.index_project(repo)
+
+    (repo / "src" / "util.js").unlink()
+    result = index.index_project(repo, ["src/util.js"])
+
+    assert result["deleted"] >= 1
+    assert "src/util.js" not in _paths(repo)
+
+
+@pytest.mark.gpu
 def test_a_root_joining_shrinks_an_existing_index_without_a_rebuild(repo, tmp_path):
     """The late-join sequence, which is the common case and not the edge case.
 

@@ -86,6 +86,13 @@ SHUTDOWN_DEADLINE_S = _env_int("SHUTDOWN_DEADLINE_S", 15)
 RECONCILE_ON_START = _env_flag("RECONCILE_ON_START", True)
 WATCH_DEBOUNCE_MS = _env_int("WATCH_DEBOUNCE_MS", 1500)
 
+# Fail-closed here and open in the unit, deliberately, for one rollout: Claude
+# Code advertises `roots` on every transport but negotiates the 2026-07-28 era
+# behind a flag, so a client that cannot answer would be refused outright. The
+# unit ships `0` until journald shows a real pin from every profile, then this
+# is the default that stands and the unit line goes. See `scope`.
+REQUIRE_CLIENT_ROOTS = _env_flag("REQUIRE_CLIENT_ROOTS", True)
+
 # How often the watcher loop surfaces from Rust to look at the re-arm flag. It
 # is not a re-arm interval: surfacing is free, re-arming is not (see `watch`),
 # so this only bounds how long a newly registered project waits to be watched.
