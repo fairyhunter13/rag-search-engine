@@ -63,7 +63,7 @@ nothing controls.
 # Not the whole cause
 
 The symptom came back — see
-[[a-delete-is-lost-while-a-project-is-still-settling]]. Both fixes here still hold and both were
+[a-delete-is-lost-while-a-project-is-still-settling](a-delete-is-lost-while-a-project-is-still-settling.md). Both fixes here still hold and both were
 re-verified against real inotify: a delete through a symlink reaches the queue under the member's
 resolved path, and the tick no longer re-arms an unchanged set. What they do not cover is a delete
 issued while the project is still settling after registration, which is the case the live test has

@@ -18,7 +18,7 @@ Python, Go, Rust and PHP — applied to every file regardless of what it was.
 That is defensible on the corpus the chunker decision was argued over and silent on the real one.
 Across the 148 enabled fleet roots, 174,132 tracked files: **6.3% doc-langs, 9.4% structured data,
 25% carrying no `lang` label at all**. In this repo plus ccw, markdown is a quarter of all chunks.
-Every source under [[one-chunker-and-it-is-third-party]] — RepoEval, CrossCodeEval, cAST,
+Every source under [one-chunker-and-it-is-third-party](one-chunker-and-it-is-third-party.md) — RepoEval, CrossCodeEval, cAST,
 arXiv:2605.04763 — is a code benchmark.
 
 # The decision
@@ -60,7 +60,7 @@ re-reading the paper rather than the summary of it:
 What survives is a direction, not a magnitude: structure-aware handling of structured data is worth
 measuring. The `in: <key path>` arm is this repo's cheapest test of that direction and its result
 will be its own. Labelled a prior rather than a result for the reason
-[[one-chunker-and-it-is-third-party]] records: this bundle has already had to correct one citation
+[one-chunker-and-it-is-third-party](one-chunker-and-it-is-third-party.md) records: this bundle has already had to correct one citation
 that claimed more than its source said, and this is the second.
 
 # What it replaces, and what it measures
@@ -92,7 +92,7 @@ parser is what makes that true, which is why a future "add tree-sitter" proposal
 # Refuted — the arms ran and the derived line lost
 
 `--corpus docs` and then the code 2x2 both measured it flat, so `scope_header` dispatches on nothing
-now and the four arms below are deleted. See [[the-header-is-the-path-and-nothing-else]] for the
+now and the four arms below are deleted. See [the-header-is-the-path-and-nothing-else](the-header-is-the-path-and-nothing-else.md) for the
 cells, and for the census that refuted the redundancy explanation. The section that follows was the
 falsification condition this file set for itself, and it is the one that fired.
 
