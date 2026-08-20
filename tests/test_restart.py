@@ -16,6 +16,7 @@ was destroyed the last two times.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import signal
@@ -23,12 +24,14 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
+import httpx
 import pytest
 
-from live import Rpc, require_clear_gpu, until
+from live import HEADERS, Rpc, require_clear_gpu, until
 
 pytestmark = pytest.mark.restart
 
@@ -37,6 +40,27 @@ pytestmark = pytest.mark.restart
 # committed would "survive" a restart trivially.
 N_FILES = 240
 COMMITTED_BEFORE_KILL = 64
+
+# Below the 5.7 s an unbounded stop was measured at, and the assertion sits
+# between the two: at the shipped 15 s neither number is reachable and the test
+# would pass with the deadline removed.
+DEADLINE_S = 2
+UNBOUNDED_S = 4.5
+
+
+def _fire_search(url: str, probe, repo: Path) -> None:
+    """Fired and forgotten. The reply is torn off mid-stream by the shutdown --
+    that is the point, so nothing here asserts on it."""
+    body = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 99,
+            "method": "tools/call",
+            "params": {"name": "search", "arguments": {"query": "handler", "root": str(repo)}},
+        }
+    )
+    with httpx.Client(timeout=120.0) as client, contextlib.suppress(httpx.HTTPError):
+        client.post(url, content=body, headers=HEADERS | probe._session)
 
 
 def _repo(path: Path) -> Path:
@@ -60,8 +84,9 @@ def _free_port() -> int:
 class Daemon:
     """One `coderag serve` on a private state dir. `start` twice is the restart."""
 
-    def __init__(self, state: Path, port: int):
-        self.env = os.environ | {"CODERAG_STATE_DIR": str(state), "CODERAG_PORT": str(port)}
+    def __init__(self, state: Path, port: int, extra: dict[str, str] | None = None):
+        base = {"CODERAG_STATE_DIR": str(state), "CODERAG_PORT": str(port)}
+        self.env = os.environ | base | (extra or {})
         self.url = f"http://127.0.0.1:{port}/mcp"
         self.state = state
         self.proc: subprocess.Popen | None = None
@@ -188,6 +213,62 @@ def test_sigterm_exits_promptly_with_a_client_connected(daemon):
         rpc.close()
 
     assert time.monotonic() - started < 20
+    assert returncode == 0, "a non-zero code here is OnFailure firing on an ordinary stop"
+
+
+def test_the_deadline_bounds_a_stop_with_a_tool_call_in_flight(daemon, tmp_path):
+    """The one above cannot see this, and the journal did.
+
+    `tools/list` holds no stream in stateless mode and runs no user code, so
+    both joins return in milliseconds. The shape that hung is a *tool* still
+    running: a plain-`def` tool goes through `anyio.to_thread.run_sync` with
+    `abandon_on_cancel=False`, so it is shielded, the session manager's cancel
+    cannot reach it, and its task group waits. Measured here at **5.7 s** with
+    the deadline off -- the daemon's own log shows the whole cold load of both
+    models running after "StreamableHTTP session manager shutting down".
+
+    5.7 s is not the 90 s outage, which needed the second mechanism too. This
+    asserts the reproducible part -- the deadline is an absolute bound and it
+    fires with a real tool in flight -- by setting it below that window rather
+    than at its shipped 15 s. Neutralise it and the stop takes 5.7 s and this
+    fails; the first version asserted 25 s and passed either way.
+    """
+    repo = _repo(tmp_path / "repo")
+
+    rpc = Rpc(daemon.url)
+    rpc.tool("index", root=str(repo))
+    until(
+        lambda: len(_store_files(daemon.state)) == N_FILES,
+        timeout=900,
+        what="the index to converge",
+    )
+    rpc.close()
+    daemon.stop()
+
+    # Cold, and short. A search against a warm daemon is milliseconds, so the
+    # shielded thread is gone before the signal lands; the reconcile on the way
+    # back up is a content-hash no-op, so nothing warms the models but this
+    # search. The request is fired and left running, never awaited: waiting for
+    # it is waiting for the very thing the signal has to interrupt.
+    served = Daemon(daemon.state, _free_port(), {"CODERAG_SHUTDOWN_DEADLINE_S": str(DEADLINE_S)})
+    served.start()
+    probe = Rpc(served.url)
+    probe.handshake()
+    threading.Thread(target=_fire_search, args=(served.url, probe, repo), daemon=True).start()
+    time.sleep(0.3)
+
+    proc = served.proc
+    started = time.monotonic()
+    proc.send_signal(signal.SIGTERM)
+    try:
+        returncode = proc.wait(timeout=40)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        pytest.fail("SIGTERM with a tool in flight did not stop the daemon in 40 s")
+    finally:
+        probe.close()
+
+    assert time.monotonic() - started < UNBOUNDED_S, "the deadline did not fire"
     assert returncode == 0, "a non-zero code here is OnFailure firing on an ordinary stop"
 
 

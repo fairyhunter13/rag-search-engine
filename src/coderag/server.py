@@ -28,6 +28,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import signal
 import socket
 import threading
 from collections.abc import AsyncIterator
@@ -88,6 +89,14 @@ async def lifespan(_app) -> AsyncIterator[None]:
         yield
     finally:
         _notify("STOPPING=1")
+        # Armed here, in the inner context, so it is running strictly before
+        # the session manager's `__aexit__` -- the window that hangs. Its task
+        # group waits on children, and a plain-`def` tool runs under anyio's
+        # shielded thread, so the cancel cannot reach it and the wait has no
+        # bound. Everything below is advisory; this is the one that ends.
+        deadline = threading.Timer(config.SHUTDOWN_DEADLINE_S, _shutdown_exit, [True])
+        deadline.daemon = True
+        deadline.start()
         _stop.set()
         watch.stop()
         index.stop_worker()
@@ -130,6 +139,11 @@ def build_app():
 
 def serve(host: str = "", port: int = 0) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # uvicorn restores the handler it replaced and then re-raises the signal it
+    # caught, so the exit below never ran on a stop: the process died -15 under
+    # the default disposition. Installing this first makes ours the handler it
+    # restores, which is what makes `_shutdown_exit` reachable at all.
+    signal.signal(signal.SIGTERM, lambda *_: _shutdown_exit())
     uvicorn.run(
         build_app(),
         host=host or config.HOST,
@@ -146,13 +160,15 @@ def serve(host: str = "", port: int = 0) -> None:
     _shutdown_exit()
 
 
-def _shutdown_exit() -> None:
+def _shutdown_exit(on_deadline: bool = False) -> None:
     """Leave without running interpreter finalization.
 
     Not tidiness -- correctness. The CUDA EP's static destructors abort with 134
     during finalization, and `Restart=on-failure` turns that into a loop.
     """
-    log.info("exiting")
+    # Says so out loud: exit 0 either way, so the journal is the only place the
+    # difference between a clean unwind and a forced one is visible.
+    log.info("exiting on shutdown deadline" if on_deadline else "exiting")
     for stream in (1, 2):
         with contextlib.suppress(OSError):
             os.fsync(stream)
