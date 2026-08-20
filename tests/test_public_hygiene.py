@@ -35,7 +35,15 @@ def terms() -> list[str]:
         pytest.fail("CODERAG_NAME_BAN is unset; export the ban list, or =none for a clean clone")
     if raw.lower() == "none":
         return []
-    return [t.strip().lower() for t in raw.split(",") if t.strip()]
+    split = [t.strip().lower() for t in raw.split(",") if t.strip()]
+    # A colon-joined list survives the split as one token that matches nothing,
+    # and an armed-but-inert guard reads exactly like a clean tree. Unset is
+    # already fatal; mis-separated has to be too, or fail-closed only covers
+    # the half that announces itself.
+    if bad := [t for t in split if ":" in t or ";" in t]:
+        pytest.fail(f"CODERAG_NAME_BAN has {len(bad)} token(s) holding a separator; the list is "
+                    "comma-separated and this one was joined with something else")
+    return split
 
 
 def hits(text: str, banned: list[str]) -> list[str]:
@@ -55,6 +63,15 @@ def tracked() -> list[str]:
 
 def test_an_unset_ban_fails_rather_than_standing_down(monkeypatch):
     monkeypatch.setattr(config, "NAME_BAN", "   ")
+    with pytest.raises(Failed):
+        terms()
+
+
+def test_a_mis_separated_list_fails_rather_than_arming_inert(monkeypatch):
+    """The shape that actually happened: the installer joined with `os.pathsep`
+    while the guard split on a comma, so seven tests passed over one token that
+    was in nothing."""
+    monkeypatch.setattr(config, "NAME_BAN", "alpha:beta:gamma")
     with pytest.raises(Failed):
         terms()
 
