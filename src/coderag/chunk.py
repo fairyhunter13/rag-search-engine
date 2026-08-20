@@ -23,8 +23,9 @@ contextual awareness" -- naming the header as future work, not as its result.
 Every *measured* gain for prepending context comes from an LLM-generated blurb
 (one model call per chunk) or from context trained into the embedder. No
 published result isolates a regex scope header. So the header stays for now
-because it is nearly free, `CHUNK_HEADER=0` is a real bake-off arm, and
-whichever way that arm falls is what ships.
+because it is nearly free and because the arms are real: `CHUNK_HEADER_PATH`
+and `CHUNK_HEADER_DERIVED` are ablated separately, since the path is not in
+dispute and the derived line is the whole of what is unevidenced.
 
 The header is also the one place per-type knowledge enters this pipeline, which
 is why it dispatches on language rather than the splitter doing so.
@@ -164,7 +165,9 @@ def scope_header(rel_path: str, lines: list[str], start_line: int) -> str:
     An unlabeled extension falls to the code arm on purpose: a new language gets
     the generic declaration regex for free, and the arm degrades to the path.
     """
-    parts = [rel_path]
+    parts = [rel_path] if config.CHUNK_HEADER_PATH else []
+    if not config.CHUNK_HEADER_DERIVED:
+        return "\n".join(parts)
     lang = filters.lang_of(rel_path)
     if lang in filters.DOC_LANGS:
         # Never `_decl_at` here. The generic C-family arm matches any prose line
@@ -206,7 +209,7 @@ def chunk_text(
     """
     size = config.CHUNK_CHARS if size is None else size
     overlap = config.CHUNK_OVERLAP if overlap is None else overlap
-    header = config.CHUNK_HEADER if header is None else header
+    header = config.CHUNK_HEADER_PATH or config.CHUNK_HEADER_DERIVED if header is None else header
     if overlap >= size:
         raise ValueError(f"overlap {overlap} must be smaller than size {size}")
     if not text.strip():

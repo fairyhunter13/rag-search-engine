@@ -210,7 +210,12 @@ ARMS = {
         "QUERY_PREFIX": " ",
     },
     "overlap-300": {"CHUNK_OVERLAP": "300"},
-    "no-header": {"CHUNK_HEADER": "0"},
+    # The 2x2. `no-header` alone cannot separate the derived line from the
+    # filename it carries in via the path -- 48.6% of doc queries have their
+    # heading echoed in the positive's filename.
+    "no-header": {"CHUNK_HEADER_PATH": "0", "CHUNK_HEADER_DERIVED": "0"},
+    "path-only": {"CHUNK_HEADER_DERIVED": "0"},
+    "derived-only": {"CHUNK_HEADER_PATH": "0"},
     # Prose arms. Only readable under `--corpus docs`, which is the point:
     # the code protocol excludes doc files, so both of these were unfalsifiable
     # until that mode existed. `md-splitter` is the second splitter the "one

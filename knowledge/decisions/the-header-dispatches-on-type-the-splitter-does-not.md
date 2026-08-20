@@ -37,15 +37,31 @@ so changing it costs a re-index and nothing else; a second splitter multiplies t
 its own arity and doubles the store, over the axis the evidence rates lowest. `MarkdownSplitter`
 measured better on boundaries — 0 unbalanced code fences and 0 mid-table starts against 4 and 2 —
 but 30% more, smaller chunks, and fragmentation is exactly what sank the semantic chunker in the
-decision above. So it is a bake-off arm, not an edit.
+decision above. So it was a bake-off arm, not an edit — **and the arm has now run and lost**:
+0.8033 against 0.8133 recall@10 over 300 doc queries, −0.0100, CI [−0.0300, +0.0100], 3 queries won
+against 6 lost, p = 0.51. Not distinguishable, so `CHUNK_MD_SPLITTER` stays off and one chunker
+ships. Fixing every broken code fence and mid-table cut bought nothing a retrieval metric can see,
+which is the more useful half: the boundaries a reader would call wrong are not the boundaries that
+lose queries.
 
 The one large *measured* effect in this literature is on structured data: Recall@1 0.366 → 0.754 and
-MRR 0.372 → 0.776 for key-path-aware handling over blind character windows
-([arXiv:2605.00318](https://arxiv.org/abs/2605.00318)). **That is measured on CSV and Excel**;
-JSON/YAML/TOML is an extrapolation from the closest studied surrogate, since no paper benchmarks
-YAML. A strong prior, not a result — and it stays labelled as one, because
-[[one-chunker-and-it-is-third-party]] already had to correct one citation that claimed more than its
-source said.
+MRR 0.372 → 0.776 for structure-aware handling over a recursive character baseline
+([arXiv:2605.00318](https://arxiv.org/abs/2605.00318), Table IV, BM25-only lane; the hybrid lane in
+Table III is 0.347 → 0.539). **Two corrections to how this file first cited it**, both found by
+re-reading the paper rather than the summary of it:
+
+- it is **not measured on CSV or Excel**. Those are the abstract's motivating domain; the benchmark
+  is MAUD, SEC merger agreements reshaped into row/key-value form. So the surrogate is further from
+  JSON/YAML/TOML than "spreadsheets" suggested, not closer;
+- the delta is **not attributable to prepending a key path**. It bundles a row tree, key-value block
+  encoding and greedy merging, and cuts chunk count 40–56% along the way — several mechanisms, one
+  number.
+
+What survives is a direction, not a magnitude: structure-aware handling of structured data is worth
+measuring. The `in: <key path>` arm is this repo's cheapest test of that direction and its result
+will be its own. Labelled a prior rather than a result for the reason
+[[one-chunker-and-it-is-third-party]] records: this bundle has already had to correct one citation
+that claimed more than its source said, and this is the second.
 
 # What it replaces, and what it measures
 
