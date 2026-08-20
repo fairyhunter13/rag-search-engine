@@ -135,7 +135,8 @@ def stamp(conn: sqlite3.Connection) -> None:
         embed_dims=config.EMBED_DIMS,
         chunk_chars=config.CHUNK_CHARS,
         chunk_overlap=config.CHUNK_OVERLAP,
-        chunk_header=config.CHUNK_HEADER,
+        chunk_header_path=config.CHUNK_HEADER_PATH,
+        chunk_header_derived=config.CHUNK_HEADER_DERIVED,
         chunk_md_splitter=config.CHUNK_MD_SPLITTER,
         chunk_algo=config.CHUNK_ALGO,
     )
@@ -156,7 +157,8 @@ def incompatible(conn: sqlite3.Connection) -> str | None:
         ("embed_dims", config.EMBED_DIMS),
         ("chunk_chars", config.CHUNK_CHARS),
         ("chunk_overlap", config.CHUNK_OVERLAP),
-        ("chunk_header", config.CHUNK_HEADER),
+        ("chunk_header_path", config.CHUNK_HEADER_PATH),
+        ("chunk_header_derived", config.CHUNK_HEADER_DERIVED),
         ("chunk_md_splitter", config.CHUNK_MD_SPLITTER),
         ("chunk_algo", config.CHUNK_ALGO),
     ):

@@ -13,6 +13,7 @@ okf_version: "0.2"
 
 # Decision
 
+* [The embedder is settled by a tie-break, because the two finalists are not distinguishable](decisions/the-embedder-is-settled-by-a-tie-break.md) - bge-base and gte-modernbert differ by 0.023 recall@10 at p=0.39, so a pre-committed order decides it; the header arm is the one result that is not a tie.
 * [Per-type knowledge enters through the header, not through a second splitter](decisions/the-header-dispatches-on-type-the-splitter-does-not.md) - A quarter of the corpus is prose and structured data the code-only evidence never covered, and the four-arm header is the reversible half of the fix.
 * [One chunker ships, it is third-party, and the part we wrote is the header](decisions/one-chunker-and-it-is-third-party.md) - Six splitter libraries and four boundary strategies compared on August 2026 evidence, and why the measured gain is in the scope header rather than the boundary.
 * [Two MCP tools, and everything an operator needs is on the CLI](decisions/two-tools-and-the-operator-surface-is-the-cli.md) - The 4-tool, 16-route, 20-command surface contracted to two actions, and the refusals that hold it there.

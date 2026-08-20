@@ -153,8 +153,13 @@ CHUNK_CHARS = _env_int("CHUNK_CHARS", 2000)
 CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 0)
 
 # The scope header prepended to the embedded and FTS text (never the stored
-# body). Off is the other arm of the Phase 3 chunker measurement.
-CHUNK_HEADER = _env_flag("CHUNK_HEADER", True)
+# body), as two independent components rather than one switch. A single
+# `CHUNK_HEADER=0` arm removes the path and the derived line together, and on
+# the docs corpus 48.6% of eval queries have their heading echoed in the
+# positive's filename -- so that arm measures the derived line and a filename
+# identity shortcut at once, and cannot evidence either. Two flags span the 2x2.
+CHUNK_HEADER_PATH = _env_flag("CHUNK_HEADER_PATH", True)
+CHUNK_HEADER_DERIVED = _env_flag("CHUNK_HEADER_DERIVED", True)
 
 # Use MarkdownSplitter (same wheel) for doc-langs. Off by default and a bake-off
 # arm, not an edit: it removed every broken boundary in the 50-file sample -- 4
