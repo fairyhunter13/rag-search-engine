@@ -12,6 +12,7 @@ through into `search.search`, which would load a model on the dense lane.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import subprocess
 from pathlib import Path
@@ -19,9 +20,9 @@ from types import SimpleNamespace
 
 import pytest
 from mcp.server.mcpserver.resolve import ListRoots
-from mcp_types import ClientCapabilities, ListRootsResult
+from mcp_types import CLIENT_INFO_META_KEY, ClientCapabilities, ListRootsResult
 
-from coderag import config, federation, registry, scope, tools
+from coderag import config, federation, pinledger, registry, scope, tools
 
 
 def _project(path: Path, *, enabled: bool = True, indexed: bool = True) -> Path:
@@ -223,14 +224,21 @@ def test_a_workspace_on_a_subdirectory_reaches_the_projects_the_parent_federates
 
 
 class _Ctx:
-    """Only the attributes `_ask` reads. A real `Context` would need a live
-    session, which is the thing this branch decides not to talk to."""
+    """Only the attributes the resolver reads, but carrying what the wire does.
+
+    The `_meta` mapping is the real one, under the reserved key and in the
+    camelCase the wire uses: the previous fake mirrored `params.clientInfo`,
+    which is a serialization alias and not the attribute, so it agreed with a
+    read that named nobody in production. A fake that spells the field the way
+    the code under test spells it cannot fail.
+    """
 
     def __init__(self, caps, version, client=None):
         self.client_capabilities = caps
         self.protocol_version = version
-        info = SimpleNamespace(name=client[0], version=client[1]) if client else None
-        self.session = SimpleNamespace(client_params=SimpleNamespace(clientInfo=info))
+        meta = {CLIENT_INFO_META_KEY: {"name": client[0], "version": client[1]}} if client else {}
+        self.request_context = SimpleNamespace(meta=meta, request=None)
+        self.session = SimpleNamespace(client_params=None)
 
 
 _ROOTS = ClientCapabilities(roots={"listChanged": True})
@@ -239,21 +247,31 @@ _ROOTS = ClientCapabilities(roots={"listChanged": True})
 @pytest.mark.parametrize(
     "caps,version,reason",
     [
-        (None, scope.MRTR, "roots capability"),
-        (ClientCapabilities(), scope.MRTR, "roots capability"),
-        (_ROOTS, None, "below"),
-        (_ROOTS, "2025-06-18", "below"),
+        (None, scope.MRTR, "branch=no-caps"),
+        (ClientCapabilities(), scope.MRTR, "branch=no-caps"),
+        (_ROOTS, None, "branch=below-era"),
+        (_ROOTS, "2025-06-18", "branch=below-era"),
+        (None, "2025-06-18", "branch=legacy-path"),
     ],
-    ids=["no capabilities", "no roots capability", "no version", "below the era"],
+    ids=[
+        "no capabilities",
+        "no roots capability",
+        "no version",
+        "below the era",
+        "the legacy stateless path",
+    ],
 )
 def test_no_ask_is_made_where_the_answer_cannot_arrive(caps, version, reason, caplog):
     """Below `MRTR` a stateless transport is built `can_send_request=False` and
     asking raises `NoBackChannelError`, which would take down every call rather
     than falling back to no pin.
 
-    The logged reason is asserted because it is the whole of the rollout's
+    The logged branch is asserted because it is the whole of the rollout's
     evidence: `enforce`'s count says a pin did not arrive and never which of
-    these two branches sent it back empty.
+    these branches sent it back empty. `legacy-path` is separate from `no-caps`
+    on purpose -- below the era the transport carries no capabilities at all, so
+    reporting it as a client that advertises none blames a setting for a
+    protocol revision.
     """
     with caplog.at_level(logging.INFO, logger=scope.log.name):
         assert scope._ask(_Ctx(caps, version)) == ListRootsResult(roots=[])
@@ -269,14 +287,44 @@ def test_the_ask_is_made_when_the_client_can_answer_it():
 def test_the_log_names_the_client_and_whether_it_was_asked(caplog):
     """1768 zero-root pins were attributed to nobody. A count that cannot be
     split by client decides nothing, and the flag is waiting on that split."""
-    ctx = _Ctx(_ROOTS, scope.MRTR, client=("claude-code", "2.1.235"))
-    with caplog.at_level(logging.INFO, logger=scope.log.name):
-        scope._ask(ctx)
-        with contextlib.suppress(scope.ScopeError):
-            scope.enforce(Path("/nowhere"), ListRootsResult(roots=[]))
-    assert "claude-code/2.1.235" in caplog.text, caplog.text
+    verdict = scope._verdict(_Ctx(_ROOTS, scope.MRTR, client=("claude-code", "2.1.235")))
+    with (
+        caplog.at_level(logging.INFO, logger=scope.log.name),
+        contextlib.suppress(scope.ScopeError),
+    ):
+        scope.enforce(Path("/nowhere"), ListRootsResult(roots=[]), verdict)
     # The third case the count conflated: asked, and answered with nothing.
-    assert "0 root(s), asked claude-code/2.1.235" in caplog.text, caplog.text
+    assert "client=claude-code/2.1.235" in caplog.text, caplog.text
+    assert "branch=asked roots=0" in caplog.text, caplog.text
+
+
+def test_the_branch_survives_the_resolver_boundary(two, pin, caplog):
+    """The defect this replaced a `ContextVar` for. A sync resolver runs in a
+    copied context that is discarded, so a branch decided in `_ask` and read in
+    `enforce` read its default in production while reading correctly here --
+    same-thread tests are exactly where that bug is invisible. Passing the
+    verdict through the tool is what makes the two agree."""
+    mine, _ = two
+    verdict = scope._verdict(_Ctx(_ROOTS, scope.MRTR, client=("claude-code", "2.1.235")))
+    with caplog.at_level(logging.INFO, logger=scope.log.name):
+        tools.search_code("handler", pin(mine), root=str(mine), mode="lexical", verdict=verdict)
+    assert "branch=asked roots=1" in caplog.text, caplog.text
+    assert "no resolver ran" not in caplog.text
+
+
+def test_the_ledger_records_the_branch_under_the_isolated_state_dir(two, pin):
+    """The count the flag turns on has to be groupable by client and survive a
+    restart, which a seven-day journal is not. The path is resolved per call
+    because a module constant kept the fleet's real ledger as the target of
+    every test run -- the second assertion is that one."""
+    mine, _ = two
+    verdict = scope._verdict(_Ctx(_ROOTS, scope.MRTR, client=("claude-code", "2.1.235")))
+    scope.enforce(mine, pin(mine), verdict)
+
+    row = json.loads(pinledger.path().read_text().splitlines()[-1])
+    assert (row["client"], row["branch"], row["roots"]) == ("claude-code/2.1.235", "asked", 1)
+    assert pinledger.path().is_relative_to(config.STATE_DIR)
+    assert not pinledger.path().is_relative_to(Path.home() / ".local"), "wrote to the real fleet"
 
 
 def test_a_client_that_sends_no_info_is_logged_as_such(caplog):
@@ -284,4 +332,5 @@ def test_a_client_that_sends_no_info_is_logged_as_such(caplog):
     value in the population rather than a missing line."""
     with caplog.at_level(logging.INFO, logger=scope.log.name):
         scope._ask(_Ctx(None, scope.MRTR))
-    assert "client unidentified advertises no roots capability" in caplog.text, caplog.text
+    assert "client=unidentified" in caplog.text, caplog.text
+    assert "branch=no-caps" in caplog.text, caplog.text

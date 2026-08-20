@@ -146,6 +146,12 @@ def transcript(workspace):
                 "--verbose",
                 "--mcp-config",
                 str(mcp_config),
+                # Not decoration on an already-isolated home: without it the CLI
+                # merges config sources and connects on 2025-11-25, which cannot
+                # carry a workspace pin at all, so every call is refused now that
+                # the flag ships at 1. Measured -- it is the only one of the four
+                # differences from a passing invocation that moves the era.
+                "--strict-mcp-config",
                 "--allowedTools",
                 f"{TOOL_PREFIX}search",
             ],
@@ -196,6 +202,12 @@ def test_the_session_reaches_for_the_server_rather_than_reading_the_file(transcr
 
     Asserting that an answer arrived would pass with the server switched off --
     `claude` would open the file itself and be right.
+
+    It used to also require the session to write a `root`, on the grounds that
+    an unscoped call federates over the fleet. With the flag at `1` that is no
+    longer reachable: a call with no pin is refused, and a call with one means
+    the caller's own workspace. Which root a pinned call may name is held by
+    `test_live_scoping`, off the model.
     """
     called = [
         b for b in _blocks(transcript, "tool_use") if str(b.get("name", "")).startswith(TOOL_PREFIX)
@@ -203,9 +215,6 @@ def test_the_session_reaches_for_the_server_rather_than_reading_the_file(transcr
     assert called, (
         "no coderag tool was called; the session answered from its own file access. "
         "That is a tool-description failure, and no protocol test can see it."
-    )
-    assert any("root" in (b.get("input") or {}) for b in called), (
-        "the session called search without a root; unscoped it federates over the fleet"
     )
 
 
