@@ -16,9 +16,9 @@ import pathlib
 import onnxruntime as ort
 import pytest
 from huggingface_hub import hf_hub_download
-from tests.live import require_clear_gpu
 
 from coderag import config, embed, gpu
+from live import require_clear_gpu
 
 pytestmark = pytest.mark.gpu
 
