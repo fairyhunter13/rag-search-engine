@@ -1,8 +1,9 @@
-"""The knowledge bundle is gated by the only gate this repo has.
+"""The knowledge bundle, and the gate that decides on it.
 
-Fail-closed on a missing checker, deliberately. There is no CI here and no git
-hook: if a missing `okf` binary made this skip, the bundle's two possible
-outcomes would be pass and silence, which is the same thing.
+Fail-closed on a missing checker, deliberately: if a missing `okf` binary made this
+skip, the bundle's two possible outcomes would be pass and silence, which is the same
+thing. The last test asks the question the others cannot -- whether anything runs this
+file at all.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 BUNDLE = REPO / "knowledge"
+CI = REPO / ".github" / "workflows" / "ci.yml"
 
 # Pinned: `@latest` lets the verdict change with no commit in this repo.
 INSTALL = "go install github.com/fairyhunter13/okf/cmd/okf@v0.1.0"
@@ -72,6 +74,25 @@ def test_the_checker_actually_rejects_something(tmp_path):
     (bad / "broken.md").write_text("---\ntitle: no type key\n---\n\nbody\n")
     out = subprocess.run([okf, "check", str(bad)], capture_output=True, text=True, check=False)
     assert out.returncode != 0, "okf accepted a bundle with no type key"
+
+
+def test_the_gate_is_wired_where_this_repo_says_it_is():
+    """This file is only a gate if something runs it.
+
+    Everything above grades the bundle; none of it notices a CI job that stopped
+    invoking these tests, or a step whose failure is excused. Both leave the same green
+    as a clean bundle.
+    """
+    ci = CI.read_text()
+    assert "pytest tests/test_okf_bundle.py" in ci, "no CI step runs the bundle tests"
+    assert "okf check -Werror knowledge" in ci, "no CI step runs the strict check"
+    assert INSTALL in ci, f"CI does not install the pinned checker: {INSTALL}"
+    # The key itself, not the word: one of these steps carries a comment saying it is
+    # deliberately not continue-on-error, and matching that would grade the prose.
+    excused = [ln.strip() for ln in ci.splitlines() if ln.strip().startswith("continue-on-error:")]
+    assert excused == [], f"a step whose failure is excused reports a passing green: {excused}"
+    # A workflow with no trigger that fires on a change grades the calendar instead.
+    assert "push:" in ci or "pull_request:" in ci, "no CI trigger fires on a change"
 
 
 def _links(line: str) -> list[str]:
