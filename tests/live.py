@@ -206,25 +206,48 @@ class Rpc:
         the `_meta` envelope. Sending only one of them fails with a message
         about the other, which is why this is a method rather than a flag.
         """
-        self._id += 1
         envelope = {
             "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL,
             "io.modelcontextprotocol/clientCapabilities": {},
         }
-        body = {
-            "jsonrpc": "2.0",
-            "id": self._id,
-            "method": method,
-            "params": {"_meta": envelope} | (params or {}),
-        }
-        response = self._post(
-            json.dumps(body),
-            HEADERS | {"mcp-protocol-version": MODERN_PROTOCOL, "mcp-method": method},
-        )
+        return self._modern_post(method, {"_meta": envelope} | (params or {}))
+
+    def _modern_post(self, method: str, params: dict, name: str | None = None) -> dict:
+        self._id += 1
+        body = {"jsonrpc": "2.0", "id": self._id, "method": method, "params": params}
+        headers = {"mcp-protocol-version": MODERN_PROTOCOL, "mcp-method": method}
+        if name:
+            # Checked against the body's own `name`, and a mismatch is refused.
+            headers["mcp-name"] = name
+        response = self._post(json.dumps(body), HEADERS | headers)
         assert response.status_code == 200, f"{method} -> {response.status_code} {response.text}"
         payload = _payload(response.text)
         assert "error" not in payload, payload["error"]
         return payload["result"]
+
+    def modern_tool(self, name: str, roots: list[str] | None = None, **arguments) -> dict:
+        """A `2026-07-28` tool call, answering `roots/list` if the server asks.
+
+        Two POSTs, not a back channel: the server replies `input_required` with
+        an opaque `requestState`, and the retry carries the answers plus that
+        state verbatim. Declaring `roots` in the envelope is what makes the
+        server ask at all, so a client that declares nothing gets one round.
+        """
+        meta = {
+            "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL,
+            "io.modelcontextprotocol/clientCapabilities": {"roots": {}} if roots else {},
+        }
+        params = {"_meta": meta, "name": name, "arguments": arguments}
+        first = self._modern_post("tools/call", params, name)
+        requests = first.get("inputRequests")
+        if not requests:
+            return first
+        answer = {"roots": [{"uri": f"file://{r}"} for r in roots or []]}
+        params |= {
+            "inputResponses": dict.fromkeys(requests, answer),
+            "requestState": first["requestState"],
+        }
+        return self._modern_post("tools/call", params, name)
 
     def close(self) -> None:
         self.client.close()

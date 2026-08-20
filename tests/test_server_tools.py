@@ -32,6 +32,17 @@ async def test_both_tools_carry_a_schema_a_caller_can_read():
         assert "root" in tool.input_schema["properties"]
 
 
+async def test_the_workspace_pin_is_not_a_parameter_the_model_can_write():
+    """The whole reason the boundary comes from `roots` rather than an argument.
+    A pin in the schema is a pin the model supplies, and a pin the model supplies
+    is the same string it already gets wrong -- and worse, it would read as one."""
+    for tool in await tools.mcp.list_tools():
+        props = tool.input_schema["properties"]
+        # `root` is the discriminator: it is the parameter that must stay, so a
+        # schema that lost everything cannot satisfy this by being empty.
+        assert "root" in props and "pinned" not in props, props
+
+
 def test_the_server_instructions_name_both_actions():
     """Phase 4's hermes serves this string verbatim, so it is the only place
     the doctrine lives -- an empty one silently blanks the host prompt."""
@@ -39,26 +50,26 @@ def test_the_server_instructions_name_both_actions():
     assert tools.mcp.instructions == tools.INSTRUCTIONS
 
 
-def test_index_returns_before_the_work_does(tmp_path, monkeypatch):
+def test_index_returns_before_the_work_does(tmp_path, monkeypatch, pin):
     monkeypatch.setattr(watch, "start", lambda: None)
     monkeypatch.setattr(index, "start_worker", lambda: None)
     project = tmp_path / "p"
     project.mkdir()
 
     started = time.perf_counter()
-    out = tools.index_project(str(project))
+    out = tools.index_project(pin(project), str(project))
 
     assert time.perf_counter() - started < 1.0, "a return that blocks is a failure"
     assert out["state"] == "indexing" and out["queue_depth"] >= 1
 
 
-def test_index_on_a_path_that_is_not_a_directory_says_so(tmp_path):
+def test_index_on_a_path_that_is_not_a_directory_says_so(tmp_path, pin):
     file = tmp_path / "not-a-dir"
     file.write_text("x")
-    assert "error" in tools.index_project(str(file))
+    assert "error" in tools.index_project(pin(file), str(file))
 
 
-def test_unflagging_releases_the_row_and_never_the_index_directory(tmp_path, monkeypatch):
+def test_unflagging_releases_the_row_and_never_the_index_directory(tmp_path, monkeypatch, pin):
     """Both fleet-wide index wipes in this engine's history came from something
     that deleted store directories on a computed set."""
     monkeypatch.setattr(watch, "start", lambda: None)
@@ -70,13 +81,13 @@ def test_unflagging_releases_the_row_and_never_the_index_directory(tmp_path, mon
     db = config.index_path(project)
     assert db.exists()
 
-    out = tools.index_project(str(project), enabled=False)
+    out = tools.index_project(pin(project), str(project), enabled=False)
 
     assert out["enabled"] is False
     assert db.exists(), "unflagging must never delete a store"
 
 
-def test_unflagging_a_root_re_walks_the_members_it_released(tmp_path, monkeypatch):
+def test_unflagging_a_root_re_walks_the_members_it_released(tmp_path, monkeypatch, pin):
     """The asymmetry that made a root's excludes outlive the root.
 
     Joining a root narrows a member and submits it; leaving one widens it and
@@ -94,12 +105,12 @@ def test_unflagging_a_root_re_walks_the_members_it_released(tmp_path, monkeypatc
     (member / "src").mkdir(parents=True)
     root.mkdir()
     (root / "linked").symlink_to(member, target_is_directory=True)
-    tools.index_project(str(member))
-    tools.index_project(str(root))
+    tools.index_project(pin(member), str(member))
+    tools.index_project(pin(root), str(root))
     while not index._queue.empty():
         index._queue.get_nowait()
 
-    out = tools.index_project(str(root), enabled=False)
+    out = tools.index_project(pin(root), str(root), enabled=False)
 
     assert str(member) in out["members_released"], out
     submitted = []
@@ -108,15 +119,15 @@ def test_unflagging_a_root_re_walks_the_members_it_released(tmp_path, monkeypatc
     assert submitted == [member], submitted
 
 
-def test_a_search_error_is_returned_as_data_not_raised(tmp_path):
+def test_a_search_error_is_returned_as_data_not_raised(tmp_path, pin):
     """An agent can act on an error that names what to call next; a transport
     failure is just a dead turn."""
-    out = tools.search_code("anything", str(tmp_path))
+    out = tools.search_code("anything", pin(tmp_path), str(tmp_path))
     assert "error" in out and out["results"] == []
 
 
-def test_an_unknown_mode_reaches_the_caller_as_an_error(tmp_path):
-    assert "error" in tools.search_code("q", str(tmp_path), mode="fuzzy")
+def test_an_unknown_mode_reaches_the_caller_as_an_error(tmp_path, pin):
+    assert "error" in tools.search_code("q", pin(tmp_path), str(tmp_path), mode="fuzzy")
 
 
 # ------------------------------------------------------------------ the server

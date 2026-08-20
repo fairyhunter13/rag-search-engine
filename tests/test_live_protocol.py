@@ -158,7 +158,35 @@ def test_the_current_revision_is_served_with_no_handshake_at_all(rpc):
     assert MODERN_PROTOCOL in result["supportedVersions"], result.get("supportedVersions")
     assert "index" in result["instructions"] and "search" in result["instructions"]
     assert not (set(result["capabilities"]) & {"sampling", "logging", "roots"})
-    assert sorted(x["name"] for x in rpc.modern("tools/list")["tools"]) == ["index", "search"]
+    listed = rpc.modern("tools/list")["tools"]
+    assert sorted(x["name"] for x in listed) == ["index", "search"]
+    # Consumed, never advertised. The server asks the *client* for its roots and
+    # the resolver keeps that out of the schema, so the assertion above and this
+    # one are the two halves of the same claim -- over the wire, off the daemon.
+    for tool in listed:
+        props = tool["inputSchema"]["properties"]
+        assert "root" in props and "pinned" not in props, props
+
+
+def test_the_client_roots_pin_arrives_and_bounds_the_search(rpc, tmp_path):
+    """The rollout's premise, over the wire, against the daemon that ships.
+
+    Two synthetic paths, neither of which needs to exist: `resolve` is all the
+    server does with them, and a real project must never appear in an assertion
+    here. The unit runs `CODERAG_REQUIRE_CLIENT_ROOTS=0`, so this is also what
+    proves the switch means "no pin arrived" and not "no checking".
+    """
+    mine, theirs = tmp_path / "mine", tmp_path / "theirs"
+    args = {"query": "handler", "root": str(theirs), "mode": "lexical"}
+
+    pinned = rpc.modern_tool("search", roots=[str(mine)], **args)
+    assert "outside this session's workspace" in pinned["structuredContent"]["error"]
+
+    # The discriminator. Without it a server that refused every call would pass
+    # the assertion above, and "the pin bounded the search" would be unearned:
+    # declare no `roots` and the same call has to fail for a different reason.
+    unpinned = rpc.modern_tool("search", **args)
+    assert "is not indexed" in unpinned["structuredContent"]["error"]
 
 
 @pytest.mark.skipif(not shutil.which("npx"), reason="the conformance suite needs npx")
