@@ -26,6 +26,11 @@ Validate the raw `_meta` dict with `Implementation.model_validate(raw, by_name=F
 camelCase, and `clientInfo` is a serialization alias, never a pydantic attribute. Reading
 `params.clientInfo` returns `None` on every path and named nobody in 197 of 197 log lines.
 
+A legacy-era caller therefore cannot be named at all here: it sends its `clientInfo` in the
+handshake, and the legacy *stateless* path throws that away. Every `branch=legacy-path` row in the
+ledger reads `client=unidentified` and always will. The peer pid is the only identity those calls
+have, which is the second reason it is collected.
+
 # A resolver's ContextVar writes do not reach the tool
 
 A **sync** (`def`) resolver runs through `anyio.to_thread.run_sync`, which executes it in a fresh
