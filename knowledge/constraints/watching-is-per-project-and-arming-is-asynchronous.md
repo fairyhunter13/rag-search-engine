@@ -20,6 +20,12 @@ then waited 300 s for a change that was never observed.
 the thread must be alive across both halves of the assertion while the answer still changes:
 `tests/test_watch.py::test_a_live_thread_is_not_the_same_answer_as_this_project_being_watched`.
 
+`armed` reports the watches, not the decision to build them. The first version set it where the
+loop decided to rebuild, which is seconds before the first watch exists — a fixture waiting on it
+wrote into exactly the window it was waiting out, and the live write test timed out at 300 s again.
+`_intent` is what the change-detector compares against; `_armed` is set only after the watcher's
+first yield, which is when watchfiles has the watches in place.
+
 Consequence for tests: any live fixture that writes into a freshly registered project must poll
 `index(...)["watching"]` first, and must not assert it synchronously right after `index` returns —
 `tests/test_live_federation.py` asserts it under `until(...)` for that reason.
