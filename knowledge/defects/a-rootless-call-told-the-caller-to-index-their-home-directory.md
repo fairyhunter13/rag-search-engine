@@ -18,8 +18,8 @@ error envelope, not an empty one:
 {"error":"$HOME is not indexed -- call index(root=$HOME) first","results":[]}
 ```
 
-The unit ships `CODERAG_REQUIRE_CLIENT_ROOTS=0` during the rollout, and the journal shows
-`workspace pin: 0 root(s)` on every call — so every rootless call took the fallback.
+The unit shipped `CODERAG_REQUIRE_CLIENT_ROOTS=0` during the rollout (it no longer does), and the
+journal showed `workspace pin: 0 root(s)` on every call — so every rootless call took the fallback.
 
 # Why the error blamed the wrong thing
 

@@ -57,12 +57,17 @@ mcp = MCPServer(
     # the concrete `dict[str, Any]`: a bare `dict` is refused at import.
     structured_output=True,
 )
-def index_project(pinned: scope.Pinned, root: str = "", enabled: bool = True) -> dict[str, Any]:
+def index_project(
+    pinned: scope.Pinned,
+    root: str = "",
+    enabled: bool = True,
+    verdict: scope.Verdicted = None,
+) -> dict[str, Any]:
     # Pinned here too, or the gate on `search` is a formality: a caller that can
     # index anything can make anything searchable.
     try:
         target = registry.resolve(root or scope.default_root(pinned))
-        scope.enforce(target, pinned)
+        scope.enforce(target, pinned, verdict)
     except scope.ScopeError as exc:
         return {"error": str(exc)}
     if not enabled:
@@ -161,10 +166,11 @@ def search_code(
     max_per_file: int = 2,
     preview_lines: int = 3,
     include_body: bool = False,
+    verdict: scope.Verdicted = None,
 ) -> dict[str, Any]:
     try:
         target = registry.resolve(root or scope.default_root(pinned))
-        scope.enforce(target, pinned)
+        scope.enforce(target, pinned, verdict)
         return search.search(
             query,
             target,

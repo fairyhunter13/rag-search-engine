@@ -24,7 +24,7 @@ client's boundary instead of inventing a second one.
 from __future__ import annotations
 
 import logging
-from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlparse
@@ -32,10 +32,10 @@ from urllib.request import url2pathname
 
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.resolve import ListRoots, Resolve
-from mcp_types import ListRootsResult
+from mcp_types import CLIENT_INFO_META_KEY, Implementation, ListRootsResult
 from mcp_types.version import is_version_at_least
 
-from . import config, registry
+from . import config, peers, pinledger, registry
 
 log = logging.getLogger(__name__)
 
@@ -49,51 +49,96 @@ class ScopeError(Exception):
     """The named root is outside the caller's workspace."""
 
 
-# What happened upstream of this request's pin, for the line `enforce` writes.
-# Set in `_ask`, read one call later in the same task; a direct call sets
-# neither and reads the default, which is the honest answer there.
-_ASKED: ContextVar[str] = ContextVar("asked", default="not asked, no resolver ran")
+@dataclass(frozen=True)
+class Verdict:
+    """Who called, over which revision, and why the pin came back as it did.
+
+    Built once per `tools/call` and read by both the resolver and the tool body.
+    This was a `ContextVar` set in `_ask`, which is why journald read `not
+    asked, no resolver ran` on calls where a root had plainly arrived: a sync
+    resolver runs through `anyio.to_thread.run_sync`, which copies the context
+    and throws the copy away. Resolvers are memoized per call by identity, so
+    depending on this one from both sides is the channel the SDK does offer.
+    """
+
+    client: str
+    proto: str | None
+    branch: str
+    peer: str
+
+    def line(self, roots: int) -> str:
+        return (
+            f"workspace pin: client={self.client} proto={self.proto} "
+            f"branch={self.branch} roots={roots} peer={self.peer}"
+        )
+
+
+DIRECT = Verdict(client="unidentified", proto=None, branch="direct", peer="unknown")
+"""No resolver ran, because no framework call did: tests and the CLI."""
 
 
 def _client(ctx: Context) -> str:
     """Who is calling, as journald sees it.
 
-    1768 zero-root pins were attributed to nobody because this was never
-    logged, so the population that would decide the flag could not be split by
-    client. `clientInfo` is optional on 2026-07-28+, hence the fallback.
+    Read from this request's `_meta`, not from a session: 2026-07-28 removed the
+    handshake, and this daemon is `stateless_http=True` besides. The previous
+    read was `params.clientInfo`, a serialization alias rather than the pydantic
+    attribute, so it named nobody on any path -- 197 lines out of 197.
+
+    `_meta` is also the only place a caller that sent no capabilities can be
+    named: `Connection.from_envelope` builds `client_params` only when info and
+    capabilities both arrived, and that is the branch most in need of a name.
     """
-    params = getattr(ctx.session, "client_params", None)
-    info = getattr(params, "clientInfo", None)
+    raw = (getattr(ctx.request_context, "meta", None) or {}).get(CLIENT_INFO_META_KEY)
+    if raw is None:
+        params = getattr(ctx.session, "client_params", None)
+        info = getattr(params, "client_info", None)
+    else:
+        # camelCase only, the same call the SDK makes: `by_name=True` would
+        # accept a snake_case body no client sends.
+        info = Implementation.model_validate(raw, by_name=False)
     return f"{info.name}/{info.version}" if info else "unidentified"
 
 
-def _ask(ctx: Context) -> ListRoots | ListRootsResult:
+def _verdict(ctx: Context) -> Verdict:
+    """Which branch the pin takes, decided once.
+
+    Which of the four, not how many: 4409 calls logged "0 root(s)" and the count
+    alone cannot say whether the flag is one client setting away, whether the
+    pin can never arrive at all, or whether the client was asked and answered
+    with nothing.
+    """
+    caps = ctx.client_capabilities
+    proto = ctx.protocol_version
+    if not (proto and is_version_at_least(proto, MRTR)):
+        # Capabilities are absent below the era because the transport has
+        # nowhere to carry them: the legacy stateless path builds every
+        # connection `from_envelope(version, None, None)`. Calling that
+        # "advertises no roots capability" blamed a client setting for a
+        # protocol revision, and no setting would have changed it.
+        branch = "legacy-path" if caps is None else "below-era"
+    elif caps is None or caps.roots is None:
+        branch = "no-caps"
+    else:
+        branch = "asked"
+    return Verdict(client=_client(ctx), proto=proto, branch=branch, peer=peers.of(ctx))
+
+
+Verdicted = Annotated[Verdict | None, Resolve(_verdict)]
+"""The verdict as a parameter, filled by the framework and invisible to the model."""
+
+
+def _ask(ctx: Context, verdict: Verdicted = None) -> ListRoots | ListRootsResult:
     """Ask only where the answer can arrive; anywhere else, no pin.
 
     Claude Code advertises `roots` on every transport but negotiates the era
     behind a flag, so the capability alone is not enough to decide this. An
     empty result is not a silent pass: `enforce` refuses it under the flag.
     """
-    caps = ctx.client_capabilities
-    client = _client(ctx)
-    # Which of the three, not how many: 4409 calls logged "0 root(s)" and the
-    # count alone cannot say whether the flag is one client setting away,
-    # whether the pin can never arrive at all, or whether the client was asked
-    # and answered with nothing.
-    if caps is None or caps.roots is None:
-        _ASKED.set(f"not asked, {client} advertises no roots capability")
-        log.info("workspace pin: no ask, client %s advertises no roots capability", client)
+    verdict = verdict or _verdict(ctx)
+    if verdict.branch != "asked":
+        log.info("%s", verdict.line(0))
         return ListRootsResult(roots=[])
-    if not (ctx.protocol_version and is_version_at_least(ctx.protocol_version, MRTR)):
-        _ASKED.set(f"not asked, {client} speaks {ctx.protocol_version}")
-        log.info(
-            "workspace pin: no ask, client %s protocol %s is below %s",
-            client,
-            ctx.protocol_version,
-            MRTR,
-        )
-        return ListRootsResult(roots=[])
-    _ASKED.set(f"asked {client}")
     return ListRoots()
 
 
@@ -121,7 +166,7 @@ def default_root(pinned: ListRootsResult) -> Path:
     return roots[0]
 
 
-def enforce(target: Path, pinned: ListRootsResult) -> None:
+def enforce(target: Path, pinned: ListRootsResult, verdict: Verdict | None = None) -> None:
     """Refuse a root the caller's workspace does not contain, or sit inside.
 
     Both directions. A workspace opened on a subdirectory has to be able to name
@@ -130,9 +175,13 @@ def enforce(target: Path, pinned: ListRootsResult) -> None:
     `/` and `$HOME` can never become one.
     """
     roots = paths(pinned)
-    # The rollout's only observable: journald is where "a real pin arrived from
-    # this profile" is read before the flag flips. Goes when the unit line goes.
-    log.info("workspace pin: %d root(s), %s", len(roots), _ASKED.get())
+    # The rollout's only observable, and `branch=asked roots=0` is the exact
+    # population the flag waits on. journald keeps seven days and cannot be
+    # counted per client; the ledger is what gives the count a denominator.
+    # Both go when the unit line goes.
+    verdict = verdict or DIRECT
+    log.info("%s", verdict.line(len(roots)))
+    pinledger.record(verdict, len(roots))
     if not roots:
         if not config.REQUIRE_CLIENT_ROOTS:
             return

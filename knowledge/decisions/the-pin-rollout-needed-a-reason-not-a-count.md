@@ -61,3 +61,41 @@ So the criterion is now: flip when the answered-empty count reaches zero. `scope
 that population is attributable for the first time. See [empty root answers from clients nothing
 identifies](../defects/empty-root-answers-from-clients-nothing-identifies.md). The flag stays at
 `0` until then.
+
+# Second amendment, 2026-08-20: the criterion is a census, and the flag is flipped
+
+The replacement criterion — "flip when the answered-empty count reaches zero" — was as unreadable as
+the one before it, for three reasons in the instrumentation that shipped with it. All three are named
+in the defect above. The short version: nothing was ever named, the branch record was false, and
+"answered empty" and "no resolver ran" logged identically. A day of waiting could not have closed it.
+
+**Passive observation cannot close this at all.** journald keeps seven days, the caps-less traffic is
+bursty and self-generated (the live suite's own bursts of 19/13/10), and a count with no denominator
+answers "zero out of what" with nothing. What replaces it is a census of a closed population, which
+is available because the population *is* closed: the daemon binds `127.0.0.1` only, all five profiles
+carry a byte-identical `coderag` entry, and no other MCP client on this machine references it.
+
+The census, taken 2026-08-20 against the fixed build, one `search` from each profile:
+
+```
+5  claude-code/2.1.235  2026-07-28  asked  roots=1   (five distinct peer pids)
+0  answered-empty (branch=asked, roots=0)
+```
+
+Every interactive caller pins. So the unit's `Environment=CODERAG_REQUIRE_CLIENT_ROOTS=0` is deleted
+and the code default of `1` stands.
+
+# What the census caught that the count never would have
+
+One caller was refused by the flip: the layer-3 agent test's own `claude -p`, on `2025-11-25`,
+`branch=legacy-path`, which cannot carry a pin at any setting. Four candidate causes were tested
+one at a time against the running daemon, and the one that moves the era is **`--strict-mcp-config`**:
+a server passed with `--mcp-config` and merged with the profile's config connects on `2025-11-25`,
+and the same server under `--strict-mcp-config` connects on `2026-07-28`. A fresh config dir, the
+model, `--verbose` and a git-repo cwd all make no difference — each was ruled out by measurement, not
+by argument.
+
+That is a test gap, not a rollout blocker, and the flag it needed was one an isolation test should
+have been passing anyway. Two live assertions also changed, because the flip made their premises
+false rather than because they broke: an unpinned call is now refused rather than answered, and the
+agent session is no longer required to write a `root` — with a pin, `root=""` *is* the workspace.

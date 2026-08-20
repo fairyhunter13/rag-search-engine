@@ -1,9 +1,8 @@
 """Layer 3, part three: the pin and federation together, over the wire.
 
-Every other federation test runs *unpinned* -- `Rpc.tool` uses the legacy
-handshake and sends no roots, so `enforce` short-circuits under
-`REQUIRE_CLIENT_ROOTS=0` -- and every other scope test runs below the daemon.
-So the one claim the design rests on, that a member sits outside the workspace
+Every other federation test pins at the root it already names, and every other
+scope test runs below the daemon. So the one claim the design rests on, that a
+member sits outside the workspace
 and is reached through the root anyway, was carried by prose alone: a change
 making `expand` transitive and a change making it pin-filtered break it in
 opposite directions and the suite stays green for both.
@@ -141,10 +140,14 @@ def test_4_a_member_is_reachable_through_its_root_and_not_nameable_directly(inde
     assert "outside this session's workspace" in out.get("error", ""), out
 
 
-def test_5_an_unpinned_call_still_answers_while_the_flag_ships_off(indexed, rpc):
-    """The rollout's shape, over the wire: no pin means no pin arrived, never
-    no checking. This is the call every legacy-era client makes, and it is why
-    `REQUIRE_CLIENT_ROOTS` is still 0."""
+def test_5_a_legacy_era_call_is_refused_now_that_the_flag_ships_on(indexed, rpc):
+    """The rollout, landed: a pre-2026-07-28 client has nowhere to carry a pin,
+    so it is refused with the message that says what to do -- and refused at
+    the pin, not later at `is not indexed`, which the root's own index would
+    otherwise answer."""
     root, _, _ = indexed
-    out = rpc.tool("search", query=ROOT_NEEDLE, root=str(root), mode="lexical")
-    assert out["searched"]["projects"] == 2, out["searched"]
+    out = rpc.call(
+        "tools/call",
+        {"name": "search", "arguments": {"query": ROOT_NEEDLE, "root": str(root)}},
+    )["structuredContent"]
+    assert "sent no workspace roots" in out.get("error", ""), out

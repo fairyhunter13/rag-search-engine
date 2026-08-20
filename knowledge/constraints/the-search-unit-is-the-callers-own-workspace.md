@@ -59,17 +59,24 @@ eligible no earlier than **2027-07-28**. The successors the spec names are a too
 server configuration, i.e. the two things refused above, so when the removal lands this needs a
 decision rather than a swap. `MRTR` in `scope.py` is where the era check lives.
 
-# The rollout, and why the code and the unit disagree on purpose
+# The rollout, and how it ended
 
-`REQUIRE_CLIENT_ROOTS` defaults to `1` in code and the unit ships `0`. Claude Code advertises `roots`
-on every transport but negotiates the `2026-07-28` era behind `tengu_mcp_protocol_negotiation_http`,
-off by default, so a client that cannot answer would be refused outright. `scope._ask` therefore
-gates on the era as well as the capability and returns an empty result rather than raising.
+`REQUIRE_CLIENT_ROOTS` defaults to `1` in code, and as of 2026-08-20 the unit no longer overrides it:
+a call that arrives with no workspace pin is refused. Claude Code advertises `roots` on every
+transport and now negotiates the `2026-07-28` era (`tengu_mcp_protocol_negotiation_http`) from every
+profile on this machine, which is what made the flip safe — see [the pin rollout needed a reason, not
+a count](../decisions/the-pin-rollout-needed-a-reason-not-a-count.md) for the census.
 
-Off means "no pin arrived", never "no checking": a pin that *did* arrive is enforced either way, and
-`test_the_flag_never_softens_a_pin_that_did_arrive` is what stops the switch from becoming a
-permanent bypass any client can trigger by sending an empty list. `scope.enforce` logs the root count
-on every call; journald is where the flip is decided, and that log line goes when the unit line does.
+`scope._ask` still gates on the era as well as the capability and returns an empty result rather than
+raising, because the refusal belongs in `enforce` where it can be returned as an envelope. A pin that
+*did* arrive was always enforced regardless of the flag, and
+`test_the_flag_never_softens_a_pin_that_did_arrive` is what stops an empty list from becoming a
+bypass any client can trigger.
+
+One era cannot be pinned at all: below `2026-07-28` the stateless transport is built
+`can_send_request=False`, so `roots/list` has nowhere to ride. Those callers are `branch=legacy-path`
+and they are refused now. The one on this machine was a test harness — `claude -p --mcp-config`
+*without* `--strict-mcp-config`, which connects on `2025-11-25`.
 
 # The watcher predicate is `enabled`, not `indexed`, and must not be tightened
 
