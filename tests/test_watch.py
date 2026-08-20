@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import queue
+import subprocess
 import threading
 import time
 from pathlib import Path
 
 import pytest
 
-from coderag import config, index, projcfg, registry, watch
+from coderag import config, index, projcfg, registry, tools, watch
 
 
 @pytest.fixture(autouse=True)
@@ -190,12 +191,12 @@ def test_one_broken_config_does_not_take_the_whole_watcher_down(tmp_path, monkey
 
 
 def test_the_tick_restarts_a_watcher_that_died(monkeypatch):
-    """`rearm` only sets a flag, and a dead thread reads no flags."""
+    """A re-arm only sets a flag, and a dead thread reads no flags."""
     from coderag import server
 
     started = []
     monkeypatch.setattr(watch, "start", lambda: started.append(1))
-    monkeypatch.setattr(watch, "rearm", lambda: None)
+    monkeypatch.setattr(watch, "rearm_if_changed", lambda: None)
     monkeypatch.setattr(server.config, "SCHEDULER_TICK_S", 0.01)
     monkeypatch.setattr(server.config, "MODEL_IDLE_UNLOAD_S", 0)
     thread = threading.Thread(target=server._tick, daemon=True)
@@ -258,10 +259,35 @@ def test_the_tick_does_not_rearm_a_watch_set_that_has_not_changed(tmp_path, monk
     assert watch._rearm.is_set(), "a newly registered project was never picked up"
 
 
-def test_rearm_is_observable_so_the_tick_can_pick_up_a_new_project():
-    watch.rearm()
-    assert watch._rearm.is_set()
+def test_the_index_tool_does_not_rearm_a_registry_it_did_not_change(tmp_path, monkeypatch, pin):
+    """The 300 s delete failure, at the layer that caused it.
+
+    `index` used to re-arm on every call. A caller polling it -- every live
+    test, and any agent watching a build -- held the watcher inside the blind
+    window more or less continuously, and inotify replays nothing. So the two
+    halves here are the whole defect: a repeat call must not re-arm, and a call
+    that registers something must.
+    """
+    project = tmp_path / "repeat"
+    project.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    monkeypatch.setattr(index, "submit", lambda *_a, **_k: None)
+    monkeypatch.setattr(watch, "start", lambda: None)
+    monkeypatch.setattr(index, "start_worker", lambda: None)
+
+    workspace = pin(tmp_path)
+    tools.index_project(workspace, root=str(project))
+    monkeypatch.setattr(watch, "_armed", tuple(watch._roots()))
     watch._rearm.clear()
+
+    tools.index_project(workspace, root=str(project))
+    assert not watch._rearm.is_set(), "a repeat index call re-armed the whole fleet"
+
+    newcomer = tmp_path / "newcomer"
+    newcomer.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=newcomer, check=True)
+    tools.index_project(workspace, root=str(newcomer))
+    assert watch._rearm.is_set(), "a new registration was never picked up"
 
 
 def test_paths_that_vanish_before_the_batch_is_read_do_not_crash(tmp_path):

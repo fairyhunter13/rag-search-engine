@@ -31,7 +31,7 @@ okf_version: "0.2"
 
 * [A deleted file stayed searchable in a federated member, from two independent causes](defects/a-deleted-file-stayed-searchable-in-a-member.md) - inotify keys a directory by inode and reports the last-registered path; and the 60 s tick re-armed 120,000 watches unconditionally, which is a blind window with no replay.
 
-* [A delete is lost while a project is still settling](defects/a-delete-is-lost-while-a-project-is-still-settling.md) - OPEN: the same tree loses a delete issued a minute after registration and delivers one in 10 s after a 90 s quiet period; delivery, dispatch and the scoped delete branch are each proven correct.
+* [A delete is lost while a project is still settling](defects/a-delete-is-lost-while-a-project-is-still-settling.md) - RESOLVED: the `index` tool re-armed all ~120,000 inotify watches on every call, and the test polled it, so the events fell in a blind window the probe was opening itself.
 
 * [A released member kept the excludes of the root that released it](defects/a-released-member-kept-the-roots-excludes.md) - Narrowing on join was never mirrored by widening on leave, and `unregister` reported only the rows it deleted — hiding the one member that survives the release.
 
