@@ -41,7 +41,10 @@ REGISTRY_PATH = STATE_DIR / "projects.json"
 REGISTRY_LOCK = STATE_DIR / "projects.lock"
 BACKUP_DIR = STATE_DIR / "backups"
 INDEX_DIR = STATE_DIR / "indexes"
-PROJECT_CONFIG_NAME = ".coderag.toml"
+PROJECT_CONFIG_NAME = ".coderag.yaml"
+# One spelling, not two: `.yml` would be a second name to get right in every
+# repo and a second branch in every test that writes one.
+RETIRED_CONFIG_NAME = ".coderag.toml"
 
 # The registry has been destroyed twice; rotation is cheap and is the only
 # thing that made the second recovery possible.

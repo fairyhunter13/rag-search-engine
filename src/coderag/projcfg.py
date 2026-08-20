@@ -1,4 +1,4 @@
-"""`.coderag.toml`: parsed strictly, and unioned across every claiming root.
+"""`.coderag.yaml`: parsed strictly, and unioned across every claiming root.
 
 Two decisions here are load-bearing.
 
@@ -11,6 +11,11 @@ Effective config is the union across the member's own file and *every* root
 that claims it. The previous implementation took the first match in registry
 order, so a project in two roots inherited one of them by whichever row was
 written first: an order-dependent answer to a question that has a correct one.
+
+YAML is looser than TOML about what a document may be. An empty file parses to
+`None` and means defaults, which is the one shape that means what it looks
+like; a document that is not a mapping is refused rather than defaulted, since
+under TOML it could not be written at all and here it parses fine.
 """
 
 from __future__ import annotations
@@ -18,9 +23,10 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+import yaml
 
 from . import config
 
@@ -40,7 +46,7 @@ _RETIRED = {
 
 
 class ConfigError(ValueError):
-    """A `.coderag.toml` the user needs to fix, phrased so they can fix it."""
+    """A `.coderag.yaml` the user needs to fix, phrased so they can fix it."""
 
 
 @dataclass(slots=True)
@@ -93,9 +99,17 @@ def _flag(section: str, key: str, value: object) -> bool:
 
 def parse(text: str, *, source: str = "<string>") -> ProjectConfig:
     try:
-        raw = tomllib.loads(text)
-    except tomllib.TOMLDecodeError as exc:
+        # safe_load, never load: this file arrives from any repo on disk, and
+        # `load` constructs arbitrary Python objects out of it.
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
         raise ConfigError(f"{source}: {exc}") from exc
+
+    # An empty file is the one shape that means what it looks like.
+    if raw is None:
+        return ProjectConfig()
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{source}: must be a mapping of sections, got {type(raw).__name__}")
 
     for section in raw:
         if section not in _SECTIONS:
@@ -107,7 +121,7 @@ def parse(text: str, *, source: str = "<string>") -> ProjectConfig:
     for section, keys in _SECTIONS.items():
         body = raw.get(section, {})
         if not isinstance(body, dict):
-            raise ConfigError(f"{source}: [{section}] must be a table")
+            raise ConfigError(f"{source}: {section}: must be a mapping")
         for key, value in body.items():
             if key not in keys:
                 raise ConfigError(f"{source}: unknown key [{section}] {key}{_suggest(key, keys)}")
@@ -126,10 +140,26 @@ def load(project: Path) -> ProjectConfig:
     try:
         text = path.read_text()
     except FileNotFoundError:
+        _refuse_retired(Path(project))
         return ProjectConfig()
     except OSError as exc:
         raise ConfigError(f"{path}: {exc}") from exc
     return parse(text, source=str(path))
+
+
+def _refuse_retired(project: Path) -> None:
+    """Loud, because the quiet alternative re-indexes what the file excluded.
+
+    A leftover `.coderag.toml` that is merely ignored takes its excludes with
+    it, and the only symptom is a store that grew. `tools` turns this into a
+    `last_error` on the row rather than taking the daemon down.
+    """
+    old = project / config.RETIRED_CONFIG_NAME
+    if old.exists():
+        raise ConfigError(
+            f"{old}: the config is YAML now -- rename it to "
+            f"{config.PROJECT_CONFIG_NAME} and convert the sections to mappings"
+        )
 
 
 def _dedup(*groups: tuple[str, ...]) -> tuple[str, ...]:

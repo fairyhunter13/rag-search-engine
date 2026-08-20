@@ -175,7 +175,7 @@ def test_one_broken_config_does_not_take_the_whole_watcher_down(tmp_path, monkey
     for path in (broken, good):
         path.mkdir()
         registry.claim(path, direct=True)
-    (broken / ".coderag.toml").write_text('[index]\nexcludes = ["x/*"]\n')
+    (broken / config.PROJECT_CONFIG_NAME).write_text('index:\n  excludes: ["x/*"]\n')
 
     monkeypatch.setattr(config, "WATCH_DEBOUNCE_MS", 100)
     watch.start()
