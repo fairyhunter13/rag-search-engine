@@ -37,3 +37,9 @@ end to end against the real daemon. A legacy-protocol client on the same daemon 
 is now a thing that can be read rather than inferred: any profile still short will say which of the
 two reasons it is. Flipping now would refuse every call from a client that has not been checked, and
 nothing has checked four of them.
+
+The check is close to a formality — all five profiles carry a byte-identical `coderag` entry
+(`{"type": "http", "url": "http://127.0.0.1:8765/mcp"}`), so what negotiates the era is the Claude
+Code binary and not the profile. Close to, not the same as: the era is negotiated per session, and
+the reason a criterion is written per profile is that "should be identical" is what the four
+unchecked ones already look like.
