@@ -45,6 +45,29 @@ def _git_files(project: Path) -> list[str] | None:
     return [p for p in out.stdout.decode("utf-8", "replace").split("\0") if p]
 
 
+def git_ignored(project: Path, rels: list[str]) -> set[str]:
+    """Which of these git excludes, for a caller that has no `ls-files` to filter.
+
+    `candidates` gets this free from `--exclude-standard`; the watcher does not,
+    and the gap is a build cache that no pass will ever index waking the indexer
+    on every write to it.
+    """
+    if not rels:
+        return set()
+    try:
+        out = subprocess.run(
+            ["git", "check-ignore", "--stdin", "-z"],
+            cwd=project,
+            input="\0".join(rels).encode(),
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return {p for p in out.stdout.decode("utf-8", "replace").split("\0") if p}
+
+
 def _walked_files(project: Path) -> list[str]:
     """Fallback for a directory git does not manage.
 
