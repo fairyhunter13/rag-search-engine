@@ -18,7 +18,9 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import anyio
 import pytest
+from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.resolve import ListRoots
 from mcp_types import CLIENT_INFO_META_KEY, ClientCapabilities, ListRootsResult
 
@@ -298,12 +300,36 @@ def test_the_log_names_the_client_and_whether_it_was_asked(caplog):
     assert "branch=asked roots=0" in caplog.text, caplog.text
 
 
-def test_the_branch_survives_the_resolver_boundary(two, pin, caplog):
-    """The defect this replaced a `ContextVar` for. A sync resolver runs in a
-    copied context that is discarded, so a branch decided in `_ask` and read in
-    `enforce` read its default in production while reading correctly here --
-    same-thread tests are exactly where that bug is invisible. Passing the
-    verdict through the tool is what makes the two agree."""
+def test_the_verdict_reaches_enforce_from_a_real_resolver(caplog):
+    """The defect this replaced a `ContextVar` for, driven the only way that can
+    fail: through the framework's own resolver machinery.
+
+    `call_tool` runs `_verdict` and `_ask` as the daemon does, so a sync
+    resolver crosses `anyio.to_thread.run_sync` here -- which is where the
+    ContextVar's write was discarded and `enforce` read `no resolver ran` while
+    a root had arrived. A verdict handed in by the test cannot see that.
+
+    The legacy branch, because the asked branch returns `ListRoots` and the
+    round trip that answers it needs a client. That is the population the flag
+    refuses, so it is also the one worth holding here.
+    """
+    ctx = Context(mcp_server=tools.mcp)
+    ctx._request_context = SimpleNamespace(
+        session=SimpleNamespace(client_capabilities=None, client_params=None),
+        protocol_version="2025-06-18",
+        meta={CLIENT_INFO_META_KEY: {"name": "probe", "version": "9"}},
+        request=None,
+    )
+    with caplog.at_level(logging.INFO, logger=scope.log.name):
+        out = anyio.run(tools.mcp.call_tool, "search", {"query": "x", "root": "/tmp"}, ctx)
+
+    assert "client=probe/9 proto=2025-06-18 branch=legacy-path roots=0" in caplog.text, caplog.text
+    assert "branch=direct" not in caplog.text, "the tool never received the resolved verdict"
+    assert "sent no workspace roots" in out.structured_content["error"], out
+
+
+def test_a_supplied_verdict_reaches_enforce_with_the_pin(two, pin, caplog):
+    """The pinned half, which the resolver test above cannot reach in process."""
     mine, _ = two
     verdict = scope._verdict(_Ctx(_ROOTS, scope.MRTR, client=("claude-code", "2.1.235")))
     with caplog.at_level(logging.INFO, logger=scope.log.name):
