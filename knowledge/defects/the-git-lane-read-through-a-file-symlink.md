@@ -4,7 +4,7 @@ resource: src/coderag/discover.py, tests/test_discover.py
 title: A committed file symlink was read through, in the lane that runs by default
 description: "`git ls-files` lists a file symlink as an ordinary path and `is_file()` follows it, so a repo containing `notes.md -> ~/private/notes.md` indexed that content and attributed it to the containing project — refused by the walk lane, accepted by the git lane, which is the default."
 tags: [discovery, scope, content-escape, resolved]
-status: resolved
+status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T23:40:00Z }
 ---
 

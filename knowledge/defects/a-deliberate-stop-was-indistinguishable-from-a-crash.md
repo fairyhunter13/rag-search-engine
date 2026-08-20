@@ -4,7 +4,7 @@ resource: src/coderag/server.py, tests/test_restart.py, src/coderag/systemd.py
 title: A deliberate stop was indistinguishable from a crash, because the exit that avoids the crash was unreachable
 description: "uvicorn waited on MCP's open streams, so systemd SIGKILLed at 90 s and fired OnFailure on every ordinary stop — and the existing restart tests could not see it, because their stop helper kills after 30 s and reports success."
 tags: [daemon, shutdown, systemd, mcp, testing]
-status: fixed
+status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T09:15:00Z }
 ---
 

@@ -4,7 +4,7 @@ resource: src/coderag/search.py, tests/test_scope.py
 title: An unflagged project stayed fully searchable, because the gate asked whether the row existed
 description: "`registry.get` returns disabled rows and unflagging deliberately deletes no store, so a project the user explicitly turned off answered searches by name. The error string had been claiming three conditions the code never checked."
 tags: [registry, search, scoping]
-status: fixed
+status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T18:00:00Z }
 ---
 
