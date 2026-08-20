@@ -175,10 +175,9 @@ def enforce(target: Path, pinned: ListRootsResult, verdict: Verdict | None = Non
     `/` and `$HOME` can never become one.
     """
     roots = paths(pinned)
-    # The rollout's only observable, and `branch=asked roots=0` is the exact
-    # population the flag waits on. journald keeps seven days and cannot be
-    # counted per client; the ledger is what gives the count a denominator.
-    # Both go when the unit line goes.
+    # Kept past the rollout it was built for: the refusal below is now visible
+    # breakage, and this is what says which client hit it and why. journald
+    # keeps seven days and cannot be grouped by client.
     verdict = verdict or DIRECT
     log.info("%s", verdict.line(len(roots)))
     pinledger.record(verdict, len(roots))
