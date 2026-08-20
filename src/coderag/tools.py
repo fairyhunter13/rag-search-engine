@@ -65,9 +65,6 @@ def index_project(pinned: scope.Pinned, root: str = "", enabled: bool = True) ->
         scope.enforce(target, pinned)
     except scope.ScopeError as exc:
         return {"error": str(exc)}
-    if not target.is_dir():
-        return {"error": f"{target} is not a directory"}
-
     if not enabled:
         # Unflagging never deletes an index directory. Both fleet-wide index
         # wipes in this engine's history came from something that deleted store
@@ -93,6 +90,13 @@ def index_project(pinned: scope.Pinned, root: str = "", enabled: bool = True) ->
             "enabled": False,
             "members_released": [str(p) for p in removed],
         }
+
+    # After the unflag branch, not before it: a project whose directory has been
+    # deleted is exactly the row an operator most needs to turn off, and gating
+    # the whole tool on `is_dir` left two of them stuck enabled forever, retried
+    # and logged as a failure at every start.
+    if not target.is_dir():
+        return {"error": f"{target} is not a directory"}
 
     registry.claim(target, direct=True)
     try:

@@ -87,6 +87,24 @@ def test_unflagging_releases_the_row_and_never_the_index_directory(tmp_path, mon
     assert db.exists(), "unflagging must never delete a store"
 
 
+def test_a_project_whose_directory_is_gone_can_still_be_turned_off(tmp_path, monkeypatch, pin):
+    """The row an operator most needs to unflag is the one that stopped
+    existing. While `is_dir` gated the whole tool, two such rows sat enabled
+    across every restart: reconcile retried them, `doctor` named them, and
+    nothing on the surface could act on them."""
+    monkeypatch.setattr(watch, "start", lambda: None)
+    monkeypatch.setattr(index, "start_worker", lambda: None)
+    project = tmp_path / "gone"
+    project.mkdir()
+    registry.claim(project, direct=True)
+    project.rmdir()
+
+    out = tools.index_project(pin(project), str(project), enabled=False)
+
+    assert out["enabled"] is False, out
+    assert project not in [e.path for e in registry.enabled_projects()]
+
+
 def test_unflagging_a_root_re_walks_the_members_it_released(tmp_path, monkeypatch, pin):
     """The asymmetry that made a root's excludes outlive the root.
 
@@ -255,6 +273,35 @@ def _tool_names():
 def test_search_from_the_cli_reports_the_error_rather_than_a_traceback(tmp_path, capsys):
     assert cli.main(["search", "anything", str(tmp_path)]) == 2
     assert "error" in capsys.readouterr().err
+
+
+def test_doctor_names_a_store_no_row_claims(tmp_path, monkeypatch, capsys):
+    """The row-driven half starts from a row, so a store whose row is gone was
+    the one class it could never reach: 143 dirs, 0.46 GiB, under a `doctor`
+    that had been reporting 0 problems."""
+    monkeypatch.setattr(cli.gpu, "providers", lambda: ["CUDAExecutionProvider"])
+    monkeypatch.setattr(cli.gpu, "free_vram_bytes", lambda: 0)
+    kept = tmp_path / "kept"
+    kept.mkdir()
+    registry.claim(kept, direct=True)
+    registry.set_enabled(kept, False)
+    config.index_path(kept).parent.mkdir(parents=True)
+    orphan = config.INDEX_DIR / "gone-0123456789abcdef"
+    orphan.mkdir(parents=True)
+    (orphan / "index.db").write_bytes(b"x" * 2048)
+
+    code = cli.main(["doctor"])
+
+    out = capsys.readouterr().out
+    assert code == 1, out
+    assert "UNCLAIMED gone-0123456789abcdef" in out
+    # A disabled row keeps its store by policy, so reporting it would make the
+    # walk fire on all 88 of them.
+    assert "kept" not in out
+
+    assert cli.main(["doctor", "--prune"]) == 0
+    assert not orphan.exists()
+    assert config.index_path(kept).parent.exists()
 
 
 def test_the_full_flag_is_the_only_thing_that_empties_a_store():

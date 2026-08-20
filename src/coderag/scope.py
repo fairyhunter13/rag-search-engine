@@ -56,9 +56,14 @@ def _ask(ctx: Context) -> ListRoots | ListRootsResult:
     empty result is not a silent pass: `enforce` refuses it under the flag.
     """
     caps = ctx.client_capabilities
+    # Which of the two, not how many: 4409 calls logged "0 root(s)" and the
+    # count alone cannot say whether the flag is one client setting away or
+    # whether the pin can never arrive at all.
     if caps is None or caps.roots is None:
+        log.info("workspace pin: no ask, client advertises no roots capability")
         return ListRootsResult(roots=[])
     if not (ctx.protocol_version and is_version_at_least(ctx.protocol_version, MRTR)):
+        log.info("workspace pin: no ask, protocol %s is below %s", ctx.protocol_version, MRTR)
         return ListRootsResult(roots=[])
     return ListRoots()
 
