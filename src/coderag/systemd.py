@@ -40,6 +40,20 @@ ExecStart={executable or sys.executable} -m coderag.cli serve
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
+# A strictly-later backstop behind server.py's own {config.SHUTDOWN_DEADLINE_S} s deadline.
+# Without it systemd's 90 s default applied, which is the exact window the stop
+# outage was measured in -- and at 90 s a SIGKILL reads as a failure and pages.
+TimeoutStopSec={config.SHUTDOWN_DEADLINE_S + 5}
+# This is a background indexer sharing a laptop with the person using it. The
+# weights are shares, not caps: an idle machine still gets the whole card and
+# the whole disk, and a busy one stops losing its scroll to a fleet pass.
+Nice=10
+CPUWeight=20
+IOWeight=20
+# High, not Max: over the limit the kernel reclaims and throttles rather than
+# OOM-killing, and a killed daemon loses the walk. Measured 2.14-2.29 GiB with
+# both models resident, so 4G is headroom for a batch and not a ceiling to hit.
+MemoryHigh=4G
 Environment=PYTHONUNBUFFERED=1
 # The governor is off by default and this is the run it exists for: unattended,
 # overnight, on a card that throttles at 87 C. It costs 0.04% of run time.
