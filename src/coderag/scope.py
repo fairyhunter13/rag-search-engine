@@ -74,11 +74,17 @@ def paths(pinned: ListRootsResult) -> list[Path]:
 
 
 def default_root(pinned: ListRootsResult) -> Path:
-    """What `root=""` means. The daemon's cwd is `$HOME` -- unregistered, and in
-    `FORBIDDEN_ROOTS` besides -- so the old fallback could only ever error, which
-    is what forced every caller to type an absolute path in the first place."""
+    """What `root=""` means, and an error when nothing says.
+
+    The fallback used to be the daemon's cwd, which is `$HOME`: a rootless call
+    from a client that sends no roots came back as "call index(root=$HOME)",
+    telling the caller to index their entire home directory. Measured against a
+    real session, which took the advice.
+    """
     roots = paths(pinned)
-    return roots[0] if roots else Path.cwd()
+    if not roots:
+        raise ScopeError("no workspace root arrived with this call -- pass root=<project path>")
+    return roots[0]
 
 
 def enforce(target: Path, pinned: ListRootsResult) -> None:

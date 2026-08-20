@@ -166,6 +166,21 @@ def test_the_watcher_reports_whether_it_is_actually_running(tmp_path):
     assert not watch.watching()
 
 
+def test_a_live_thread_is_not_the_same_answer_as_this_project_being_watched(tmp_path):
+    """What `index` reports as `watching`. A registered project is not yet an
+    armed one, and a write in between is lost -- so the discriminator is that
+    the thread is alive for both halves and the answer still changes."""
+    registry.claim(tmp_path, direct=True)
+    watch.start()
+    try:
+        assert watch.watching()
+        assert not watch.armed(tmp_path)
+        watch._armed = tuple(watch._roots())
+        assert watch.armed(tmp_path)
+    finally:
+        watch.stop()
+
+
 def test_one_broken_config_does_not_take_the_whole_watcher_down(tmp_path, monkeypatch):
     """A `ConfigError` raised while building the per-project config escaped the
     thread. Nothing restarts a watcher and `watching()` was the only thing that
