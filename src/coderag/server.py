@@ -10,7 +10,9 @@ Three lifecycle facts, each bought with an outage:
 **Shutdown calls `os._exit`.** CUDA EP static destructors abort with signal 134
 during normal CPython finalization. Under `Restart=on-failure` that is a restart
 loop, not a crash -- the unit comes back, exits 134 again, and the only symptom
-is a daemon that looks healthy in between.
+is a daemon that looks healthy in between. Reaching that exit needs
+`timeout_graceful_shutdown`: uvicorn otherwise waits on MCP's open streams
+until systemd SIGKILLs the process and the exit never runs.
 
 **The idle timer is what makes `release_models` real.** Unprompted, an idle
 daemon holds 12.2 GB with 3.5 GB free on a 16 GB card, because the ONNX BFC
@@ -134,6 +136,12 @@ def serve(host: str = "", port: int = 0) -> None:
         port=port or config.PORT,
         log_level="info",
         access_log=False,
+        # Without this `uvicorn.run` never returns and the exit below is dead
+        # code: MCP streamable HTTP holds its connections open, so a graceful
+        # shutdown waits for clients that are not going to disconnect. systemd
+        # then SIGKILLs at TimeoutStopSec, which fires OnFailure on every
+        # deliberate stop -- measured at 90 s and result 'timeout'.
+        timeout_graceful_shutdown=5,
     )
     _shutdown_exit()
 
