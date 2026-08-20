@@ -165,15 +165,13 @@ SOURCE = (
 )
 
 
-def test_the_header_carries_path_imports_and_the_enclosing_declaration():
-    """Finding 8's whole claim: a chunk taken from the middle of a class knows
-    which class it is in, without a parser."""
-    chunks = chunk_text(SOURCE, rel_path="src/auth/session.py", size=20)
-    tail = chunks[-1]
+def test_the_header_carries_the_path_and_nothing_else():
+    """A chunk from the middle of a class knows which file it is in. It no
+    longer claims to know which class: the derived line measured flat on two
+    corpora and was deleted, and this asserts it did not come back."""
+    tail = chunk_text(SOURCE, rel_path="src/auth/session.py", size=20)[-1]
 
-    assert "src/auth/session.py" in tail.header
-    assert "import jwt" in tail.header and "from .models import User" in tail.header
-    assert "in: class SessionStore" in tail.header
+    assert tail.header == "src/auth/session.py"
 
 
 def test_the_header_reaches_the_embedder_and_never_the_stored_body():

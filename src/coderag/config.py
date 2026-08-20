@@ -152,14 +152,12 @@ CHUNK_CHARS = _env_int("CHUNK_CHARS", 2000)
 # has to clean up. Kept as a knob because Phase 3 measures 0 against 300.
 CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 0)
 
-# The scope header prepended to the embedded and FTS text (never the stored
-# body), as two independent components rather than one switch. A single
-# `CHUNK_HEADER=0` arm removes the path and the derived line together, and on
-# the docs corpus 48.6% of eval queries have their heading echoed in the
-# positive's filename -- so that arm measures the derived line and a filename
-# identity shortcut at once, and cannot evidence either. Two flags span the 2x2.
+# Prepended to the embedded and FTS text, never to the stored body. One
+# component now: the derived line it used to pair with measured flat on docs and
+# on code and is gone. Caveat on the docs number only: 48.6% of those queries
+# have their heading echoed in the positive's filename, so part of that arm is a
+# filename shortcut. The code corpus has no such echo and still pays -0.1233.
 CHUNK_HEADER_PATH = _env_flag("CHUNK_HEADER_PATH", True)
-CHUNK_HEADER_DERIVED = _env_flag("CHUNK_HEADER_DERIVED", True)
 
 # Use MarkdownSplitter (same wheel) for doc-langs. Off by default and a bake-off
 # arm, not an edit: it removed every broken boundary in the 50-file sample -- 4
@@ -168,12 +166,12 @@ CHUNK_HEADER_DERIVED = _env_flag("CHUNK_HEADER_DERIVED", True)
 # trade and `--corpus docs` is what settles it.
 CHUNK_MD_SPLITTER = _env_flag("CHUNK_MD_SPLITTER", False)
 
-# Bump on any change to boundaries or to the header, including the per-type
-# arms. Neither is covered by `ProjectConfig.signature()`, which versions
-# excludes, so before this existed a header change rewrote what gets embedded
-# while every store on disk still read as current -- stale in the one direction
-# nothing reports.
-CHUNK_ALGO = 2
+# Bump on any change to boundaries or to the header. Neither is covered by
+# `ProjectConfig.signature()`, which versions excludes, so before this existed a
+# header change rewrote what gets embedded while every store on disk still read
+# as current -- stale in the one direction nothing reports. 3: the derived
+# header line was deleted, so every earlier store embedded a different string.
+CHUNK_ALGO = 3
 
 # ------------------------------------------------------------------ retrieval
 
