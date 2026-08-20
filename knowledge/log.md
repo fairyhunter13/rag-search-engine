@@ -7,6 +7,7 @@ title: coderag knowledge history
 
 ## 2026-08-21
 
+- **Update**: the checker pin moves to `okfrules` v0.2.1, where `NoIntraBundleWikilinks` joins `Standard()`. It was `-strict`-only while one fleet bundle still carried bare wikilinks; that conversion finished and all ten bundles measured zero, so the rule now runs in every pinned repo rather than only the two that build their own checker. `Strict()` adds `LogVerbs` alone. This retires the last sentence of the entry below it: the gate here can now say the bundle is clean of wikilinks, and the 13 log verbs outside the vocabulary no longer stand in the way, because they were never `Standard()`'s to red.
 - **Update**: the bundle's 13 intra-bundle wikilinks become relative markdown links. Nothing dangled; what the syntax hid was the next target to go away, because a checker cannot see inside `[[...]]`. The gate here runs `okfrules check`, whose `Standard()` set does not carry `NoIntraBundleWikilinks` -- that rule is `-strict`, and `-strict` also carries `LogVerbs`, which this log's 13 verbs outside the vocabulary would red. So the bundle is now clean of them and the gate still cannot say so; converting first is what makes the rule adoptable at all.
 
 ## 2026-08-20
