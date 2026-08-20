@@ -45,17 +45,17 @@ jobs:
       - name: Compile check
         run: python -m compileall -q src/coderag
 
-      # Must be >= okf's go.mod minimum: setup-go sets GOTOOLCHAIN=local, so `go install`
+      # Must be >= okfrules' go.mod minimum: setup-go sets GOTOOLCHAIN=local, so `go install`
       # cannot fetch a newer toolchain and fails outright rather than adapting.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7
         with:
           go-version: "1.26"
 
       # Pinned: `@latest` lets this gate's verdict change with no commit in this repo.
-      - name: Install okf
-        run: go install github.com/fairyhunter13/okf/cmd/okf@v0.1.0
+      - name: Install okfrules
+        run: go install github.com/fairyhunter13/okfrules/cmd/okfrules@v0.2.0
 
-      # Here rather than in the unit job, which is the only place `okf` is
+      # Here rather than in the unit job, which is the only place the checker is
       # installed. These tests shell out to it and fail closed when it is
       # absent -- correctly, and that is what turned the unit lane red.
       - name: Knowledge bundle conformance
@@ -64,7 +64,7 @@ jobs:
       # Not `continue-on-error`. The bundle is clean under -Werror today, and a
       # gate whose failure is swallowed reports the same green as a passing one.
       - name: Knowledge bundle warnings
-        run: okf check -Werror knowledge
+        run: okfrules check -Werror knowledge
 
   test:
     name: Unit tests (no GPU, no daemon)
