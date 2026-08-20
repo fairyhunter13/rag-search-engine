@@ -12,6 +12,7 @@ okf_version: "0.2"
 * [The search unit is the caller's own workspace plus what it federates](constraints/the-search-unit-is-the-callers-own-workspace.md) - The root was a string the model wrote, so any of ~159 registered projects was reachable by naming it; the boundary now comes from the client's own roots, and the honest claim for it is containment rather than authorization.
 * [No amount of served prose makes a client prefer this server over its own grep](constraints/served-prose-does-not-beat-grep.md) - Three escalations lost to grep on a literal string, so the agent layer asks what the client's own tools cannot answer — plus what `--allowedTools` does not do.
 * [Nine nodes run on the CPU EP in both exports, so the GPU rule is written about tensor math rather than about nodes](constraints/nine-nodes-run-on-the-cpu-and-that-is-the-design.md) - `disable_cpu_ep_fallback` refuses both models over shape plumbing ORT pins to CPU on purpose; an op allowlist plus a 1% time bound is what enforces the rule instead.
+* [The CPU side of an indexing pass is already flat, and six arms failed to move it](constraints/the-cpu-side-of-an-indexing-pass-is-already-flat.md) - A pass costs ~1.1 mean cores and none of six knobs cleared its pre-committed threshold; `MALLOC_ARENA_MAX=2`, the one people reach for first, made it 27% worse.
 
 # Decision
 
