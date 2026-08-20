@@ -98,11 +98,14 @@ def _loop() -> None:
                 # thread down, and a dead watcher is indistinguishable from a
                 # quiet one: nothing restarts it and every other project stops
                 # noticing writes. Drop the project, keep the fleet.
-                log.warning("not watching %s: %s", root, exc)
+                # Until the registry changes or the daemon restarts: fixing the
+                # file alters no row, so `rearm_if_changed` never fires on it.
+                log.warning("not watching %s until it is re-registered: %s", root, exc)
                 with contextlib.suppress(Exception):
                     registry.update(root, last_error=str(exc))
 
         roots = [r for r in roots if r in configs]
+        watched = tuple(roots)
         if not roots:
             if _stop.wait(config.SCHEDULER_TICK_S):
                 return
@@ -118,7 +121,9 @@ def _loop() -> None:
             # Only now. Establishing ~120,000 watches takes seconds, and a write
             # in that window is lost -- so anything waiting on `armed` has to
             # wait for the first yield, not for the decision to rebuild.
-            _armed = _intent
+            # What was armed, not what was intended: the two differ by whatever
+            # the config loop dropped, and `armed` is asked before a write.
+            _armed = watched
             _dispatch(batch, roots, configs)
             if _rearm.is_set() or _stop.is_set():
                 break

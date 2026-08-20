@@ -11,15 +11,17 @@ through into `search.search`, which would load a model on the dense lane.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from mcp.server.mcpserver.resolve import ListRoots
 from mcp_types import ClientCapabilities, ListRootsResult
 
-from coderag import config, registry, scope, tools
+from coderag import config, federation, registry, scope, tools
 
 
 def _project(path: Path, *, enabled: bool = True, indexed: bool = True) -> Path:
@@ -160,16 +162,75 @@ def test_a_rootless_call_with_no_pin_names_the_fix_rather_than_home():
         assert str(Path.home()) not in out["error"]
 
 
+# ------------------------------------------------- the pin and federation
+
+
+def test_a_pinned_call_reaches_a_member_that_sits_outside_the_pin(tmp_path, pin):
+    """The design claim the constraint doc is built on, and nothing tested it:
+    members sit outside the workspace by design and are reached *through* the
+    root. A change making `expand` pin-filtered would break it silently."""
+    member = _project(tmp_path / "outside" / "member")
+    root = _project(tmp_path / "root")
+    (root / "link").symlink_to(member)
+    federation.register(root)
+
+    scope.enforce(root, pin(root))  # the call itself is in the workspace
+    assert not member.is_relative_to(root), "the member has to be outside for this to mean anything"
+    assert federation.expand(root) == [root, member]
+
+
+def test_reach_stops_at_one_level(tmp_path, pin):
+    """The other direction: a change making `expand` transitive breaks the same
+    design and the suite stayed green for both."""
+    third = _project(tmp_path / "outside" / "third")
+    member = _project(tmp_path / "outside" / "member")
+    (member / "link").symlink_to(third)
+    root = _project(tmp_path / "root")
+    (root / "link").symlink_to(member)
+    federation.register(member)
+    federation.register(root)
+
+    assert federation.expand(root) == [root, member], "A federating B federating C reached C"
+
+
+def test_a_member_cannot_be_named_directly_from_a_root_pinned_session(tmp_path, pin):
+    """Reachable through the root is not the same as nameable. Containment is
+    what the pin buys, and a member outside the workspace is outside it."""
+    member = _project(tmp_path / "outside" / "member")
+    root = _project(tmp_path / "root")
+    (root / "link").symlink_to(member)
+    federation.register(root)
+
+    with pytest.raises(scope.ScopeError, match="outside this session's workspace"):
+        scope.enforce(member, pin(root))
+
+
+def test_a_workspace_on_a_subdirectory_reaches_the_projects_the_parent_federates(tmp_path, pin):
+    """The ancestor arm composed with federation, which is how every editor
+    opened on `repo/backend` actually calls this."""
+    member = _project(tmp_path / "outside" / "member")
+    root = _project(tmp_path / "root")
+    (root / "link").symlink_to(member)
+    federation.register(root)
+    sub = root / "backend"
+    sub.mkdir()
+
+    scope.enforce(root, pin(sub))
+    assert member in federation.expand(root)
+
+
 # ------------------------------------------------------- when the ask is made
 
 
 class _Ctx:
-    """Only the two attributes `_ask` reads. A real `Context` would need a live
+    """Only the attributes `_ask` reads. A real `Context` would need a live
     session, which is the thing this branch decides not to talk to."""
 
-    def __init__(self, caps, version):
+    def __init__(self, caps, version, client=None):
         self.client_capabilities = caps
         self.protocol_version = version
+        info = SimpleNamespace(name=client[0], version=client[1]) if client else None
+        self.session = SimpleNamespace(client_params=SimpleNamespace(clientInfo=info))
 
 
 _ROOTS = ClientCapabilities(roots={"listChanged": True})
@@ -203,3 +264,24 @@ def test_the_ask_is_made_when_the_client_can_answer_it():
     """The control. Without it the four above are satisfied by an `_ask` that
     never asks anyone, which is a pin that never arrives."""
     assert isinstance(scope._ask(_Ctx(_ROOTS, scope.MRTR)), ListRoots)
+
+
+def test_the_log_names_the_client_and_whether_it_was_asked(caplog):
+    """1768 zero-root pins were attributed to nobody. A count that cannot be
+    split by client decides nothing, and the flag is waiting on that split."""
+    ctx = _Ctx(_ROOTS, scope.MRTR, client=("claude-code", "2.1.235"))
+    with caplog.at_level(logging.INFO, logger=scope.log.name):
+        scope._ask(ctx)
+        with contextlib.suppress(scope.ScopeError):
+            scope.enforce(Path("/nowhere"), ListRootsResult(roots=[]))
+    assert "claude-code/2.1.235" in caplog.text, caplog.text
+    # The third case the count conflated: asked, and answered with nothing.
+    assert "0 root(s), asked claude-code/2.1.235" in caplog.text, caplog.text
+
+
+def test_a_client_that_sends_no_info_is_logged_as_such(caplog):
+    """`clientInfo` is optional on 2026-07-28+, so "unidentified" has to be a
+    value in the population rather than a missing line."""
+    with caplog.at_level(logging.INFO, logger=scope.log.name):
+        scope._ask(_Ctx(None, scope.MRTR))
+    assert "client unidentified advertises no roots capability" in caplog.text, caplog.text

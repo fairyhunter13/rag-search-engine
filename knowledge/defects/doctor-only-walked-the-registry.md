@@ -34,3 +34,20 @@ restart lanes, which is how the mechanism was found at all.
 So `doctor --prune` exists rather than a runbook of `rm`: deleting a store no row names is safe by
 construction — nothing can reach it, and a path registered again is indexed from nothing anyway.
 Unflagging is untouched, because unflagging keeps the row and the row keeps the store.
+
+# Amendment, 2026-08-20: two claims corrected and the backlog closed
+
+**"Unflagging keeps the row" is wrong**, and the safety argument above leaned on it. `registry`
+deletes a row that no root claims any more, so unflagging a federated member removes the row and
+leaves the store — which is exactly how an unclaimed store is generated. The remaining half stands
+and is what `--prune` actually rests on: no row names the store, and a path registered again is
+indexed from nothing. The same sentence was in `cli.py` as a comment and is gone.
+
+**The six stores were not attributed correctly.** `tests/test_restart.py` runs on its own
+`CODERAG_STATE_DIR`, so its stores are never counted here; the live lane is the generator.
+
+The 143-store, 0.46 GiB backlog is pruned. As of this measurement the registry holds 236 rows and
+**0** unclaimed stores. And the walk itself moved: it lives in `registry.unclaimed_stores()` now,
+called by both `doctor` and `/healthz`, because the fleet fixture needs the same number. What that
+walk got wrong under concurrency is [prune raced a store the daemon was
+writing](prune-raced-a-store-the-daemon-was-writing.md).

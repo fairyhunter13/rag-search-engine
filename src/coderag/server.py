@@ -103,10 +103,15 @@ async def lifespan(_app) -> AsyncIterator[None]:
 
 
 async def healthz(_request) -> JSONResponse:
+    # One load for both: the count and the digest have to describe the same
+    # registry, or a fixture comparing them across a run compares two moments.
+    rows = registry.load()
     return JSONResponse(
         {
             "status": "ok",
-            "projects": len(registry.enabled_projects()),
+            "projects": sum(1 for e in rows.values() if e.enabled),
+            "fleet_digest": registry.fleet_digest(rows),
+            "unclaimed_stores": len(registry.unclaimed_stores()),
             "models_loaded": embed.loaded(),
             "providers": embed.bound_providers(),
             "watching": watch.watching(),

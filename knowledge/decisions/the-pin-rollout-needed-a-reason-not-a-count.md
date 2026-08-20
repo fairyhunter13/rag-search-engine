@@ -43,3 +43,21 @@ The check is close to a formality — all five profiles carry a byte-identical `
 Code binary and not the profile. Close to, not the same as: the era is negotiated per session, and
 the reason a criterion is written per profile is that "should be identical" is what the four
 unchecked ones already look like.
+
+# Amendment, 2026-08-20: the criterion is replaced, because it was unreadable
+
+"A real pin from all five profiles" cannot be checked. journald names no client at all — no
+`clientInfo` was logged, the formatter dropped `%(name)s`, and the access log is off — and the five
+profiles' `coderag` entries are kept byte-identical by `sync_global_mcp` at SessionStart, so there
+was never a per-profile variable to observe. Waiting longer produces no evidence.
+
+What the journal did show is a third case this decision did not name: of ~1865 zero-root pins, 97
+took the no-capability branch, **none** took the era branch, and the remaining ~1768 were `_ask`
+asking and the client answering with an **empty list**. At `REQUIRE_CLIENT_ROOTS=1` every one of
+those is refused.
+
+So the criterion is now: flip when the answered-empty count reaches zero. `scope` distinguishes
+"answered empty" from "answered with roots" in the log and carries the client's name and version, so
+that population is attributable for the first time. See [empty root answers from clients nothing
+identifies](../defects/empty-root-answers-from-clients-nothing-identifies.md). The flag stays at
+`0` until then.
