@@ -21,8 +21,11 @@ Gate: `uv run pytest tests/test_okf_bundle.py`, which fails rather than skips wi
 
 ## Two rules that outlive the rebuild
 
-**GPU or nothing.** CPU inference is forbidden and asserted four times over in `gpu.py`. A working
-CPU path silently becomes the production path: it is 30× slower and nothing fails.
+**GPU or nothing.** CPU inference is forbidden. A working CPU path silently becomes the production
+path: it is 30× slower and nothing fails. `gpu.py` asserts it three times on *which providers the
+session got* and once — `check_placement` — on **where the nodes actually went**, which is the only
+one that can see a graph ORT quietly split. Nine shape-plumbing nodes per export are expected and
+allowed; anything else is fatal.
 
 **The tracked tree is publishable.** This repo is public and MIT. No real company name, device
 name, or absolute home path in tracked content — `NAME_BAN` guards it, and an unset `NAME_BAN` is

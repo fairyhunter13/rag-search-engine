@@ -11,6 +11,7 @@ okf_version: "0.2"
 * [This host cannot produce an admissible latency number while it throttles](constraints/this-host-cannot-produce-an-admissible-latency-number.md) - The card runs at ~15% of rated clock, so a timing figure measured here measures the host; recall survives, latency does not — and the amendment corrects a lifetime counter read as live state.
 * [No amount of served prose makes a client prefer this server over its own grep](constraints/served-prose-does-not-beat-grep.md) - Three escalations lost to grep on a literal string, so the agent layer asks what the client's own tools cannot answer — plus what `--allowedTools` does not do.
 
+* [Nine nodes run on the CPU EP in both exports, so the GPU rule is written about tensor math rather than about nodes](constraints/nine-nodes-run-on-the-cpu-and-that-is-the-design.md) - `disable_cpu_ep_fallback` refuses both models over shape plumbing ORT pins to CPU on purpose; an op allowlist plus a 1% time bound is what enforces the rule instead.
 # Decision
 
 * [The embedder is settled by a tie-break, because the two finalists are not distinguishable](decisions/the-embedder-is-settled-by-a-tie-break.md) - bge-base and gte-modernbert differ by 0.023 recall@10 at p=0.39, so a pre-committed order decides it; the header arm is the one result that is not a tie.
