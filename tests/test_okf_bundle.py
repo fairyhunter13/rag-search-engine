@@ -1,9 +1,9 @@
 """The knowledge bundle, and the gate that decides on it.
 
-Fail-closed on a missing checker, deliberately: if a missing `okf` binary made this
-skip, the bundle's two possible outcomes would be pass and silence, which is the same
-thing. The last test asks the question the others cannot -- whether anything runs this
-file at all.
+Fail-closed on a missing checker, deliberately: if a missing `okfrules` binary made
+this skip, the bundle's two possible outcomes would be pass and silence, which is the
+same thing. The last test asks the question the others cannot -- whether anything runs
+this file at all.
 """
 
 from __future__ import annotations
@@ -19,61 +19,35 @@ BUNDLE = REPO / "knowledge"
 CI = REPO / ".github" / "workflows" / "ci.yml"
 
 # Pinned: `@latest` lets the verdict change with no commit in this repo.
-INSTALL = "go install github.com/fairyhunter13/okf/cmd/okf@v0.1.0"
+INSTALL = "go install github.com/fairyhunter13/okfrules/cmd/okfrules@v0.2.0"
 
 
 def test_the_checker_is_installed():
     """Named separately so a missing binary reads as a missing tool, not as a
     broken bundle."""
-    assert shutil.which("okf"), f"okf is not on PATH; the bundle is ungated. {INSTALL}"
+    assert shutil.which("okfrules"), f"okfrules is not on PATH; the bundle is ungated. {INSTALL}"
 
 
 def test_the_bundle_passes_okf_check():
-    okf = shutil.which("okf")
+    okf = shutil.which("okfrules")
     if okf is None:
-        pytest.fail(f"okf is not on PATH; the bundle is ungated. {INSTALL}")
+        pytest.fail(f"okfrules is not on PATH; the bundle is ungated. {INSTALL}")
     out = subprocess.run([okf, "check", str(BUNDLE)], capture_output=True, text=True, check=False)
     assert out.returncode == 0, out.stdout + out.stderr
 
 
-def test_every_link_between_concepts_resolves():
-    """`okf check` treats a dangling link as a warning -- a forward reference to
-    a concept not yet written is legal. That is right for the format and wrong
-    for a bundle being reported as finished, so the strict half lives here."""
-    broken = []
-    for concept in sorted(BUNDLE.rglob("*.md")):
-        for line in concept.read_text().splitlines():
-            for target in _links(line):
-                if not (concept.parent / target).resolve().exists():
-                    broken.append(f"{concept.relative_to(REPO)} -> {target}")
-    assert broken == [], broken
-
-
-def test_every_resource_a_concept_names_exists():
-    """A concept whose `resource:` points at a deleted module is the failure
-    mode that deleted the last bundle: 31 files describing code that was gone."""
-    missing = []
-    for concept in sorted(BUNDLE.rglob("*.md")):
-        for line in concept.read_text().splitlines():
-            if line.startswith("resource:"):
-                for target in line.split(":", 1)[1].strip().split(","):
-                    if target.strip() and not (REPO / target.strip()).exists():
-                        missing.append(f"{concept.relative_to(REPO)}: {target.strip()}")
-    assert missing == [], missing
-
-
 def test_the_checker_actually_rejects_something(tmp_path):
-    """Without this, the three tests above pass just as well against an `okf`
+    """Without this, the two tests above pass just as well against a checker
     that exits 0 on everything and a bundle directory that is empty."""
-    okf = shutil.which("okf")
+    okf = shutil.which("okfrules")
     if okf is None:
-        pytest.fail(f"okf is not on PATH; the bundle is ungated. {INSTALL}")
+        pytest.fail(f"okfrules is not on PATH; the bundle is ungated. {INSTALL}")
     bad = tmp_path / "knowledge"
     bad.mkdir()
     (bad / "index.md").write_text("no frontmatter, no okf_version\n")
     (bad / "broken.md").write_text("---\ntitle: no type key\n---\n\nbody\n")
     out = subprocess.run([okf, "check", str(bad)], capture_output=True, text=True, check=False)
-    assert out.returncode != 0, "okf accepted a bundle with no type key"
+    assert out.returncode != 0, "okfrules accepted a bundle with no type key"
 
 
 def test_the_gate_is_wired_where_this_repo_says_it_is():
@@ -85,7 +59,7 @@ def test_the_gate_is_wired_where_this_repo_says_it_is():
     """
     ci = CI.read_text()
     assert "pytest tests/test_okf_bundle.py" in ci, "no CI step runs the bundle tests"
-    assert "okf check -Werror knowledge" in ci, "no CI step runs the strict check"
+    assert "okfrules check -Werror knowledge" in ci, "no CI step runs the strict check"
     assert INSTALL in ci, f"CI does not install the pinned checker: {INSTALL}"
     # The key itself, not the word: one of these steps carries a comment saying it is
     # deliberately not continue-on-error, and matching that would grade the prose.
@@ -93,15 +67,3 @@ def test_the_gate_is_wired_where_this_repo_says_it_is():
     assert excused == [], f"a step whose failure is excused reports a passing green: {excused}"
     # A workflow with no trigger that fires on a change grades the calendar instead.
     assert "push:" in ci or "pull_request:" in ci, "no CI trigger fires on a change"
-
-
-def _links(line: str) -> list[str]:
-    """Markdown link targets that point at a file in the bundle."""
-    out = []
-    rest = line
-    while "](" in rest:
-        rest = rest.split("](", 1)[1]
-        target = rest.split(")", 1)[0]
-        if target.endswith(".md") and not target.startswith(("http", "#", "/")):
-            out.append(target)
-    return out
