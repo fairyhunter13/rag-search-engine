@@ -15,6 +15,7 @@ import time
 
 import pytest
 
+from coderag import config
 from live import Rpc, require_clear_gpu, require_daemon, until
 
 pytestmark = pytest.mark.live
@@ -80,7 +81,7 @@ def member(tmp_path_factory):
 def root(tmp_path_factory, member):
     """A root that reaches the member only through a directory symlink."""
     path = _repo(tmp_path_factory.mktemp("root"), {"app.py": "import member\n"})
-    (path / ".coderag.toml").write_text('[index]\nexclude = ["thirdparty/*"]\n')
+    (path / config.PROJECT_CONFIG_NAME).write_text('index:\n  exclude: ["thirdparty/*"]\n')
     (path / "linked-member").symlink_to(member, target_is_directory=True)
     return path
 
@@ -179,7 +180,7 @@ def test_7_a_typo_in_the_config_is_an_error_that_names_the_nearest_key(rpc, tmp_
     """A silently ignored exclude typo is how an index ends up three times too
     large, so the failure has to be loud and at the call that caused it."""
     project = _repo(tmp_path_factory.mktemp("typo"), {"a.py": "x = 1\n"})
-    (project / ".coderag.toml").write_text('[index]\nexcludes = ["wiki/*"]\n')
+    (project / config.PROJECT_CONFIG_NAME).write_text('index:\n  excludes: ["wiki/*"]\n')
     out = rpc.tool("index", root=str(project))
     error = until(
         lambda: out.get("last_error") or rpc.tool("index", root=str(project)).get("last_error"),
