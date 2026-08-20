@@ -264,7 +264,11 @@ def run_arm(name: str, project: Path, scratch: Path, lane: str, limit: int, kind
         check=False,
     )
     if out.returncode != 0:
-        return {"arm": name, "error": out.stderr.strip().splitlines()[-1:] or ["no output"]}
+        # Not the last line: ORT logs a recoverable OOM warning after the real
+        # traceback, so a one-line report names the wrong cause and reads as a
+        # sizing problem in an arm that died of something else.
+        tail = out.stderr.strip().splitlines()[-20:]
+        return {"arm": name, "error": tail or ["no output"]}
     return {"arm": name} | json.loads(out.stdout)
 
 
