@@ -42,11 +42,11 @@ There was no test that registered a project, disabled it, and then searched it. 
 either searched something it had just indexed or searched something never registered, and both of
 those pass under the old predicate. The two that cover it now are built from `tmp_path` fixtures in
 the autouse-isolated registry and assert shape only, never a real path — see
-[[the-search-unit-is-the-callers-own-workspace]], which is the constraint this defect sits under.
+[the-search-unit-is-the-callers-own-workspace](../constraints/the-search-unit-is-the-callers-own-workspace.md), which is the constraint this defect sits under.
 
 Falsified by reverting the predicate to `entry is None`: seven tests in `tests/test_scope.py` fail,
 including both of these. One of them then loads a model on the way down and the interpreter aborts
-at finalization — which is [[a-cancelled-task-group-cannot-reach-a-shielded-thread]]'s CUDA-134
+at finalization — which is [a-cancelled-task-group-cannot-reach-a-shielded-thread](a-cancelled-task-group-cannot-reach-a-shielded-thread.md)'s CUDA-134
 exit showing up as a side effect, and incidental confirmation that a removed gate really does fall
 through into `search.search`.
 

@@ -43,4 +43,4 @@ decimals of an unpaired mean.
 
 Read the deltas within a run, never the levels: the same model scored 0.61 and 0.19 on two stores of
 the same corpus, purely from distractor count. See
-[[the-header-dispatches-on-type-the-splitter-does-not]] for what this instrument was built to settle.
+[the-header-dispatches-on-type-the-splitter-does-not](../decisions/the-header-dispatches-on-type-the-splitter-does-not.md) for what this instrument was built to settle.

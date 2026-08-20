@@ -10,7 +10,7 @@ generated: { by: claude/opus-5, at: 2026-08-20T15:30:00Z }
 
 # It reproduced after the fix
 
-[[a-deliberate-stop-was-indistinguishable-from-a-crash]] is `status: fixed` and its fix is still in
+[a-deliberate-stop-was-indistinguishable-from-a-crash](a-deliberate-stop-was-indistinguishable-from-a-crash.md) is `status: fixed` and its fix is still in
 force. This is a second, independent hang behind it. Journal, 2026-08-20:
 
 ```
@@ -58,7 +58,7 @@ irrelevant: they return regardless, and nothing downstream of them is bounded.
 Found while testing this: the old page's `_shutdown_exit` never ran on a stop. uvicorn's
 `capture_signals` restores the handler it replaced and re-raises the caught signal *before*
 `uvicorn.run` returns, so the process died under the default disposition at `-15`. Corrected in
-full on [[a-deliberate-stop-was-indistinguishable-from-a-crash]]; the one-line fix is a SIGTERM
+full on [a-deliberate-stop-was-indistinguishable-from-a-crash](a-deliberate-stop-was-indistinguishable-from-a-crash.md); the one-line fix is a SIGTERM
 handler installed in `serve` before `uvicorn.run`, so ours is the handler uvicorn restores into.
 Without it every `returncode == 0` assertion below is unreachable, and the deadline's own exit would
 have been the only path that ever produced a zero.
