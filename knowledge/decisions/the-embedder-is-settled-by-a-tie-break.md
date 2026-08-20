@@ -1,6 +1,6 @@
 ---
 type: Decision
-resource: src/coderag/config.py, tests/eval.py, tests/significance.py
+resource: src/coderag/config.py, src/coderag/embed.py, tests/eval.py, tests/significance.py, tests/test_embed_gpu.py, tests/test_pooling.py
 title: The embedder is settled by a tie-break, because the two finalists are not distinguishable
 description: "Ten arms over 300 paired queries: bge-base and gte-modernbert differ by 0.023 recall@10 with p=0.39, so the pre-committed order decides it — fp16 ONNX, then window, then incumbency. The header arm is the one result that is not a tie."
 tags: [embedding, bake-off, statistics, chunking]
@@ -74,3 +74,23 @@ is reported as a tie and not as a winner: its raw p is 0.030 and its corrected p
 
 Named follow-ups, not run: Qwen3-Embedding-0.6B, EmbeddingGemma-300M, granite-embedding-r2. Each is
 another arm plus an ONNX-export verification, and each that wins costs a full re-index.
+
+# Wired, 2026-08-20
+
+Recorded first and shipped second, which is the shape this repo keeps finding: `config.py` read
+*"Provisional until the bake-off replaces it"* for a day after the decision was `stable`.
+`EMBED_MODEL`, `EMBED_POOLING` -> `cls`, `EMBED_ONNX_FILE` -> `onnx/model_fp16.onnx`, and both
+prefixes -> `""`.
+
+fp16 was the first tie-break criterion and it was verified rather than assumed, since the free-fp16
+measurement was nomic's: the whole `-m gpu` lane, 30 tests, passes on the fp16 export — GPU provider,
+768 dims, unit norm, and the natural-language query still ranking its own document first. The fp32
+`onnx/model.onnx` is published beside it and `CODERAG_EMBED_ONNX_FILE` is the rollback.
+
+The prefix mechanism stays and only the strings are blank. `side` still raises on an unknown value,
+and `test_the_sides_differ_exactly_when_the_prefixes_do` asserts both halves: the two sides agree now
+*and* stop agreeing under a prefix, so a prefix silently reintroduced for a model not trained with
+one fails there rather than in a recall number six months later.
+
+Every store on disk now reads incompatible on `embed_model` and rebuilds. That is why this landed
+before the fleet index and not after.

@@ -87,10 +87,12 @@ WATCH_POLL_MS = _env_int("WATCH_POLL_MS", 5000)
 
 # --------------------------------------------------------------------- models
 
-# Provisional until the bake-off replaces it. Whatever wins, the pair below
-# must stay consistent with the store's `meta`, which forces a rebuild on a
-# mismatch rather than mixing two vector spaces in one table.
-EMBED_MODEL = _env("EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
+# Settled by a pre-committed tie-break, not by a win: gte and bge differ by
+# 0.023 recall@10 at p=0.39, and the first criterion was "an fp16 export
+# exists". See `knowledge/decisions/the-embedder-is-settled-by-a-tie-break.md`.
+# The pair below must stay consistent with the store's `meta`, which forces a
+# rebuild on a mismatch rather than mixing two vector spaces in one table.
+EMBED_MODEL = _env("EMBED_MODEL", "Alibaba-NLP/gte-modernbert-base")
 EMBED_DIMS = _env_int("EMBED_DIMS", 768)
 EMBED_MAX_TOKENS = _env_int("EMBED_MAX_TOKENS", 768)
 
@@ -98,15 +100,17 @@ EMBED_MAX_TOKENS = _env_int("EMBED_MAX_TOKENS", 768)
 # carries with it, after its prefixes and its context limit -- and the one that
 # is invisible when wrong, because every pooling produces a plausible unit
 # vector. bge and gte-modernbert are trained on CLS; nomic and jina on the mean.
-EMBED_POOLING = _env("EMBED_POOLING", "mean")
+EMBED_POOLING = _env("EMBED_POOLING", "cls")
 
 RERANK_MODEL = _env("RERANK_MODEL", "Alibaba-NLP/gte-reranker-modernbert-base")
 RERANK_MAX_TOKENS = _env_int("RERANK_MAX_TOKENS", 512)
 
-# Which export to pull. Every model in the bake-off publishes fp16 and int8
-# siblings beside `model.onnx`, so "a lighter model" is first a lighter file of
-# the same model -- no re-index, no second vector space to keep coherent.
-EMBED_ONNX_FILE = _env("EMBED_ONNX_FILE", "onnx/model.onnx")
+# Which export to pull. A lighter model is first a lighter file of the same
+# model -- no re-index, no second vector space to keep coherent. fp16 is the
+# tie-break's first criterion and it is the default here because of that; it
+# scored identically to fp32 on nomic, and `tests/test_embed_gpu.py` is where
+# that is checked for gte rather than assumed.
+EMBED_ONNX_FILE = _env("EMBED_ONNX_FILE", "onnx/model_fp16.onnx")
 RERANK_ONNX_FILE = _env("RERANK_ONNX_FILE", "onnx/model.onnx")
 
 # Matryoshka truncation. nomic-embed-text-v1.5 is trained so a prefix of the
@@ -115,11 +119,12 @@ RERANK_ONNX_FILE = _env("RERANK_ONNX_FILE", "onnx/model.onnx")
 # default. EMBED_DIMS stays the width the store is built against either way.
 EMBED_TRUNCATE_DIMS = _env_int("EMBED_TRUNCATE_DIMS", 0)
 
-# The prefixes are a precondition, not a tuning knob: the measured margin
-# between two embedders on this corpus was entirely the prefixes -- +0.008
-# unprefixed, a tie, against +0.062 prefixed.
-DOCUMENT_PREFIX = _env("DOCUMENT_PREFIX", "search_document: ")
-QUERY_PREFIX = _env("QUERY_PREFIX", "search_query: ")
+# Blank, because gte-modernbert is not trained with any. They are still a
+# precondition wherever a model has them -- +0.008 unprefixed against +0.062
+# prefixed on nomic, the whole margin -- so the mechanism stays and only the
+# strings are empty. `side` is load-bearing regardless: see embed.DOCUMENT.
+DOCUMENT_PREFIX = _env("DOCUMENT_PREFIX", "")
+QUERY_PREFIX = _env("QUERY_PREFIX", "")
 
 # Thermal governor for the index path only. 0 disables it. The default is off
 # because a desktop card that never reaches 84 C would only pay for the poll;

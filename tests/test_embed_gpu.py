@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 from onnxruntime.capi.onnxruntime_pybind11_state import Fail as OrtFail
 
-from coderag import embed, gpu
+from coderag import config, embed, gpu
 
 pytestmark = pytest.mark.gpu
 
@@ -23,6 +23,7 @@ DOCS = [
     "SELECT id, email FROM users WHERE active = 1",
 ]
 QUERY = "how do I read the user configuration file"
+PREFIX = "search_query: "
 
 
 def _vram_mib() -> int:
@@ -57,13 +58,17 @@ def test_the_right_document_wins_on_a_natural_language_query():
     assert int(sims.argmax()) == 0
 
 
-def test_the_two_prefixes_produce_different_vectors():
-    """If they did not, the +0.062 recall@1 the prefixes bought would be
-    unobtainable and nothing else in the pipeline would report it."""
+def test_the_sides_differ_exactly_when_the_prefixes_do():
+    """The shipping model is trained with no prefixes, so the two sides must
+    agree -- and must stop agreeing the moment a prefix is reintroduced. Half
+    of this is the old +0.062 assertion, kept: if a prefix could not move the
+    vector, that gain would be unobtainable and nothing would report it."""
+    assert config.QUERY_PREFIX == "" and config.DOCUMENT_PREFIX == ""
     e = embed.get_embedder()
-    as_query = e.embed([QUERY], side="query")[0]
-    as_document = e.embed([QUERY], side="document")[0]
-    assert float(as_query @ as_document) < 0.999
+    same = e.embed([QUERY], side="query")[0] @ e.embed([QUERY], side="document")[0]
+    assert float(same) > 0.999
+    with_prefix = e.embed([f"{PREFIX}{QUERY}"], side="query")[0]
+    assert float(with_prefix @ e.embed([QUERY], side="query")[0]) < 0.999
 
 
 @pytest.mark.parametrize("side", ["banana", "", "Document", "passage", None])
