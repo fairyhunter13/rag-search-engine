@@ -4,7 +4,7 @@ resource: src/coderag/index.py
 title: The thermal pause is not what indexing costs, and the profile says so
 description: A 25-second py-spy sample of a live indexing worker put 80.7% of self-time inside the ONNX forward pass and 0.04% inside cool_down, so the cooldown stays and the lever is batch size.
 tags: [indexing, performance, gpu]
-status: stable
+status: deprecated
 generated: { by: claude/opus-5, at: 2026-08-19T16:20:00Z }
 ---
 
@@ -24,6 +24,14 @@ A 7,000-file project takes ~28 minutes, and the obvious suspect was
 By containing frame: the embed call 84.2%, `chunk_text` 8.4%, `_flush` 7.3%, and **`cool_down`
 one sample — 0.04%**. Removing the thermal governor buys nothing measurable, and it is the only
 thing standing between an 87 °C card and an unbounded build. It stays.
+
+**Deprecated 2026-08-21.** It went. The profile above is not what reversed it — the number still
+holds, and that is the point: costing nothing is also *saving* nothing, and what `cool_down` did
+cost was a config knob, a `/healthz` field, a systemd `Environment=` line, a test module and this
+concept. Deleted for size, not for speed. `elapsed_s` is uncorrected wall clock now and `cooled_s`
+is gone from the progress payload; throttling is the driver's problem. `free_vram_bytes()` and
+`adaptive_batch()` stayed — VRAM path, not thermal. The batch-size section below is untouched by
+any of this and is still the live result.
 
 # Where the time is not: batch size
 

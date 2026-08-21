@@ -102,6 +102,23 @@ def test_inherited_excludes_are_counted_not_inferred(repo, tmp_path):
     assert index.suppressed_by_excludes(repo, (str(root),)) == 1
 
 
+def test_a_stored_language_is_re_derived_rather_than_left_stale(tmp_path):
+    """The measured shape: adding `.groovy` to LANGS reclassified nothing,
+    because the content-hash diff never rewrites a file that did not change."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    conn = store.connect(project)
+    conn.execute(
+        "INSERT INTO files (path, mtime, size, sha256, lang) VALUES (?, 0, 0, 'x', '')",
+        ("build.groovy",),
+    )
+    conn.commit()
+
+    assert index._relang(conn) == 1
+    assert store.file_langs(conn)["build.groovy"] == "groovy"
+    assert index._relang(conn) == 0
+
+
 # ------------------------------------------------------- the pass, on real GPU
 
 

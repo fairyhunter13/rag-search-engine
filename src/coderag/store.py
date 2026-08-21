@@ -171,6 +171,17 @@ def file_digests(conn: sqlite3.Connection) -> dict[str, str]:
     return {r["path"]: r["sha256"] for r in conn.execute("SELECT path, sha256 FROM files")}
 
 
+def file_langs(conn: sqlite3.Connection) -> dict[str, str]:
+    """path -> lang. Read back because `lang` is derived and then stored."""
+    return {r["path"]: r["lang"] for r in conn.execute("SELECT path, lang FROM files")}
+
+
+def set_langs(conn: sqlite3.Connection, pairs: list[tuple[str, str]]) -> int:
+    """(lang, path) pairs. Touches no chunk, so it costs no embedding."""
+    conn.executemany("UPDATE files SET lang = ? WHERE path = ?", pairs)
+    return len(pairs)
+
+
 def delete_files(conn: sqlite3.Connection, paths: list[str]) -> int:
     """Remove files and every trace of their chunks from all three tables.
 
