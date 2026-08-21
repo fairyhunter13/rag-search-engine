@@ -165,7 +165,12 @@ LANGS = {
     ".css": "css", ".scss": "css", ".sass": "css", ".less": "css", ".styl": "css",
     ".json": "json", ".json5": "json", ".jsonc": "json", ".jsonl": "json",
     ".yaml": "yaml", ".yml": "yaml", ".toml": "toml", ".ini": "ini", ".cfg": "ini",
-    ".conf": "ini", ".local": "ini", ".properties": "ini", ".editorconfig": "ini",
+    # `.conf` is not a linguist extension and is kept anyway: it is 191 files here
+    # and every one is a config file. `.local` was the same bet and lost -- the
+    # 1,740 it labeled are nginx server blocks, which are not an INI dialect.
+    ".conf": "ini", ".properties": "ini", ".editorconfig": "ini",
+    ".cnf": "ini", ".service": "ini", ".socket": "ini", ".target": "ini",
+    ".timer": "ini", ".mount": "ini", ".network": "ini", ".container": "ini",
     ".neon": "neon",
     ".xml": "xml", ".xsd": "xml", ".xsl": "xml", ".xslt": "xml", ".plist": "xml",
     ".md": "markdown", ".mdx": "markdown", ".markdown": "markdown",

@@ -59,3 +59,9 @@ The prediction that caught this was "under 3,000", written before the change and
 softer claim — "the no-language bucket should shrink" — is satisfied by 6,506, and the defect
 survives. See [the ignore list only ever matched at the root](the-ignore-list-only-ever-matched-at-the-root.md),
 found the same way.
+
+Then the fixed number cleared the prediction at 2,077, and that reading was also wrong. 1,740 of it
+was `.local` mapped to `ini` — nginx server blocks, an extension in no linguist language, added in
+the same commit. The true figure is **3,782** and the prediction misses. Both errors point one way:
+a number was accepted because it landed on the side of the threshold that ended the check. The scan
+confirms a prediction; only a diff against the upstream source confirms a table.
