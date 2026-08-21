@@ -1,6 +1,6 @@
 ---
 type: Constraint
-resource: src/coderag/gpu.py, tests/test_thermal.py
+resource: src/coderag/gpu.py
 title: This host cannot produce an admissible latency number while it throttles
 description: The laptop's GPU runs at a sixth of rated clock, so every timing figure measured here measures the host rather than the engine -- and the cause is a power cap, not the heat the first reading blamed.
 tags: [thermal, measurement, latency, kill-criterion]
@@ -51,9 +51,11 @@ dissipate more heat, and it does not move 89 °C. The throttle costs roughly **6
 order of magnitude more than the spread between any two encoders on the shortlist — so a model swap
 argued on thermal grounds is optimising the smaller term.
 
-`gpu.cool_down()` is the half this repo owns: a bounded wait between flushes, outside every
-transaction and the GPU lock, because an index has no deadline and a hot card should index slowly
-rather than not at all. The half it does not own is the power cap — `nvidia-smi -pl` needs root, and
+This repo owns no half of the throttling problem any more. It used to: `gpu.cool_down()` waited
+between flushes until the card was under `CODERAG_INDEX_TEMP_C`, and it was deleted on 2026-08-21
+for measuring at 0.04% of indexing self-time — see
+[the thermal pause is not what indexing costs](../decisions/the-thermal-pause-is-not-what-indexing-costs.md).
+Throttling is the driver's now. The other half was never ours either — `nvidia-smi -pl` needs root, and
 2026's power-capping literature converges on ~70% TDP holding ~93% of throughput. A *deliberate* cap
 also beats this involuntary one for measurement, because an erratic clock is what makes a number
 unrepeatable.

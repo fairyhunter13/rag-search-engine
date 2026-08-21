@@ -15,10 +15,30 @@ splitter and there will not be a second, because every chunker in the index path
 re-index to compare, doubles the store, and multiplies the eval matrix by its own arity — over the
 axis the evidence rates lowest.
 
-This question was asked four times during the rebuild, in four different phrasings ("do we need
+This question was asked five times during the rebuild, in five different phrasings ("do we need
 every chunker from every library", "what about a semantic chunker", "what about tree-sitter",
-"what about cAST"). It will be asked again, which is why the answer is written down rather than
-left in the diff.
+"what about cAST", "is it adaptive, could more third-party splitters make it more so"). It will be
+asked again, which is why the answer is written down rather than left in the diff.
+
+Three things a reader of `chunk.py` will otherwise have to rediscover:
+
+- **`CodeSplitter` is in the pinned wheel.** `semantic-text-splitter` 0.32.0 exports
+  `['CodeSplitter', 'MarkdownSplitter', 'TextSplitter']`; `CodeSplitter` is undocumented on the PyPI
+  page and takes a tree-sitter grammar, replacing the newline rung with ascending syntax-tree depth.
+  It is **declined on purpose**, not overlooked. It is the AST family the 864-config study measured
+  as not better, and adopting it costs a `tree_sitter_<language>` package per language, a dispatch
+  that does not exist, and a fallback for every file with no grammar — JSON, SVG, minified JS,
+  config, the whole unlabeled bucket, which is exactly where the boundaries are actually bad.
+- **This is not LangChain's `RecursiveCharacterTextSplitter`.** It binary-searches for the largest
+  ladder rung that fits rather than descending a separator list, and it never splits below the
+  character level, so the degenerate one-character-chunk reports (langchain#10410, #9305) do not
+  transfer. The live corpus agrees: **0.0%** sub-line chunks in go, typescript, java and xml across
+  18,875 chunks.
+- **[arXiv:2608.16586](https://arxiv.org/abs/2608.16586)** (2026-08-17), eight strategies under
+  Fisher randomization over 10,000 permutations with Bonferroni correction across 28 comparisons:
+  **no strategy dominates** — the winner depends on embedder, dataset, corpus size and metric. Prose
+  corpora, so it corroborates rather than governs; 2605.04763 is still the code-specific ruling, and
+  nothing code-specific has been published since.
 
 # What the evidence actually says
 
@@ -88,6 +108,46 @@ Given up: the library's ladder has no **dedent** rung, so a column-0 `def` is no
 arbitrary line break. Accepted rather than worked around — blank lines already separate top-level
 declarations in this corpus, the evidence rates the boundary axis lowest, and re-adding a regex to
 snap boundaries reintroduces the code the library was adopted to delete.
+
+# Measured 2026-08-21: bad boundaries are a filtering problem, not a splitter problem
+
+157 stores, 70,218 files, 232,783 chunks. Counting chunks over 500 characters holding **one line
+break or none** — meaning both the blank-line and the newline rung failed:
+
+| lang | chunks | sub-line |
+|---|---|---|
+| go, typescript, java, xml | 18,875 | 0.0% |
+| php, vue, python, markdown, yaml | 82,429 | 0.6–1.6% |
+| css | 10,924 | 9.1% |
+| json | 25,629 | 13.5% |
+| javascript | 23,487 | 19.4% |
+| html | 1,978 | 22.9% |
+| unlabeled | 38,208 | 27.8% |
+
+10.12% overall, and every point of it is in generated or minified content. Every chunk in the corpus
+is within the 2,000 non-whitespace budget and per-language p50 runs 1,583–1,946, so the splitter
+packs tightly and never overruns. **The fix for the 10% is upstream of the chunker** — the `.svg`,
+minified and lockfile filters that landed the same day — and any splitter swap argued on this number
+is aimed at the wrong module.
+
+Re-measured after those filters landed: **4.64%** over 193,927 chunks, with the whole drop coming
+from content leaving the index rather than from any boundary moving. What is left is json 12.1%,
+javascript 13.6% and html 21.4% — three formats the newline rung cannot help, because minified and
+machine-emitted files have no newlines to find. The prediction on the day was under 4%; recording
+the miss is the point, because it is the number that says filtering is now spent and the next
+increment has to come from the JSON scope header below, which is still unbuilt.
+
+Two things this measurement makes worth doing and neither is done:
+
+- **A JSON key-path scope header.** 25,629 JSON chunks at 13.5%: a chunk starts mid-object with its
+  key in the previous one. The header is the file-path trick one level deeper and needs no new
+  dependency. Unbuilt because the file-path arm is the only header arm with evidence behind it, and
+  building a second on none is what the derived-header line already cost once.
+- **A `max_per_file` A/B.** [arXiv:2608.14838](https://arxiv.org/abs/2608.14838) (2026-08-14):
+  disabling per-file dedup dropped gold-file recall 87.8% → 80.6% but raised single-shot resolve by
+  7.6 pp (GPT) and 3.6 pp (open-weights) — and **reversed to −3.2 pp with BM25**, which this engine
+  fuses with dense. It maps onto `rank.diversify`, needs no re-index and no store rewrite, and the
+  effect is larger than anything in the chunking literature. Separate commit.
 
 Carried risk with its escape hatch: the size callback is Python called from Rust during a binary
 search, O(log n) times per chunk over 61,714 files. If it measures badly, fall back to plain

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from coderag import config, discover, filters
+from coderag import config, discover, filters, ignores
 from coderag.projcfg import ProjectConfig
 
 
@@ -57,6 +57,80 @@ def test_notebooks_and_tables_are_not_indexed(rel):
     assert discover.indexable(rel, ProjectConfig(use_default_ignores=False)), (
         "the refusal must come from DEFAULT_IGNORES, not from a binary or secret rule"
     )
+
+
+@pytest.mark.parametrize("name", ["laravel-env", "prod-env", "env-production", "app.env-enc"])
+def test_the_dash_spellings_of_env_are_refused(name):
+    """`*.env` needs a literal dot, and the dash forms slipped past it.
+
+    `laravel-env` was indexed here with 287 value-bearing assignments in it.
+    """
+    assert filters.is_secret_path(name)
+
+
+@pytest.mark.parametrize("name", ["env-template", ".env-example", "config-sample"])
+def test_a_dash_spelled_template_stays_indexable(name):
+    """Exempted deliberately rather than missed: the exempt list has the dash forms too."""
+    assert not filters.is_secret_path(name)
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "packages/a/node_modules/x.js",
+        "api/vendor/lib.php",
+        "a/b/__pycache__/m.pyc",
+        "sub/.git/config",
+        "app/frontend/dist/bundle.js",
+    ],
+)
+def test_an_ignored_directory_is_ignored_at_any_depth(rel):
+    """The old `node_modules/*` was root-anchored and let 278 files through."""
+    assert not discover.indexable(rel, ProjectConfig())
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "lib/main.dart",
+        "public/index.php",
+        "resources/views/home.blade.php",
+        "testdata/golden.json",
+        "go.mod",
+        "types/api.d.ts",
+        "src/query.sql",
+        "docs/architecture.md",
+    ],
+)
+def test_the_names_refused_from_the_ignore_list_still_index(rel):
+    """The half that catches an over-broad list, which otherwise fails silently.
+
+    Each of these is a directory or suffix some upstream list prunes and this one
+    does not: `lib/` is a Dart source root, `testdata/` the Go fixture convention,
+    `.d.ts` often the only readable form of a dependency's API.
+    """
+    assert discover.indexable(rel, ProjectConfig())
+
+
+def test_every_ignored_directory_is_a_bare_segment():
+    """A slash or a glob character here is an entry the segment matcher never fires on."""
+    for name in ignores.IGNORE_DIRS:
+        assert "/" not in name and not set(name) & set("*?[")
+
+
+@pytest.mark.parametrize(
+    ("rel", "lang"),
+    [("Dockerfile", "dockerfile"), ("ci/Jenkinsfile", "groovy"), ("Makefile", "make")],
+)
+def test_a_file_with_no_extension_still_has_a_language(rel, lang):
+    """`Path.suffix` is empty for 1,760 files here, most of them build definitions."""
+    assert filters.lang_of(rel) == lang
+
+
+def test_generated_icon_markup_is_treated_as_an_image():
+    """8,039 SVGs, nearly all generated, and the top source of chunks with no newline."""
+    assert filters.is_image_path("assets/icons/close.svg")
+    assert not filters.is_binary_ext("go.mod"), "`.mod` is a suffix source uses"
 
 
 def test_nul_byte_sniff_catches_an_extensionless_binary():

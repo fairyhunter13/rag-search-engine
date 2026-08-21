@@ -7,8 +7,9 @@ in git history at `365a235^` and are not a description of anything that exists.
 ## Standing rules
 
 - **No mocks.** A test either calls the real model on the real GPU or touches no model at all.
-- Every file in `src/coderag/` under 300 lines; the largest is 291. The package is 3,928 lines by
-  `wc -l` and **2,197 executable** — blanks, comments and docstrings excluded — the rest carrying
+- Every file in `src/coderag/` under 300 lines; the largest is 287, and
+  `tests/test_public_hygiene.py` enforces it. The package is 4,452 lines by
+  `wc -l` and **2,499 executable** — blanks, comments and docstrings excluded — the rest carrying
   the whys this repo keeps out of prose. The budget is the executable number, so a `wc` figure alone
   never reads as over. Test files are not held to the ceiling: four are over it, each because it
   covers one subject end to end, and splitting a subject to satisfy a line count buys nothing.
