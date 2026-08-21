@@ -39,6 +39,24 @@ No store invalidation, and none should be added. `ProjectConfig.signature()` has
 had to: `discover.changed()` diffs present-against-stored, so a newly-excluded path lands in its
 delete list on the next pass. `RECONCILE_ON_START` cleared the 278 on the next restart.
 
+# The same bug, in the same list, found on the audit after
+
+Fixing it for directories left it standing for **whole filenames**. `package-lock.json`, `go.sum`,
+`gradlew`, `mvnw`, `Package.resolved` and `.terraform.lock.hcl` were all spelled as globs in
+`DEFAULT_IGNORES`, so all of them were root-anchored too, and a monorepo's
+`packages/a/package-lock.json` went straight in: **27 files, 1,290 chunks** of dependency graph
+across the fleet. The change that fixed the directory half *added fifteen more* of these, inert
+except at a repo root.
+
+What hid it is that the ones ending `.lock` were covered anyway by the `*.lock` glob — `fnmatch`'s
+`*` spans `/` — so `Gemfile.lock` and `bun.lock` did match at depth while `pnpm-lock.yaml` and
+`go.sum` did not. A list where half the entries work is harder to doubt than one where none do.
+
+`ignores.IGNORE_NAMES` is the symmetric fix: 21 bare names, lowercased, tested against
+`Path(rel).name`. `DEFAULT_IGNORES` now holds globs only, and a test asserts it —
+`test_the_glob_list_holds_no_whole_filename`, which is the invariant, where a test naming the 21
+would only restate them.
+
 # The half of the test that matters
 
 The obvious test asserts the newly-excluded paths are excluded. The one that catches the real
