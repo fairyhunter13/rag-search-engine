@@ -105,7 +105,9 @@ def indexable(rel: str, cfg: ProjectConfig) -> bool:
     two copies drift on the first pattern anyone adds.
     """
     if cfg.use_default_ignores and (
-        filters.in_ignored_dir(rel) or filters.matches_any(rel, ignores.DEFAULT_IGNORES)
+        filters.in_ignored_dir(rel)
+        or filters.is_ignored_name(rel)
+        or filters.matches_any(rel, ignores.DEFAULT_IGNORES)
     ):
         return False
     if filters.matches_any(rel, cfg.exclude) and not filters.matches_any(rel, cfg.include):

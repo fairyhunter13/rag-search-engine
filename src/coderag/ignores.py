@@ -46,6 +46,21 @@ IGNORE_DIRS = frozenset(
     }
 )  # fmt: skip
 
+# Whole filenames, matched at any depth, for the same reason IGNORE_DIRS is:
+# spelled as globs here they were root-anchored, so a monorepo's
+# `packages/a/package-lock.json` went in -- 27 files and 1,290 chunks of
+# dependency graph across the fleet. Those ending `.lock` were covered anyway
+# by the `*.lock` glob, which is why only some of them leaked.
+IGNORE_NAMES = frozenset(
+    {
+        "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml",
+        "bun.lock", "deno.lock", "composer.lock", "gemfile.lock", "poetry.lock",
+        "pdm.lock", "uv.lock", "pipfile.lock", "go.sum", "flake.lock",
+        "package.resolved", "packages.lock.json", ".terraform.lock.hcl",
+        "gradlew", "gradlew.bat", "mvnw", "mvnw.cmd",
+    }
+)  # fmt: skip
+
 # Globs, root-anchored, and that is deliberate: this list shares its matcher
 # with a project's own `exclude:`, where `wiki/*` means the one at the root.
 DEFAULT_IGNORES = (
@@ -69,27 +84,6 @@ DEFAULT_IGNORES = (
     "*.Designer.cs",
     "*.g.cs",
     "*.lock",
-    "package-lock.json",
-    "npm-shrinkwrap.json",
-    "yarn.lock",
-    "pnpm-lock.yaml",
-    "bun.lock",
-    "deno.lock",
-    "composer.lock",
-    "Gemfile.lock",
-    "poetry.lock",
-    "pdm.lock",
-    "uv.lock",
-    "Pipfile.lock",
-    "go.sum",
-    "flake.lock",
-    "Package.resolved",
-    "packages.lock.json",
-    ".terraform.lock.hcl",
-    "gradlew",
-    "gradlew.bat",
-    "mvnw",
-    "mvnw.cmd",
     # Not a chunker problem, so not a chunker fix. A notebook is JSON holding
     # base64 output blobs and escaped \n that are not newlines, so the splitter's
     # top rung -- runs of blank lines -- does not exist in it and every cut lands
