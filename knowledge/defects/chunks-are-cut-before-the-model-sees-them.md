@@ -6,6 +6,15 @@ description: 2,000 non-whitespace chars produces chunks of p50 904 and p95 1373 
 tags: [chunking, embedding, recall]
 status: deprecated
 generated: { by: claude/opus-5, at: 2026-08-19T16:45:00Z }
+sources:
+  - id: cast
+    resource: https://arxiv.org/abs/2506.15655
+    title: "cAST - chunking via abstract syntax trees, and its chunk unit"
+    author: team:arxiv
+  - id: code-chunking-864
+    resource: https://arxiv.org/abs/2605.04763
+    title: "arXiv:2605.04763 - 864 controlled chunking configurations"
+    author: team:arxiv
 ---
 
 # The two numbers, each defensible alone

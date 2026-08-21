@@ -6,6 +6,27 @@ description: Six splitter libraries and four boundary strategies were compared o
 tags: [chunking, dependencies, retrieval, evidence]
 status: stable
 generated: { by: claude/opus-5, at: 2026-08-19T09:40:00Z }
+sources:
+  - id: code-chunking-864
+    resource: https://arxiv.org/abs/2605.04763
+    title: "arXiv:2605.04763 - 864 controlled chunking configurations over RepoEval and CrossCodeEval"
+    author: team:arxiv
+  - id: no-strategy-dominates
+    resource: https://arxiv.org/abs/2608.16586
+    title: "arXiv:2608.16586 - eight chunking strategies under Fisher randomization"
+    author: team:arxiv
+  - id: practical-code-rag
+    resource: https://arxiv.org/pdf/2510.20609
+    title: Practical Code RAG at Scale
+    author: team:arxiv
+  - id: cast
+    resource: https://arxiv.org/html/2506.15655v1
+    title: "cAST - chunking via abstract syntax trees"
+    author: team:arxiv
+  - id: per-file-dedup
+    resource: https://arxiv.org/abs/2608.14838
+    title: "arXiv:2608.14838 - per-file dedup against single-shot resolve"
+    author: team:arxiv
 ---
 
 # Decision
