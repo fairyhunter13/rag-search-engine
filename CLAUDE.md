@@ -20,7 +20,8 @@ in git history at `365a235^` and are not a description of anything that exists.
 them back in the same commit as the code. The `okf-knowledge-bundle` skill owns how. It is small on
 purpose — a concept that restates a module docstring is not written, and `knowledge/log.md` records
 which ones were refused for that reason.
-Gate: `uv run pytest tests/test_okf_bundle.py`, which fails rather than skips without `okf`.
+Gate: `.githooks/pre-push`, which refuses the push. `uv run pytest tests/test_okf_bundle.py`
+fails rather than skips without `okf` and runs in CI, but only once the change is already pushed.
 
 ## Two rules that outlive the rebuild
 
