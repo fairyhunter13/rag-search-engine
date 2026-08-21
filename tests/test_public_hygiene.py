@@ -41,8 +41,10 @@ def terms() -> list[str]:
     # already fatal; mis-separated has to be too, or fail-closed only covers
     # the half that announces itself.
     if bad := [t for t in split if ":" in t or ";" in t]:
-        pytest.fail(f"CODERAG_NAME_BAN has {len(bad)} token(s) holding a separator; the list is "
-                    "comma-separated and this one was joined with something else")
+        pytest.fail(
+            f"CODERAG_NAME_BAN has {len(bad)} token(s) holding a separator; the list is "
+            "comma-separated and this one was joined with something else"
+        )
     return split
 
 
@@ -136,6 +138,20 @@ def test_no_tracked_line_leaks_a_home_directory_path():
             if HOME_PATH.search(line):
                 found.append(f"{rel}:{number}")
     assert found == [], found
+
+
+def test_no_module_is_over_the_line_ceiling():
+    """CLAUDE.md states the rule and nothing enforced it, so `search.py` reached 332.
+
+    Modules only, because a test file covering one subject end to end is worth
+    more whole than split to satisfy a count.
+    """
+    over = {
+        path.name: len(path.read_text().splitlines())
+        for path in (REPO / "src" / "coderag").glob("*.py")
+        if len(path.read_text().splitlines()) > 300
+    }
+    assert over == {}, over
 
 
 def test_the_registry_is_not_tracked():

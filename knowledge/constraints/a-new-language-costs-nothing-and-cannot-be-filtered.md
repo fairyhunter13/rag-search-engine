@@ -29,6 +29,23 @@ matches on the label, so nothing selects the unlabeled group. That is deliberate
 would name a group whose only membership rule is "we have no name for it" — but it means those
 chunks are reachable only with the filter unset.
 
+# The label was also just wrong for a fifth of the corpus
+
+`lang_of` read `Path(rel).suffix` alone, so every extensionless file classified as `""` **by
+construction** — 1,760 of them here, led by `Dockerfile`, `Jenkinsfile`, `artisan` and `Makefile`,
+the files that say how a project builds. A `filters.FILENAMES` map is consulted after the suffix and
+is three lines. The rest of the 14,639 unlabeled files were `.svg` (8,039, now filtered as images)
+and `.groovy` (2,058, now a `LANGS` entry among ~140 added on 2026-08-21).
+
+Adding to either table reaches an already-indexed file only because `index._relang` re-derives the
+column each pass. Without it the widening was inert on every file whose bytes had not changed —
+see [a derived column was stored and never re-derived](../defects/a-derived-column-was-stored-and-never-re-derived.md).
+
+None of that weakens the paragraph above: the pipeline still consults no allowlist to decide what to
+index, and a language nobody has labeled is still indexed. What the map fixes is the *label*, which
+is only ever a filter value. A file whose name is not in it loses nothing but the ability to be
+named in `lang=`.
+
 The defect was next to it: an unknown `lang` narrowed the corpus to nothing and returned that as an
 ordinary empty result. `mode` had refused unknown values from the first commit; `lang` did not, so
 `lang="pyton"` and `lang="cobol"` both read to a caller as "this repo has nothing" — the one failure

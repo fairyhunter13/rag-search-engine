@@ -232,12 +232,9 @@ def test_the_notifier_is_silent_without_a_socket(monkeypatch):
 # ------------------------------------------------------------------- the unit
 
 
-def test_the_unit_carries_the_two_numbers_that_were_bought_with_outages():
+def test_the_unit_carries_the_number_that_was_bought_with_an_outage():
     text = systemd.unit_text("/usr/bin/python3")
     assert "LimitNOFILE=65536" in text, "150 repos x 3 fds under WAL against a 1024 default"
-    assert "CODERAG_INDEX_TEMP_C=84" in text, (
-        "the governor defaults to off, and the unit is the unattended overnight run"
-    )
     assert "Restart=on-failure" in text
     assert "Type=notify" in text and "WatchdogSec=" in text
 

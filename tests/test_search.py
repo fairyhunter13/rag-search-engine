@@ -57,7 +57,7 @@ def test_the_pool_cut_keeps_more_than_one_hit_from_the_callers_own_project():
     own = [_hit(f"mine{i}.py", rrf=0.9 - i / 100, project="/root") for i in range(10)]
     members = [_hit("theirs.py", rrf=0.95, project=f"/member{i}") for i in range(120)]
 
-    cut = search._pool_cut(own + members, Path("/root"), limit=60)
+    cut = search.pool_cut(own + members, Path("/root"), limit=60)
 
     assert len(cut) == 60
     mine = [h for h in cut if h.project == "/root"]
@@ -71,7 +71,7 @@ def test_the_pool_cut_still_reaches_every_member():
     own = [_hit(f"mine{i}.py", project="/root") for i in range(80)]
     members = [_hit("theirs.py", project=f"/member{i}") for i in range(5)]
 
-    cut = search._pool_cut(own + members, Path("/root"), limit=60)
+    cut = search.pool_cut(own + members, Path("/root"), limit=60)
 
     assert {h.project for h in cut} >= {f"/member{i}" for i in range(5)}
     assert len(cut) == 60
@@ -84,7 +84,7 @@ def test_a_chunk_the_caller_also_has_is_reported_under_their_own_path():
     theirs = _hit("vendor/x.py", "def f():\n    return 1", rrf=0.99, project="/member")
     mine = _hit("vendor/x.py", "def f():\n\treturn 1", rrf=0.10, project="/root")
 
-    out = search._diversify([theirs, mine], k=5, max_per_file=5, root="/root")
+    out = search.diversify([theirs, mine], k=5, max_per_file=5, root="/root")
 
     assert [h.project for h in out] == ["/root"]
 
@@ -93,7 +93,7 @@ def test_the_per_file_cap_never_demotes_a_better_result():
     """Six chunks from one file, one from another, in rank order. The cap has
     to thin the first file without letting the last hit jump the queue."""
     hits = [_hit("a.py", f"chunk {i}") for i in range(6)] + [_hit("b.py", "other")]
-    out = search._diversify(hits, k=4, max_per_file=2)
+    out = search.diversify(hits, k=4, max_per_file=2)
 
     assert [h.rel_path for h in out[:3]] == ["a.py", "a.py", "b.py"]
 
@@ -103,14 +103,14 @@ def test_near_duplicates_collapse_on_normalised_text():
     comparison ignores whitespace: two chunks differing only in indentation are
     the same answer twice."""
     hits = [_hit("a.py", "def f():\n    return 1"), _hit("a.py", "def f():\n\treturn 1")]
-    assert len(search._diversify(hits, k=5, max_per_file=5)) == 1
+    assert len(search.diversify(hits, k=5, max_per_file=5)) == 1
 
 
 def test_a_thin_pool_still_returns_k_results():
     """Diversity is a preference between equally good answers, never a reason
     to return fewer. Without the backfill this returns 2 instead of 5."""
     hits = [_hit("a.py", f"chunk {i}") for i in range(5)]
-    out = search._diversify(hits, k=5, max_per_file=2)
+    out = search.diversify(hits, k=5, max_per_file=2)
 
     assert len(out) == 5
     assert [h.text for h in out[:2]] == ["chunk 0", "chunk 1"], "the best two still lead"

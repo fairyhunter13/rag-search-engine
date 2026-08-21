@@ -144,16 +144,8 @@ EMBED_TRUNCATE_DIMS = _env_int("EMBED_TRUNCATE_DIMS", 0)
 DOCUMENT_PREFIX = _env("DOCUMENT_PREFIX", "")
 QUERY_PREFIX = _env("QUERY_PREFIX", "")
 
-# Thermal governor for the index path only. 0 disables it. The default is off
-# because a desktop card that never reaches 84 C would only pay for the poll;
-# on the laptop this was written for, the card sits three degrees past its own
-# throttle point and the poll is free by comparison.
-INDEX_TEMP_C = _env_int("INDEX_TEMP_C", 0)
-INDEX_TEMP_POLL_S = _env_int("INDEX_TEMP_POLL_S", 5)
 PROGRESS_PATH = STATE_DIR / "progress.json"
 PROGRESS_WRITE_S = _env_int("PROGRESS_WRITE_S", 2)
-INDEX_TEMP_WAIT_S = _env_int("INDEX_TEMP_WAIT_S", 120)
-
 # 0 means adapt to free VRAM at load time.
 EMBED_BATCH = _env_int("EMBED_BATCH", 0)
 RERANK_BATCH = _env_int("RERANK_BATCH", 16)
@@ -171,7 +163,7 @@ CHUNK_CHARS = _env_int("CHUNK_CHARS", 2000)
 
 # Zero, and the same study is why: overlap is negligible (<=0.5 pp) at sizes
 # >=2,000, and at 1,000 it *degrades* EM by 1.2 pp by cutting new content per
-# chunk. It also manufactures the near-duplicates that search._diversify then
+# chunk. It also manufactures the near-duplicates that rank.diversify then
 # has to clean up. Kept as a knob because Phase 3 measures 0 against 300.
 CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 0)
 
@@ -185,8 +177,9 @@ CHUNK_HEADER_PATH = _env_flag("CHUNK_HEADER_PATH", True)
 # Use MarkdownSplitter (same wheel) for doc-langs. Off by default and a bake-off
 # arm, not an edit: it removed every broken boundary in the 50-file sample -- 4
 # unbalanced code fences and 2 mid-table starts, both to 0 -- for 30% more,
-# smaller chunks. Fragmentation is what sank the semantic chunker, so this is a
-# trade and `--corpus docs` is what settles it.
+# smaller chunks. It also has a failure the sample missed: on a code-heavy doc it
+# emits a ~9-char chunk holding only a fence opener, and strips the fence markers
+# from the body. `--corpus docs` is what settles the trade.
 CHUNK_MD_SPLITTER = _env_flag("CHUNK_MD_SPLITTER", False)
 
 # Bump on any change to boundaries or to the header. Neither is covered by
@@ -237,44 +230,6 @@ FORBIDDEN_TREES = frozenset(
         Path.home() / ".local",
         Path.home() / ".config",
     }
-)
-
-DEFAULT_IGNORES = (
-    ".git/*",
-    ".hg/*",
-    ".svn/*",
-    "node_modules/*",
-    "vendor/*",
-    ".venv/*",
-    "venv/*",
-    "__pycache__/*",
-    ".mypy_cache/*",
-    ".pytest_cache/*",
-    ".ruff_cache/*",
-    "target/*",
-    "dist/*",
-    "build/*",
-    ".next/*",
-    ".nuxt/*",
-    "*.min.js",
-    "*.min.css",
-    "*.map",
-    "*.lock",
-    "package-lock.json",
-    "yarn.lock",
-    "composer.lock",
-    "poetry.lock",
-    "uv.lock",
-    # Not a chunker problem, so not a chunker fix. A notebook is JSON holding
-    # base64 output blobs and escaped \n that are not newlines, so the splitter's
-    # top rung -- runs of blank lines -- does not exist in it and every cut lands
-    # mid-object. A CSV has the same shape with the header row stranded in chunk
-    # one. Neither yields a retrievable chunk under any splitter; a format-aware
-    # one would only make the result tidier. Extracting a notebook's code cells
-    # is a real feature and is not this.
-    "*.ipynb",
-    "*.csv",
-    "*.tsv",
 )
 
 # -------------------------------------------------------------------- hygiene

@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import chunk as chunker
-from . import discover, embed, gpu, progress, projcfg, registry, store
+from . import discover, embed, filters, progress, projcfg, registry, store
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +111,24 @@ def _drain() -> None:
             _queue.task_done()
 
 
+def _relang(conn) -> int:
+    """Re-derive `lang` for stored files whose path now maps somewhere else.
+
+    Without this a `LANGS` or `FILENAMES` addition reaches only files that
+    happen to change afterwards: the content-hash diff sees no difference, so
+    2,058 `.groovy` files stay classified as nothing.
+    """
+    stale = [
+        (fresh, path)
+        for path, was in store.file_langs(conn).items()
+        if (fresh := filters.lang_of(path)) != was
+    ]
+    if stale:
+        store.set_langs(conn, stale)
+        conn.commit()
+    return len(stale)
+
+
 def _wipe(conn) -> None:
     for table in ("chunks_fts", "chunks_vec", "chunks", "files"):
         conn.execute(f"DELETE FROM {table}")
@@ -147,6 +165,8 @@ def index_project(project: Path | str, paths: list[str] | None = None) -> dict:
         # *remove* what the new config excludes, not merely stop adding to it,
         # so the whole project is walked rather than the requested subset.
         paths = None
+
+    _relang(conn)
 
     known = store.file_digests(conn)
     if paths is None:
@@ -202,12 +222,6 @@ def _write_files(conn, metas: list, project: Path | str = "") -> int:
             if len(pending) >= BATCH_FILES:
                 written += _flush(conn, pending)
                 pending = []
-                # After the flush, never before: the wait must land while no
-                # transaction is open and no GPU lock is held, or cooling the
-                # card blocks every reader and every query for the pause.
-                progress.phase("cooling")
-                progress.cooled(gpu.cool_down())
-                progress.phase("indexing")
         progress.advance()
     written += _flush(conn, pending)
     progress.finish()

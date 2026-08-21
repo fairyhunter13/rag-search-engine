@@ -66,31 +66,13 @@ def test_finish_beats_the_throttle(monkeypatch):
     assert on_disk["phase"] == "idle"
 
 
-def test_a_cooling_pause_is_named_not_merely_slow(monkeypatch):
-    monkeypatch.setattr(config, "PROGRESS_WRITE_S", 3600)
-    progress.begin("/repo", total=10)
-    progress.phase("cooling")
-    assert progress.read()["phase"] == "cooling", (
-        "a paused card is indistinguishable from a wedged one without this"
-    )
-    progress.cooled(12.0)
-    assert progress.read()["cooled_s"] == 12.0
-
-
-def test_eta_is_wall_clock_so_pauses_are_priced_in():
-    """Half done in 100 s of which 40 s was cooling: 100 s left, not 60 s.
-
-    An ETA off working time alone assumes the pauses stop, which they do not.
-    """
-    state = progress.Progress(
-        project="/repo", done=5, total=10, cooled_s=40.0, started_at=0.0, updated_at=100.0
-    )
+def test_eta_projects_at_the_rate_already_observed():
+    state = progress.Progress(project="/repo", done=5, total=10, started_at=0.0, updated_at=100.0)
     snap = progress.snapshot(state)
     assert snap["eta_s"] == 100.0
     assert snap["percent"] == 50.0
     assert snap["elapsed_s"] == 100.0
-    # Throughput is the other question -- what the card does when it is working.
-    assert snap["files_per_s"] == round(5 / 60.0, 3)
+    assert snap["files_per_s"] == 0.05
 
 
 def test_a_total_of_zero_reports_no_percent_rather_than_dividing():

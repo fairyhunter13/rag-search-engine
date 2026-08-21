@@ -9,10 +9,6 @@ It goes to a file because the readers are out of process. Each bake-off arm is
 its own subprocess with its own `STATE_DIR`, and `import coderag.index` pulls in
 onnxruntime -- so a reader routed through the indexer would pay a GPU-stack
 import to print a percentage.
-
-Time spent cooling is counted separately. A card parked at `INDEX_TEMP_C` looks
-identical to a wedged one from outside, and that ambiguity has already cost an
-afternoon of watching a run nobody could tell was still moving.
 """
 
 from __future__ import annotations
@@ -32,7 +28,6 @@ class Progress:
     phase: str = "idle"
     done: int = 0
     total: int = 0
-    cooled_s: float = 0.0
     started_at: float | None = None  # None, not 0.0: a zero timestamp is a time
     updated_at: float = 0.0
     pid: int = field(default_factory=os.getpid)
@@ -57,12 +52,6 @@ def advance(n: int = 1) -> None:
     _write()
 
 
-def cooled(seconds: float) -> None:
-    _state.cooled_s += max(seconds, 0.0)
-    _state.updated_at = time.time()
-    _write(force=bool(seconds))
-
-
 def phase(name: str) -> None:
     _state.phase = name
     _state.updated_at = time.time()
@@ -80,25 +69,20 @@ def snapshot(state: Progress | None = None) -> dict:
     if s.started_at is None:
         return {}
     elapsed = max(s.updated_at - s.started_at, 0.0)
-    working = max(elapsed - s.cooled_s, 0.0)
     out = {
         "phase": s.phase,
         "files_done": s.done,
         "files_total": s.total,
         "elapsed_s": round(elapsed, 1),
-        "cooled_s": round(s.cooled_s, 1),
         "pid": s.pid,
         "updated_at": s.updated_at,
     }
     if s.total:
         out["percent"] = round(100.0 * s.done / s.total, 1)
     if s.done:
-        # Off the wall clock, so future cooling is priced in at the rate already
-        # observed. Projecting off working time and re-inflating by the duty
-        # cycle is the same number: the `working` term cancels.
         out["eta_s"] = round(max(s.total - s.done, 0) * elapsed / s.done, 1)
-        if working > 0:
-            out["files_per_s"] = round(s.done / working, 3)
+        if elapsed > 0:
+            out["files_per_s"] = round(s.done / elapsed, 3)
     return out
 
 

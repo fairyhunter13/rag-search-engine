@@ -15,7 +15,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config, filters
+from . import config, filters, ignores
 from .projcfg import ProjectConfig
 
 
@@ -88,7 +88,9 @@ def _walked_files(project: Path) -> list[str]:
             if entry.is_symlink():
                 continue  # members are registered and walked under their own path
             if entry.is_dir():
-                if not filters.matches_any(rel, config.DEFAULT_IGNORES):
+                if entry.name not in ignores.IGNORE_DIRS and not filters.matches_any(
+                    rel, ignores.DEFAULT_IGNORES
+                ):
                     stack.append(entry)
             else:
                 found.append(rel)
@@ -102,7 +104,9 @@ def indexable(rel: str, cfg: ProjectConfig) -> bool:
     differently from the indexer wakes it for files it will then refuse, and the
     two copies drift on the first pattern anyone adds.
     """
-    if cfg.use_default_ignores and filters.matches_any(rel, config.DEFAULT_IGNORES):
+    if cfg.use_default_ignores and (
+        filters.in_ignored_dir(rel) or filters.matches_any(rel, ignores.DEFAULT_IGNORES)
+    ):
         return False
     if filters.matches_any(rel, cfg.exclude) and not filters.matches_any(rel, cfg.include):
         return False
