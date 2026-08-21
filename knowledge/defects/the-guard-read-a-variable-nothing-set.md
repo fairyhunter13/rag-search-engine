@@ -5,7 +5,7 @@ title: The publishability guard read a variable nothing set, then a list nothing
 description: "Two independent failures in one guard: the installer wrote a differently-named variable, and once that was fixed it wrote a colon-joined value into a comma-split reader. The first is loud, the second is green."
 tags: [hygiene, guards, resolved]
 status: stable
-generated: { by: claude/opus-5, at: 2026-08-21T04:10:00Z }
+generated: { by: claude/opus-5, at: 2026-08-20T18:14:18Z }
 ---
 
 # Two failures, and only one of them announces itself

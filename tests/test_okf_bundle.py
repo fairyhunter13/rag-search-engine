@@ -19,7 +19,7 @@ BUNDLE = REPO / "knowledge"
 CI = REPO / ".github" / "workflows" / "ci.yml"
 
 # Pinned: `@latest` lets the verdict change with no commit in this repo.
-INSTALL = "go install github.com/fairyhunter13/okf/cmd/okfrules@v0.5.1"
+INSTALL = "go install github.com/fairyhunter13/okf/cmd/okfrules@v0.5.2"
 
 
 def test_the_checker_is_installed():
