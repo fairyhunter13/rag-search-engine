@@ -139,7 +139,10 @@ _BINARY_EXT = frozenset(
         ".parquet", ".orc", ".avro", ".feather", ".arrow",
         ".onnx", ".safetensors", ".pt", ".pth", ".ckpt", ".h5", ".npy", ".npz",
         ".gguf", ".ggml", ".hdf5", ".pkl", ".joblib", ".tflite", ".mlmodel",
-        ".img", ".vhd", ".vmdk", ".qcow2", ".vdi",
+        # `.vhd` is refused here: it is VHDL source as often as a disk image,
+        # and a real image is caught by the NUL sniff anyway. A wrongly-refused
+        # source file is caught by nothing.
+        ".img", ".vmdk", ".qcow2", ".vdi",
         ".psd", ".xcf", ".ai", ".sketch", ".fig", ".blend", ".fbx", ".stl",
         ".pcap", ".der",
     }
@@ -236,8 +239,9 @@ def is_binary_ext(path: Path | str) -> bool:
 
 
 def lang_of(path: Path | str) -> str:
+    """Whole name first: `CMakeLists.txt` is cmake, and its suffix says docs."""
     p = Path(path)
-    return LANGS.get(p.suffix.lower()) or FILENAMES.get(p.name.lower(), "")
+    return FILENAMES.get(p.name.lower()) or LANGS.get(p.suffix.lower(), "")
 
 
 def looks_binary(head: bytes) -> bool:
@@ -270,6 +274,11 @@ def in_ignored_dir(rel: str) -> bool:
     slash -- matches at any depth, and this is that.
     """
     return any(part in ignores.IGNORE_DIRS for part in Path(rel).parts[:-1])
+
+
+def is_ignored_name(rel: str) -> bool:
+    """A generated file identified by its whole name, at any depth."""
+    return Path(rel).name.lower() in ignores.IGNORE_NAMES
 
 
 def matches_any(rel: str, patterns) -> bool:

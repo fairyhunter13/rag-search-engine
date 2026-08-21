@@ -118,6 +118,38 @@ def test_every_ignored_directory_is_a_bare_segment():
         assert "/" not in name and not set(name) & set("*?[")
 
 
+def test_every_ignored_name_is_bare_and_lowercase():
+    """The set is probed with a lowercased name, so an uppercase entry is unreachable."""
+    for name in ignores.IGNORE_NAMES:
+        assert name == name.lower() and "/" not in name and not set(name) & set("*?[")
+
+
+def test_the_glob_list_holds_no_whole_filename():
+    """A whole name spelled as a glob is root-anchored -- the defect this list
+    already carries for directories. 27 nested lockfiles were indexed that way."""
+    plain = [p for p in ignores.DEFAULT_IGNORES if not set(p) & set("*?[")]
+    assert plain == [], plain
+
+
+@pytest.mark.parametrize(
+    "rel", ["packages/a/package-lock.json", "svc/api/go.sum", "infra/mod/.terraform.lock.hcl"]
+)
+def test_a_generated_file_is_ignored_at_any_depth_not_only_at_the_root(rel):
+    assert not discover.indexable(rel, ProjectConfig())
+
+
+def test_no_extension_is_both_a_language_and_a_binary():
+    """`is_binary_ext` gates indexing, so an overlap silently refuses source.
+    `.vhd` was VHDL and a disk image at once, and the disk image won."""
+    assert set(filters.LANGS) & set(filters._BINARY_EXT) == set()
+    assert set(filters.LANGS) & set(filters._IMAGE_EXT) == set()
+
+
+def test_no_whole_filename_is_shadowed_by_its_own_suffix():
+    """`CMakeLists.txt` resolved to docs, because `.txt` was consulted first."""
+    assert filters.lang_of("CMakeLists.txt") == "cmake"
+
+
 @pytest.mark.parametrize(
     ("rel", "lang"),
     [("Dockerfile", "dockerfile"), ("ci/Jenkinsfile", "groovy"), ("Makefile", "make")],
