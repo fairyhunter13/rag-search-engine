@@ -6,6 +6,15 @@ description: Ablated on docs and on code; flat both times, and below no-header a
 tags: [chunking, retrieval, evidence, deletion]
 status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T13:40:00Z }
+sources:
+  - id: metadata-ablation
+    resource: https://arxiv.org/abs/2601.11863
+    title: "arXiv:2601.11863 (ECIR 2026) - which metadata field carries the effect"
+    author: team:arxiv
+  - id: blagent
+    resource: https://arxiv.org/abs/2605.17965
+    title: "BLAgent - file path prepended to each chunk, SWE-bench-Lite Top-10"
+    author: team:arxiv
 ---
 
 # The 2x2, complete

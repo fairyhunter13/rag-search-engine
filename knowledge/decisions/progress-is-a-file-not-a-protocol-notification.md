@@ -6,6 +6,11 @@ description: MCP has two mechanisms for long-running work and both are the wrong
 tags: [mcp, indexing, observability]
 status: stable
 generated: { by: claude/opus-5, at: 2026-08-19T16:10:00Z }
+sources:
+  - id: mcp-progress
+    resource: https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/progress
+    title: MCP 2026-07-28 — progress notifications
+    author: team:model-context-protocol
 ---
 
 # The gap
@@ -19,7 +24,8 @@ nothing underneath it that moved.
 
 **`notifications/progress`** requires a `progressToken` supplied on the originating request, and the
 [spec](https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/progress) is explicit
-that notifications **MUST** only reference tokens "associated with an in-progress operation". The
+that notifications **MUST** only reference tokens "associated with an in-progress
+operation".[^mcp-progress] The
 `index` tool returns immediately and the work outlives the request by design — there is no live
 request to hang a token on. Adopting it would mean making `index` block, which reverses the decision
 in `tools.py` that there is no `wait` parameter.
@@ -57,3 +63,7 @@ working and time-to-finish are different questions.
 **`phase` is only meaningful next to `updated_at`.** A process killed mid-index leaves its last line
 saying `indexing` forever. Liveness is the reader's call, from `updated_at` and `pid`; the file does
 not pretend to know it is dead.
+
+[^mcp-progress]: §on progress — a notification may reference only a token from an in-progress
+operation. Cited rather than linked alone so the nightly drift run reports the next revision of a
+spec that has already changed a dated version in place once.

@@ -6,6 +6,19 @@ description: nvidia-powerd ships as a bare binary on noble with neither its syst
 tags: [gpu, power, thermal, measurement, ubuntu]
 status: stable
 generated: { by: claude/opus-5, at: 2026-08-19T14:45:00Z }
+sources:
+  - id: lp-2111825
+    resource: https://bugs.launchpad.net/ubuntu/+source/nvidia-graphics-drivers-570/+bug/2111825
+    title: "LP #2111825 - nvidia-powerd unit missing on noble"
+    author: team:ubuntu
+  - id: lp-2144603
+    resource: https://bugs.launchpad.net/ubuntu/+source/nvidia-graphics-drivers-595/+bug/2144603
+    title: "LP #2144603 - the same omission on the 595 series"
+    author: team:ubuntu
+  - id: debian-1118399
+    resource: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1118399
+    title: "Debian #1118399 - the D-Bus policy the daemon looks for"
+    author: team:debian
 ---
 
 # Symptom
