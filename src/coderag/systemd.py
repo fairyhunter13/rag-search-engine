@@ -55,8 +55,6 @@ IOWeight=20
 # both models resident, so 4G is headroom for a batch and not a ceiling to hit.
 MemoryHigh=4G
 Environment=PYTHONUNBUFFERED=1
-# The governor is off by default and this is the run it exists for: unattended,
-# overnight, on a card that throttles at 87 C. It costs 0.04% of run time.
 
 [Install]
 WantedBy=default.target
