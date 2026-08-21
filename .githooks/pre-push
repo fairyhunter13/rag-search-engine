@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Pre-push gate for the knowledge/ bundle.
+#
+# CI runs tests/test_okf_bundle.py, but only on push to the remote -- by which point the
+# change is already published. This is the same check at the moment it is made.
+#
+# Skip with:  git push --no-verify
+#
+# Install:    git config core.hooksPath .githooks
+# Uninstall:  git config --unset core.hooksPath
+set -uo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+if [[ -d "$REPO_ROOT/knowledge" ]]; then
+  if ! command -v okfrules >/dev/null 2>&1; then
+    echo "[pre-push] ✗ okfrules not installed — knowledge/ cannot be checked, and this hook is its only local gate"
+    echo "[pre-push]   go install github.com/fairyhunter13/okf/cmd/okfrules@v0.6.0"
+    exit 1
+  fi
+  # A hook chmod -x'd in the *index* is planted non-executable in every future clone, and git
+  # skips a hook it cannot execute without saying a word.
+  HOOK_MODE="$(git -C "$REPO_ROOT" ls-files -s .githooks/pre-push 2>/dev/null | awk '{print $1}')"
+  if [ "$HOOK_MODE" != "100755" ]; then
+    echo "[pre-push] ✗ .githooks/pre-push is mode '$HOOK_MODE' in the index, want 100755 — every"
+    echo "[pre-push]   future clone of this repo would push ungated."
+    exit 1
+  fi
+  # And that the checker refuses something: every check above passes just as well against a
+  # checker that exits 0 on anything.
+  OKF_PROBE="$(mktemp -d)"
+  printf -- '---\ntitle: no type key\n---\n\nbody\n' > "$OKF_PROBE/broken.md"
+  if okfrules check "$OKF_PROBE" >/dev/null 2>&1; then
+    rm -rf "$OKF_PROBE"
+    echo "[pre-push] ✗ okfrules accepted a concept with no type key — the checker on PATH gates nothing"
+    exit 1
+  fi
+  rm -rf "$OKF_PROBE"
+  # -Werror, matching the CI step: a broken link is a *warning*, which plain check prints and
+  # then exits 0 on.
+  if ! okfrules check -Werror "$REPO_ROOT/knowledge"; then
+    echo "[pre-push] ✗ knowledge/ is not a conformant OKF bundle — push blocked"
+    exit 1
+  fi
+fi
+
+exit 0

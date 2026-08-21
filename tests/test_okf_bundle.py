@@ -19,7 +19,7 @@ BUNDLE = REPO / "knowledge"
 CI = REPO / ".github" / "workflows" / "ci.yml"
 
 # Pinned: `@latest` lets the verdict change with no commit in this repo.
-INSTALL = "go install github.com/fairyhunter13/okf/cmd/okfrules@v0.5.3"
+INSTALL = "go install github.com/fairyhunter13/okf/cmd/okfrules@v0.6.0"
 
 
 def test_the_checker_is_installed():
@@ -48,6 +48,42 @@ def test_the_checker_actually_rejects_something(tmp_path):
     (bad / "broken.md").write_text("---\ntitle: no type key\n---\n\nbody\n")
     out = subprocess.run([okf, "check", str(bad)], capture_output=True, text=True, check=False)
     assert out.returncode != 0, "okfrules accepted a bundle with no type key"
+
+
+HOOK = ".githooks/pre-push"
+
+
+def _git(*args: str) -> str:
+    return subprocess.run(["git", "-C", str(REPO), *args], capture_output=True, text=True,
+                          check=False).stdout.strip()
+
+
+def test_the_hook_is_executable_in_the_index_not_only_on_disk():
+    """CI runs the tests above, but only once the change is already pushed.
+
+    The hook is the same check at the moment it is made -- if anything runs it.
+    """
+    entry = _git("ls-files", "-s", HOOK)
+    assert entry, f"{HOOK} is not tracked, so a fresh clone gets no gate"
+    # A hook chmod -x'd in the index is planted non-executable in every clone, and git
+    # skips a hook it cannot execute without saying so.
+    assert entry.split()[0] == "100755", f"{HOOK} is mode {entry.split()[0]} in the index"
+
+
+def test_the_hook_runs_the_checker_at_the_pin_this_repo_names():
+    body = (REPO / HOOK).read_text()
+    for want in ("okfrules check", "knowledge", INSTALL):
+        assert want in body, f"{HOOK} does not mention {want!r}"
+
+
+def test_something_on_this_checkout_actually_invokes_the_hook():
+    if _git("config", "--get", "core.hooksPath"):
+        return
+    # No core.hooksPath, so git looks in .git/hooks -- where claude-code-workflows'
+    # init.templateDir plants a dispatcher that execs .githooks/pre-push.
+    assert (REPO / ".git" / "hooks" / "pre-push").exists(), (
+        "core.hooksPath is unset and .git/hooks/pre-push is absent: this checkout pushes "
+        f"ungated.\n  git -C {REPO} config core.hooksPath .githooks")
 
 
 def test_the_gate_is_wired_where_this_repo_says_it_is():
