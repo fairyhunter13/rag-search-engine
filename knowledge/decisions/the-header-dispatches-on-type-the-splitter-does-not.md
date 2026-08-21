@@ -6,6 +6,11 @@ description: A quarter of the corpus is prose and structured data that the code-
 tags: [chunking, retrieval, evidence, prose]
 status: deprecated
 generated: { by: claude/opus-5, at: 2026-08-19T21:10:00Z }
+sources:
+  - id: structured-data-chunking
+    resource: https://arxiv.org/abs/2605.00318
+    title: "arXiv:2605.00318 - structure-aware handling of structured data, Tables III and IV"
+    author: team:arxiv
 ---
 
 # The gap
