@@ -191,7 +191,7 @@ def test_the_sweep_claims_a_link_added_after_the_last_index_call(tmp_path):
     a repo symlinked into a root afterwards stayed invisible until someone
     remembered to re-run the tool -- or until the daemon restarted, which does
     not re-discover either."""
-    root, members = _tree(tmp_path, n=1)
+    root, _members = _tree(tmp_path, n=1)
     federation.register(root)
     late = _repo(tmp_path / "elsewhere" / "late")
     (root / "links" / "late").symlink_to(late)
