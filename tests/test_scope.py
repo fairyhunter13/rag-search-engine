@@ -165,6 +165,54 @@ def test_a_rootless_call_with_no_pin_names_the_fix_rather_than_home():
         assert str(Path.home()) not in out["error"]
 
 
+def test_a_pin_inside_a_project_resolves_up_to_it(tmp_path, pin):
+    """The reach defect. 86.6% of 14,098 sessions on this machine pinned a
+    subdirectory or a worktree of a registered project and were told their own
+    project was not indexed; 7.2% pinned the root itself and worked."""
+    root = _project(tmp_path / "repo")
+    inside = root / "backend" / "scripts"
+    inside.mkdir(parents=True)
+
+    out = tools.search_code("handler", pin(inside), mode="lexical")
+
+    assert "not indexed" not in out.get("error", ""), out
+    assert scope.default_root(pin(inside)) == root
+
+
+def test_the_ancestor_walk_stops_at_the_nearest_project(tmp_path, pin):
+    """Longest match, not first. A member can live under its root's tree, and
+    the shorter answer hands the caller the wrong project's corpus."""
+    outer = _project(tmp_path / "outer")
+    inner = _project(outer / "vendor" / "inner")
+    leaf = inner / "src"
+    leaf.mkdir(parents=True)
+
+    assert scope.default_root(pin(leaf)) == inner
+
+
+def test_a_pin_in_no_project_is_still_refused(tmp_path, pin):
+    """The arm cannot walk out. Nothing above is registered, so the reply has
+    to stay the one that names the fix rather than inventing a root."""
+    _project(tmp_path / "repo")
+    orphan = tmp_path / "elsewhere" / "deep"
+    orphan.mkdir(parents=True)
+
+    assert scope.default_root(pin(orphan)) == registry.resolve(orphan)
+    out = tools.search_code("handler", pin(orphan), mode="lexical")
+    assert "not indexed" in out["error"], out
+
+
+def test_a_disabled_ancestor_does_not_answer_for_its_subdirectory(tmp_path, pin):
+    """An unflagged row has no store to answer from, so resolving to it would
+    turn "not indexed" into an empty result set -- the worse of the two."""
+    root = _project(tmp_path / "repo", enabled=False)
+    inside = root / "backend"
+    inside.mkdir()
+
+    assert registry.enclosing(inside) is None
+    assert scope.default_root(pin(inside)) == registry.resolve(inside)
+
+
 # ------------------------------------------------- the pin and federation
 
 

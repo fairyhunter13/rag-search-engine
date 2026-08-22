@@ -91,6 +91,10 @@ SHUTDOWN_DEADLINE_S = _env_int("SHUTDOWN_DEADLINE_S", 15)
 # or a live suite on a card that has to stay free. The tick still picks up
 # anything submitted; only the sweep of everything enabled is skipped.
 RECONCILE_ON_START = _env_flag("RECONCILE_ON_START", True)
+# The startup reconcile used to be the only one, so a symlink added to a root
+# after its last `index` call was never discovered and a project dropped from
+# the watch set for an unparseable config never came back.
+SWEEP_EVERY_S = _env_int("SWEEP_EVERY_S", 3600)
 WATCH_DEBOUNCE_MS = _env_int("WATCH_DEBOUNCE_MS", 1500)
 
 # Fail-closed: a call that arrives with no workspace pin is refused. The unit
