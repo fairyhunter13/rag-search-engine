@@ -169,9 +169,8 @@ already returns the pin itself when the pin is enabled, so the short-circuit was
 arm where it was right and wrong in the arm where it was not.
 
 **The upward walk now says so in the reply.** `scope.resolution_note` fills the existing `hint`
-slot when the searched root is not the pin. Keyed on the two disagreeing, not on the string
-`.claude/worktrees` — that would put one client's directory convention inside the engine, and a
-worktree is only the loudest case of a pin whose edits are not in the answer. This is a new
+slot when the pin is a checkout of its own — `.git` present at the pin, which is git's marker and
+not one client's directory convention. This is a new
 category for this repo: the two precedents are actionable *errors*, not an advisory on a successful
 reply. The reason it is worth a code change rather than another record is `bridge.py`: every client
 that is not Claude Code gets no SessionStart hook and had no disclosure anywhere. Rejected
@@ -179,3 +178,22 @@ alternatives: refusing a worktree pin (trades the reach win back for a staleness
 auto-indexing the worktree (this already happened by accident — 144 orphan stores at 436 MiB,
 "mostly deleted git worktrees"), and an overlay index of the diff (a new index kind for a live
 population of zero).
+
+# Third amendment, same day: disagreeing roots was the wrong predicate
+
+The advisory shipped keyed on `resolved != pinned`, and that is not the condition it wanted.
+`registry.enclosing` only ever returns an **ancestor**, so the two disagreeing means exactly "the
+pin is a subdirectory of the answering project" — and a subdirectory's files are already in that
+project's index. The sentence the advisory prints, *edits present only in yours are not in them*,
+is false there.
+
+Measured, not reasoned: `reach_census.py` now splits `resolves-up` on whether the pin carries its
+own `.git`. **12,395 of 12,395 are plain subdirectories; zero are their own checkout.** So as
+shipped the note was wrong on 79% of this machine's sessions and silent on none of them, while the
+case it was written for — a worktree, whose content the root's index genuinely lacks because
+`.claude/worktrees/` is gitignored — has no live sessions at all.
+
+The predicate is now `.git` at the pin. A worktree carries it as a file, a nested clone as a
+directory, and a plain subdirectory not at all. A nested clone its parent does not gitignore is
+over-warned; that is the safe direction. The test's load-bearing arms are the two silent ones — a
+plain subdirectory and the root itself — because the noisy version passes an unconditional string.
