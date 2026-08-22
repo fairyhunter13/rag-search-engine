@@ -131,3 +131,8 @@ being one. A disabled ancestor does not answer for its subdirectory — an unfla
 to read. And a worktree resolves to its main checkout, so the results are the main checkout's: the
 uncommitted edits in the worktree are not in them, and the reply has to say so rather than let the
 caller infer it.
+
+Confirmed live on the day it shipped, against real interactive clients rather than a test harness:
+a pin four levels down a root, and a pin inside a worktree under that root, both resolved to the
+root and returned a hit in a federated member — a path outside the working tree the caller's own
+tools can see. Same answer from four separate client profiles.
