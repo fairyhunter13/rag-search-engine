@@ -69,7 +69,30 @@ _worker_lock = threading.Lock()
 
 
 def submit(project: Path | str, paths: list[str] | None = None, reason: str = "manual") -> None:
-    _queue.put(Job(project=registry.resolve(project), paths=paths, reason=reason))
+    """Enqueue a walk, unless an identical whole-project walk is already waiting.
+
+    The hourly reconcile enqueues all 149 rows and `index` is polled for status,
+    so the same full walk piles up behind one worker. Only whole-project jobs
+    dedup: a partial names files a queued walk may already cover, but dropping
+    it on that guess loses a write, where a redundant full walk only wastes one.
+
+    The queue is the state. A shadow set of pending projects has to be cleared
+    by whoever dequeues, and anything that is not the worker -- a test, a drain
+    on shutdown -- then leaves it claiming a job that no longer exists, which
+    silently drops every later submit for that project.
+    """
+    project = registry.resolve(project)
+    if paths is None:
+        with _queue.mutex:
+            # A concurrent submit can still slip a duplicate past this; the cost
+            # of that is one extra walk, and the lock cannot be held across the
+            # `put` below, which takes it again.
+            if any(
+                job is not None and job.paths is None and job.project == project
+                for job in _queue.queue
+            ):
+                return
+    _queue.put(Job(project=project, paths=paths, reason=reason))
 
 
 def status() -> dict:
@@ -262,10 +285,13 @@ def suppressed_by_excludes(project: Path | str, roots: tuple[str, ...] = ()) -> 
 
 
 def reconcile_all() -> int:
-    """Enqueue every enabled project: the startup pass and the 60 s tick.
+    """Enqueue every enabled project: the startup pass and the hourly sweep.
 
-    This catches everything that changed while the daemon was down, and it is
-    the only reconcile -- no sweeps, no leases, no pause flag.
+    This catches everything that changed while the daemon was down, and what a
+    project missed while it was dropped from the watch set for a config it
+    could not parse. No leases and no pause flag.
+
+    It said "the 60 s tick" for as long as the tick did not call it.
     """
     projects = registry.enabled_projects()
     for entry in projects:

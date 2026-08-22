@@ -159,11 +159,20 @@ def default_root(pinned: ListRootsResult) -> Path:
     from a client that sends no roots came back as "call index(root=$HOME)",
     telling the caller to index their entire home directory. Measured against a
     real session, which took the advice.
+
+    An unregistered pin resolves to the project enclosing it, which `enforce`
+    has always sanctioned and nothing ever computed. Across 14,098 sessions on
+    this machine 7.2% pinned a registered root and 86.6% pinned somewhere
+    inside one -- a subdirectory, or a worktree under `.claude/worktrees` -- and
+    every one of those was told its own project was not indexed.
     """
     roots = paths(pinned)
     if not roots:
         raise ScopeError("no workspace root arrived with this call -- pass root=<project path>")
-    return roots[0]
+    pin = roots[0]
+    if registry.get(pin) is not None:
+        return pin
+    return registry.enclosing(pin) or pin
 
 
 def enforce(target: Path, pinned: ListRootsResult, verdict: Verdict | None = None) -> None:

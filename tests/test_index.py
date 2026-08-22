@@ -38,10 +38,29 @@ def test_submit_returns_before_the_work_does():
     a `submit` that quietly awaited the build would still set every flag.
     """
     started = time.perf_counter()
-    for _ in range(50):
-        index.submit("/nonexistent/project")
+    for n in range(50):
+        # Distinct projects: identical whole-project submits collapse now, and
+        # a depth of 1 would prove nothing about blocking.
+        index.submit(f"/nonexistent/project-{n}")
     assert time.perf_counter() - started < 0.5
     assert index.status()["queue_depth"] == 50
+
+
+def test_an_identical_whole_project_submit_collapses():
+    for _ in range(50):
+        index.submit("/nonexistent/project")
+    assert index.status()["queue_depth"] == 1
+
+    # Partials are never dropped, and they do not suppress each other.
+    index.submit("/nonexistent/project", paths=["a.py"])
+    index.submit("/nonexistent/project", paths=["b.py"])
+    assert index.status()["queue_depth"] == 3
+
+    # Dequeued is gone: the queue is the state, so the next full submit lands.
+    while not index._queue.empty():
+        index._queue.get_nowait()
+    index.submit("/nonexistent/project")
+    assert index.status()["queue_depth"] == 1
 
 
 def test_status_reports_idle_when_nothing_is_queued():
