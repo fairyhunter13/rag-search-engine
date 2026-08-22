@@ -171,7 +171,7 @@ def search_code(
     try:
         target = registry.resolve(root or scope.default_root(pinned))
         scope.enforce(target, pinned, verdict)
-        return search.search(
+        out = search.search(
             query,
             target,
             k=k,
@@ -183,6 +183,10 @@ def search_code(
             preview_lines=preview_lines,
             include_body=include_body,
         )
+        # `hint` is the reply's existing advisory slot, so this follows prior
+        # art rather than adding a key; both notes can be true at once.
+        out["hint"] = "; ".join(filter(None, (out["hint"], scope.resolution_note(target, pinned))))
+        return out
     except (search.SearchError, scope.ScopeError) as exc:
         # Returned rather than raised: an error that names what to call next is
         # actionable to an agent, where a transport-level failure is not.

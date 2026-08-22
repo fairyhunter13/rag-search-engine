@@ -1,6 +1,6 @@
 ---
 type: Constraint
-resource: src/coderag/scope.py, src/coderag/tools.py, src/coderag/systemd.py, tests/test_scope.py
+resource: src/coderag/scope.py, src/coderag/tools.py, src/coderag/systemd.py, tests/test_scope.py, scripts/reach_census.py
 title: The search unit is the caller's own workspace plus what it federates, and that is containment rather than authorization
 description: "The root was a string the model wrote, so any of ~159 registered projects was reachable from any session by naming it. The boundary now comes from the client's own roots, through a parameter the model cannot see — and the honest claim for it is narrow."
 tags: [mcp, roots, scoping, security, federation]
@@ -129,10 +129,53 @@ Three things stay as they were. A pin in no registered tree is still refused, be
 walk stops at the nearest *registered* row and `FORBIDDEN_ROOTS` keeps `/` and `$HOME` from ever
 being one. A disabled ancestor does not answer for its subdirectory — an unflagged row has no store
 to read. And a worktree resolves to its main checkout, so the results are the main checkout's: the
-uncommitted edits in the worktree are not in them, and the reply has to say so rather than let the
-caller infer it.
+uncommitted edits in the worktree are not in them, and the caller has to be told rather than left to
+infer it. The reply did **not** say so — the disclosure was one sentence in
+`claude-code-workflows/hooks/claude/coderag_reach.py:70`, printed once per session by a SessionStart
+hook, which reaches Claude Code and no other client. See the next amendment.
 
 Confirmed live on the day it shipped, against real interactive clients rather than a test harness:
 a pin four levels down a root, and a pin inside a worktree under that root, both resolved to the
 root and returned a hit in a federated member — a path outside the working tree the caller's own
 tools can see. Same answer from four separate client profiles.
+
+# Second amendment, 2026-08-22: the census was the ceiling, not the effect
+
+The 93.8% quoted for the change was `7.2 + 86.6` out of the **pre-change** census — the same
+arithmetic on the same data, which was as true before the change as after. It measured the share a
+rule of this shape *could* reach, never that it reached it. The quantity the change moves is what a
+session gets: before, only a pin on a registered root was answerable (**7.2%**); after, a pin
+inside one is too.
+
+Re-derived against the current code and registry by `scripts/reach_census.py`, which calls
+`registry.enclosing` rather than re-implementing the walk: 15,693 sessions, 244 rows / **156
+enabled** — exactly the +7 the hourly sweep claimed, which cross-confirms the sweep end to end.
+**14.1% direct, 79.0% resolves-up, 6.9% unresolved → 93.1% answerable.** The 0.7 pt against the old
+figure is the unresolved tail growing slightly faster than the registry, not a regression. Two traps
+the script has to keep: all five `~/.claude*/projects` are symlinks to one store, so a per-profile
+walk multiplies every session by five; and the walk must filter on `enabled`, or it counts rows with
+no store as answers.
+
+The residue is mostly irreducible — **713 of 1,087 are bare `$HOME`**, the exact case `default_root`
+exists to refuse, plus per-session scratchpads under `/tmp`. About 200 sessions are recoverable by
+registering roughly six more roots.
+
+**A divergence the census turned up.** `default_root` short-circuited on `registry.get(pin)`, and
+`get` reads disabled rows while `enclosing` filters on `enabled` — so a pin equal to a disabled row
+got that row back instead of resolving up to an enabled ancestor, i.e. a root with no store rather
+than the one that has it. Zero of 15,693 sessions hit it, so it was latent; 88 disabled rows and a
+sweep that adds more is why it is fixed rather than noted. The fix is a deletion: `enclosing`
+already returns the pin itself when the pin is enabled, so the short-circuit was redundant in the
+arm where it was right and wrong in the arm where it was not.
+
+**The upward walk now says so in the reply.** `scope.resolution_note` fills the existing `hint`
+slot when the searched root is not the pin. Keyed on the two disagreeing, not on the string
+`.claude/worktrees` — that would put one client's directory convention inside the engine, and a
+worktree is only the loudest case of a pin whose edits are not in the answer. This is a new
+category for this repo: the two precedents are actionable *errors*, not an advisory on a successful
+reply. The reason it is worth a code change rather than another record is `bridge.py`: every client
+that is not Claude Code gets no SessionStart hook and had no disclosure anywhere. Rejected
+alternatives: refusing a worktree pin (trades the reach win back for a staleness now disclosed),
+auto-indexing the worktree (this already happened by accident — 144 orphan stores at 436 MiB,
+"mostly deleted git worktrees"), and an overlay index of the diff (a new index kind for a live
+population of zero).

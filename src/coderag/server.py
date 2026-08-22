@@ -171,6 +171,13 @@ def build_app():
 
 def serve(host: str = "", port: int = 0) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # `Terminating session: None` once per /mcp request -- 11,649 lines a day,
+    # burying the hourly `sweep claimed N`, which is this daemon's only
+    # production signal. Not a bug: `stateless_http=True` means there is no
+    # session id to name. A level rather than a filter, because a filter keyed
+    # on the message breaks in silence at the next SDK release. Here and not in
+    # `build_app`, which the tests import.
+    logging.getLogger("mcp.server.streamable_http").setLevel(logging.WARNING)
     # uvicorn restores the handler it replaced and then re-raises the signal it
     # caught, so the exit below never ran on a stop: the process died -15 under
     # the default disposition. Installing this first makes ours the handler it
