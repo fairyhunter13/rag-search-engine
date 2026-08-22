@@ -41,3 +41,6 @@ The guard moved below the unflag branch. The regression test registers a project
 directory, disables it, and asserts it is no longer in `enabled_projects()` -- not that the row
 reads `enabled: False`, because `federation.unregister` drops a member nothing else claims out of
 the registry entirely.
+
+- Those two rows failed reconcile at every start and the registry still read clean between sweeps —
+  [a failure that resolved itself left no trace](a-failure-that-resolved-itself-left-no-trace.md).

@@ -5,6 +5,10 @@ title: coderag knowledge history
 
 # Bundle history
 
+## 2026-08-23
+
+- **Creation**: [a failure that resolved itself left no trace](defects/a-failure-that-resolved-itself-left-no-trace.md). `last_error` was a single overwritten string with no timestamp and no count, cleared by the next success — and `reconcile_all` supplies a success every hour, so any failure shorter than the sweep was erased before anyone could read it. `last_error_at` and `error_total` are never cleared, and the four sites that recorded a failure (indexer, `index` tool, watcher, federation sweep) now go through `registry.record_error`, which is the only writer. `/healthz` gains `projects_failing` and `errors_total`, because a liveness check stayed green through every project failing to index. Raising the log level was refused: 8,140 lines in 24 h at INFO is already the volume, and the defect was that errors were ephemeral, not unlogged. Pointing `coderag-alert@.service` at the new counts is outstanding — host-owned unit, no installer here.
+
 ## 2026-08-22
 
 - **Fix**: the reply advisory was keyed on the wrong predicate and was false where it fired. `registry.enclosing` only ever returns an ancestor, so `resolved != pinned` means "the pin is a subdirectory" — whose files the answering project already indexes. `reach_census.py` now splits that class: **12,395 of 12,395 live upward resolutions are plain subdirectories, zero are their own checkout**, so the note was wrong on 79% of this machine's sessions and never reached the worktree it was written for. The predicate is now `.git` at the pin — a file in a worktree, a directory in a nested clone, absent in a subdirectory — and the test's load-bearing arms are the two silent ones.

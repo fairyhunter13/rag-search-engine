@@ -136,6 +136,10 @@ async def healthz(_request) -> JSONResponse:
         {
             "status": "ok",
             "projects": sum(1 for e in rows.values() if e.enabled),
+            # A liveness check answers "is the process up", which stayed green through
+            # every project failing to index. These two are what make that visible.
+            "projects_failing": sum(1 for e in rows.values() if e.enabled and e.last_error),
+            "errors_total": sum(e.error_total for e in rows.values()),
             "fleet_digest": registry.fleet_digest(rows),
             "unclaimed_stores": len(registry.unclaimed_stores()),
             "models_loaded": embed.loaded(),

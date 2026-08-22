@@ -113,7 +113,7 @@ def index_project(
         # reach them as something they can act on. Raised, it arrives as an
         # `isError` envelope with no status attached and no record of which
         # project is stuck; recorded, the next `index` call still says it.
-        registry.update(target, last_error=str(exc))
+        registry.record_error(target, str(exc))
         # Not `_status`: it reads the same broken file to compute
         # `suppressed_by_excludes` and would raise on the way out.
         return {"root": str(target), "error": str(exc), "last_error": str(exc)}
@@ -139,6 +139,10 @@ def _status(target: Path, members: list[Path]) -> dict[str, Any]:
         },
         "suppressed_by_inherited_excludes": index.suppressed_by_excludes(target, tuple(roots)),
         "last_error": entry.last_error if entry else None,
+        # Durable: last_error is cleared by the next success, so on an hourly reconcile
+        # these are the only trace a failure that resolved itself ever leaves.
+        "last_error_at": entry.last_error_at if entry else None,
+        "error_total": entry.error_total if entry else 0,
         "watching": watch.armed(target),
     }
     return out | index.status()

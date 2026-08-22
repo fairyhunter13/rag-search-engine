@@ -141,7 +141,7 @@ def sweep() -> list[Path]:
         except ConfigError as exc:
             # The same broken file that drops it from the watch set. Recorded,
             # not raised: one unparseable repo must not stop the sweep.
-            registry.update(entry.path, last_error=str(exc))
+            registry.record_error(entry.path, str(exc))
             continue
         for member in members:
             row = registry.get(member)
