@@ -213,6 +213,32 @@ def test_a_disabled_ancestor_does_not_answer_for_its_subdirectory(tmp_path, pin)
     assert scope.default_root(pin(inside)) == registry.resolve(inside)
 
 
+def test_a_pin_on_a_disabled_row_resolves_up_instead_of_answering_for_itself(tmp_path, pin):
+    """`default_root` short-circuited on `registry.get`, which reads disabled
+    rows, while `enclosing` filters on enabled -- so the two arms disagreed and
+    a pin on an unflagged row got a root with no store instead of the ancestor
+    that has one."""
+    outer = _project(tmp_path / "outer")
+    inner = _project(outer / "vendor" / "inner", enabled=False)
+
+    assert scope.default_root(pin(inner)) == outer
+
+
+def test_a_pin_that_resolved_up_is_told_so_in_the_reply(tmp_path, pin):
+    """The hook says this once per session to Claude Code and to nobody else,
+    so over `bridge.py` the upward walk was silent. The second assertion is the
+    test: without it an unconditional string passes."""
+    root = _project(tmp_path / "repo")
+    inside = root / "backend"
+    inside.mkdir()
+
+    note = tools.search_code("handler", pin(inside), mode="lexical")["hint"]
+    assert str(root) in note and str(inside) in note
+
+    at_root = tools.search_code("handler", pin(root), mode="lexical")["hint"]
+    assert "containing your workspace" not in at_root, at_root
+
+
 # ------------------------------------------------- the pin and federation
 
 

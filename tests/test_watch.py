@@ -279,6 +279,47 @@ def test_the_tick_restarts_a_watcher_that_died(monkeypatch):
     assert started, "the tick never restarted the watcher"
 
 
+def test_the_tick_sweeps_on_its_own_counter_and_not_every_tick(monkeypatch):
+    """The sweep branch ran in no test. `_tick`'s only exercise left
+    `SWEEP_EVERY_S` at an hour, so deleting the branch outright kept the suite
+    green -- and the fast arm alone passes against an unconditional sweep."""
+    from coderag import server
+
+    def ticks_with(sweep_every: float) -> list[int]:
+        swept: list[int] = []
+        monkeypatch.setattr(server, "_sweep", lambda: swept.append(1))
+        monkeypatch.setattr(watch, "start", lambda: None)
+        monkeypatch.setattr(watch, "rearm_if_changed", lambda: None)
+        monkeypatch.setattr(server.config, "SCHEDULER_TICK_S", 0.01)
+        monkeypatch.setattr(server.config, "SWEEP_EVERY_S", sweep_every)
+        monkeypatch.setattr(server.config, "MODEL_IDLE_UNLOAD_S", 0)
+        thread = threading.Thread(target=server._tick, daemon=True)
+        server._stop.clear()
+        thread.start()
+        time.sleep(0.15)
+        server._stop.set()
+        thread.join(2)
+        return swept
+
+    assert ticks_with(0.01), "the counter fired and nothing swept"
+    assert not ticks_with(3600), "a tenth of a second swept at the default hour"
+
+
+def test_the_sweep_reconciles_what_it_claimed(monkeypatch):
+    """A member claimed and never reconciled is a row with no store behind it,
+    which reads as an empty project rather than as an error."""
+    from coderag import server
+
+    calls: list[str] = []
+    monkeypatch.setattr(server.federation, "sweep", lambda: calls.append("sweep") or [])
+    monkeypatch.setattr(server.index, "reconcile_all", lambda: calls.append("reconcile"))
+    monkeypatch.setattr(server.watch, "rearm_if_changed", lambda: calls.append("rearm"))
+
+    server._sweep()
+
+    assert calls == ["sweep", "reconcile", "rearm"], calls
+
+
 def test_an_event_reported_through_a_roots_symlink_goes_to_the_member(tmp_path):
     """The path notify reports is not the path the file lives at.
 

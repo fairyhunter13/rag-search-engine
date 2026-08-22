@@ -161,18 +161,41 @@ def default_root(pinned: ListRootsResult) -> Path:
     real session, which took the advice.
 
     An unregistered pin resolves to the project enclosing it, which `enforce`
-    has always sanctioned and nothing ever computed. Across 14,098 sessions on
-    this machine 7.2% pinned a registered root and 86.6% pinned somewhere
-    inside one -- a subdirectory, or a worktree under `.claude/worktrees` -- and
-    every one of those was told its own project was not indexed.
+    has always sanctioned and nothing ever computed. 14.1% of this machine's
+    sessions pin a registered root and 79.0% pin somewhere inside one -- a
+    subdirectory, or a worktree under `.claude/worktrees` -- and before this
+    every one of the second group was told its own project was not indexed.
+    `scripts/reach_census.py` re-derives those shares; do not quote them from
+    here.
+
+    `enclosing` and nothing else, because it is the only enabled-filtered
+    walk. Short-circuiting on `registry.get(pin)` first read disabled rows too,
+    which handed a pin on an unflagged row a root with no store.
     """
     roots = paths(pinned)
     if not roots:
         raise ScopeError("no workspace root arrived with this call -- pass root=<project path>")
     pin = roots[0]
-    if registry.get(pin) is not None:
-        return pin
     return registry.enclosing(pin) or pin
+
+
+def resolution_note(target: Path, pinned: ListRootsResult) -> str:
+    """Told to the caller when the search ran somewhere other than their pin.
+
+    Claude Code learns this once per session from a SessionStart hook; every
+    other client over `bridge.py` gets no hook at all, so without this the
+    upward walk is silent. Keyed on the roots disagreeing rather than on
+    `.claude/worktrees`, which would put one client's directory convention in
+    the engine for no gain -- a worktree is only the loudest case of a pin
+    whose edits are not in the answer.
+    """
+    roots = paths(pinned)
+    if not roots or roots[0] == target:
+        return ""
+    return (
+        f"searched {target}, the indexed project containing your workspace {roots[0]}; "
+        "results are that checkout's, so edits present only in yours are not in them"
+    )
 
 
 def enforce(target: Path, pinned: ListRootsResult, verdict: Verdict | None = None) -> None:

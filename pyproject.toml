@@ -60,6 +60,7 @@ ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["ARG001", "T20"]
+"scripts/*" = ["T20"]
 "src/coderag/cli.py" = ["T20"]
 "src/coderag/systemd.py" = ["T20"]
 # The bridge's only channel to a human is stderr: stdout carries framed
