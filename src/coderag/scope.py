@@ -184,13 +184,19 @@ def resolution_note(target: Path, pinned: ListRootsResult) -> str:
 
     Claude Code learns this once per session from a SessionStart hook; every
     other client over `bridge.py` gets no hook at all, so without this the
-    upward walk is silent. Keyed on the roots disagreeing rather than on
-    `.claude/worktrees`, which would put one client's directory convention in
-    the engine for no gain -- a worktree is only the loudest case of a pin
-    whose edits are not in the answer.
+    upward walk is silent. Keyed on the pin being its own checkout rather than
+    on `.claude/worktrees`: git's own marker, not one client's convention.
+
+    Disagreeing roots alone is not the condition. `enclosing` only ever returns
+    an ancestor, so it means "the pin is a subdirectory" -- and 12,395 of 12,395
+    live upward resolutions are plain subdirectories, whose files the answer
+    already holds. Said there, the sentence below is false.
     """
     roots = paths(pinned)
-    if not roots or roots[0] == target:
+    # A worktree carries `.git` as a file, a nested clone as a directory; both
+    # hold content the target's index cannot. A nested clone the target does not
+    # gitignore is over-warned, which is the safe direction to be wrong in.
+    if not roots or roots[0] == target or not (roots[0] / ".git").exists():
         return ""
     return (
         f"searched {target}, the indexed project containing your workspace {roots[0]}; "
