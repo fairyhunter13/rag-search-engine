@@ -59,6 +59,9 @@ def main() -> int:
 
     counts: Counter[str] = Counter()
     unresolved: Counter[str] = Counter()
+    # Splits `resolves-up`, which is what decides whether the reply's advisory is
+    # true: a subdirectory's files are already in the answer, a checkout's are not.
+    shape: Counter[str] = Counter()
     verdicts: dict[str, str] = {}
 
     for store in session_stores():
@@ -78,6 +81,9 @@ def main() -> int:
             counts[verdicts[cwd]] += 1
             if verdicts[cwd] == "unresolved":
                 unresolved[cwd] += 1
+            elif verdicts[cwd] == "resolves-up":
+                own = (Path(cwd) / ".git").exists()
+                shape["own checkout" if own else "plain subdir"] += 1
 
     total = sum(counts[k] for k in ("direct", "resolves-up", "unresolved"))
     print(f"registry: {len(rows)} rows, {len(enabled)} enabled")
@@ -86,6 +92,10 @@ def main() -> int:
         print(f"  {name:12s} {counts[name]:6d}  {counts[name] / total * 100:5.1f}%")
     answerable = counts["direct"] + counts["resolves-up"]
     print(f"  {'answerable':12s} {answerable:6d}  {answerable / total * 100:5.1f}%")
+
+    up = counts["resolves-up"] or 1
+    for name in ("plain subdir", "own checkout"):
+        print(f"    of which {name:14s} {shape[name]:6d}  {shape[name] / up * 100:5.1f}%")
 
     print("\ntop unresolved cwds:")
     for path, n in unresolved.most_common(10):

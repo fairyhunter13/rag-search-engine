@@ -218,10 +218,15 @@ def _until(predicate, timeout: float = 5.0) -> bool:
     return False
 
 
-def test_a_live_thread_is_not_the_same_answer_as_this_project_being_watched(tmp_path):
+def test_a_live_thread_is_not_the_same_answer_as_this_project_being_watched(tmp_path, monkeypatch):
     """What `index` reports as `watching`. A registered project is not yet an
     armed one, and a write in between is lost -- so the discriminator is that
     the thread is alive for both halves and the answer still changes."""
+    # The real loop owns `_armed` and this test writes it, so running it here is
+    # a data race the assertions lose: `isolated_state` puts the registry under
+    # `tmp_path`, so claiming `tmp_path` had the watcher arming off the test's
+    # own writes. `_loop` under the real loop is `test_one_broken_config_...`.
+    monkeypatch.setattr(watch, "_loop", lambda: watch._stop.wait(30))
     registry.claim(tmp_path, direct=True)
     watch.start()
     try:
