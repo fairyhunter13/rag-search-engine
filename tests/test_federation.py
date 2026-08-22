@@ -181,3 +181,77 @@ def test_discovery_is_depth_bounded(tmp_path):
     (deep / "link").symlink_to(_repo(tmp_path / "far"))
 
     assert federation.discover(root) == []
+
+
+# ------------------------------------------------------------------ the sweep
+
+
+def test_the_sweep_claims_a_link_added_after_the_last_index_call(tmp_path):
+    """The gap the sweep exists to close. Discovery ran only inside `index`, so
+    a repo symlinked into a root afterwards stayed invisible until someone
+    remembered to re-run the tool -- or until the daemon restarted, which does
+    not re-discover either."""
+    root, members = _tree(tmp_path, n=1)
+    federation.register(root)
+    late = _repo(tmp_path / "elsewhere" / "late")
+    (root / "links" / "late").symlink_to(late)
+
+    assert registry.get(late) is None, "not a member before the sweep"
+    claimed = federation.sweep()
+
+    assert claimed == [registry.resolve(late)]
+    assert registry.get(late).roots == [str(root)]
+    assert registry.resolve(late) in federation.expand(root)
+
+
+def test_the_sweep_is_idempotent(tmp_path):
+    """It runs hourly forever. A second pass over an unchanged tree must claim
+    nothing, or every member is re-submitted for a walk once an hour."""
+    root, _ = _tree(tmp_path, n=2)
+    federation.register(root)
+
+    assert federation.sweep() == []
+
+
+def test_the_sweep_never_releases_a_member_whose_link_vanished(tmp_path):
+    """Removal is explicit. An unmounted volume and a deleted link are the same
+    observation from here, and the pruning version of this rule wiped the fleet
+    registry once already."""
+    root, members = _tree(tmp_path, n=2)
+    federation.register(root)
+    (root / "links" / "m0").unlink()
+
+    federation.sweep()
+
+    assert registry.get(members[0]) is not None
+    assert registry.get(members[0]).roots == [str(root)]
+
+
+def test_one_unparseable_config_does_not_stop_the_sweep(tmp_path):
+    """A typo in one repo used to take the whole watch thread down. The sweep
+    walks every root, so it has the same exposure and must not share the fate."""
+    broken, _ = _tree(tmp_path, n=0)
+    (broken / ".coderag.yaml").write_text("index: [not, a, mapping]\n")
+    registry.claim(broken, direct=True)
+    healthy, _ = _tree(tmp_path / "other", n=1)
+    federation.register(healthy)
+    late = _repo(tmp_path / "other" / "elsewhere" / "late")
+    (healthy / "links" / "late").symlink_to(late)
+
+    claimed = federation.sweep()
+
+    assert registry.resolve(late) in claimed, "a broken sibling blocked the sweep"
+    assert registry.get(broken).last_error
+
+
+def test_the_sweep_skips_a_member_it_would_otherwise_treat_as_a_root(tmp_path):
+    """Only direct rows are walked. A member is reachable through its root and
+    walking it too would federate one level deeper than the design allows."""
+    root, members = _tree(tmp_path, n=1)
+    federation.register(root)
+    (members[0] / "links").mkdir()
+    deeper = _repo(tmp_path / "elsewhere" / "deeper")
+    (members[0] / "links" / "deeper").symlink_to(deeper)
+
+    assert federation.sweep() == []
+    assert registry.get(deeper) is None

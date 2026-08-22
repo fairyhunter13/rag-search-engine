@@ -104,3 +104,30 @@ physically outside the pin.
 Still untested, in descending consequence: the ancestor arm composed with federation, `index`'s
 out-of-pin side effects, `default_root` picking `roots[0]` of a multi-folder workspace, and the
 two-claiming-roots exclude union, which no fleet row exercises.
+
+# Amendment, 2026-08-22: the ancestor arm was sanctioned and never computed
+
+`enforce` has always allowed a target the pin sits inside, and the paragraph above says why — "an
+editor opened on `repo/backend` has to be able to name `repo`". Nothing walked the pin upward to
+*find* that root. `default_root` looked `roots[0]` up in the registry verbatim, so a session pinned
+one directory below a registered project was told its own project was not indexed, and the reply
+named the subdirectory as the thing to index.
+
+Measured by resolving every session's cwd on this machine against the 149 enabled rows, over 14,098
+sessions: **7.2% pinned a registered root**, **86.6% pinned somewhere inside one** — a subdirectory,
+or a worktree under `.claude/worktrees` — and 6.2% were in no indexed tree at all. One error sends a
+caller back to grep for the rest of the session, so the reachable share was the ceiling on every
+number downstream of it.
+
+`registry.enclosing(path)` returns the nearest *enabled* project containing a path, **longest match
+first** — the same rule `watch._owner` already uses, and for the same reason: a member can live under
+its root's tree, and the shorter match hands back the wrong project. `default_root` falls through to
+it when the pin has no row of its own. This is a `default_root` change and not a scope change;
+`enforce` is untouched.
+
+Three things stay as they were. A pin in no registered tree is still refused, because the ancestor
+walk stops at the nearest *registered* row and `FORBIDDEN_ROOTS` keeps `/` and `$HOME` from ever
+being one. A disabled ancestor does not answer for its subdirectory — an unflagged row has no store
+to read. And a worktree resolves to its main checkout, so the results are the main checkout's: the
+uncommitted edits in the worktree are not in them, and the reply has to say so rather than let the
+caller infer it.

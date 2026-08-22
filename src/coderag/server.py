@@ -19,8 +19,10 @@ daemon holds 12.2 GB with 3.5 GB free on a 16 GB card, because the ONNX BFC
 arena never shrinks. The function existed before; the thing that *called* it did
 not.
 
-**The startup reconcile is the only reconcile.** One content-hash pass over
-every enabled project catches whatever changed while the daemon was down.
+**Two reconciles: one at startup, one hourly.** The startup pass catches what
+changed while the daemon was down. The hourly sweep re-discovers each root's
+members first, because discovery used to run only inside an explicit `index`
+call and a symlink added afterwards was never seen.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ from collections.abc import AsyncIterator
 import uvicorn
 from starlette.responses import JSONResponse
 
-from . import config, embed, index, registry, watch
+from . import config, embed, federation, index, registry, watch
 from .tools import mcp
 
 log = logging.getLogger(__name__)
@@ -56,8 +58,27 @@ def _notify(state: str) -> None:
         sock.sendall(state.encode())
 
 
+def _sweep() -> None:
+    """Re-discover members, then reconcile. Hourly, not per tick.
+
+    Discovery walks every direct root's tree and a reconcile enqueues the whole
+    fleet, so this is the expensive half of the timer and it runs on its own
+    counter. The re-arm stays conditional: rebuilding ~120,000 inotify watches
+    costs 5.4 s over 151 projects and inotify has no replay, so an
+    unconditional re-arm here would blind the watcher for seconds every hour.
+    """
+    claimed = federation.sweep()
+    if claimed:
+        log.info("sweep claimed %d new members", len(claimed))
+        for member in claimed:
+            index.submit(member, reason="sweep")
+    index.reconcile_all()
+    watch.rearm_if_changed()
+
+
 def _tick() -> None:
-    """One timer for three jobs, because three timers is three things to stop."""
+    """One timer for four jobs, because four timers is four things to stop."""
+    since_sweep = 0.0
     while not _stop.wait(config.SCHEDULER_TICK_S):
         _notify("WATCHDOG=1")
         with contextlib.suppress(Exception):
@@ -66,6 +87,11 @@ def _tick() -> None:
             # alive.
             watch.start()
             watch.rearm_if_changed()
+        since_sweep += config.SCHEDULER_TICK_S
+        if config.SWEEP_EVERY_S and since_sweep >= config.SWEEP_EVERY_S:
+            since_sweep = 0.0
+            with contextlib.suppress(Exception):
+                _sweep()
         idle = config.MODEL_IDLE_UNLOAD_S
         if idle and embed.loaded() and embed.idle_seconds() > idle:
             log.info("idle for %ds, releasing models", idle)

@@ -161,6 +161,23 @@ def enabled_projects() -> list[ProjectEntry]:
     return [e for e in load().values() if e.enabled]
 
 
+def enclosing(path: Path | str) -> Path | None:
+    """The nearest enabled project containing `path`, longest match first.
+
+    Longest rather than first, for the reason `watch._owner` gives: a member can
+    live under its root's tree, and the shorter match hands the caller the wrong
+    project. Enabled only -- an unflagged row has no store to answer from.
+    """
+    target = resolve(path)
+    rows = load()
+    owning = [
+        e.path
+        for e in rows.values()
+        if e.enabled and (target == e.path or e.path in target.parents)
+    ]
+    return max(owning, key=lambda p: len(str(p))) if owning else None
+
+
 def claim(
     path: Path | str, *, direct: bool = False, root: Path | str | None = None
 ) -> ProjectEntry:

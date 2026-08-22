@@ -19,7 +19,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 
 from . import registry
-from .projcfg import ProjectConfig, effective
+from .projcfg import ConfigError, ProjectConfig, effective
 
 # Depth is bounded because discovery walks a tree that contains other repos'
 # working copies: an unbounded walk of a federation root enumerates every file
@@ -116,6 +116,40 @@ def register(root: Path | str) -> list[Path]:
     for member in members:
         registry.claim(member, root=root)
     return members
+
+
+def sweep() -> list[Path]:
+    """Re-discover every direct root's members. Returns what was newly claimed.
+
+    Discovery ran only inside an explicit `index` call, so a symlink added to a
+    root afterwards was never seen -- on this fleet 135 of 149 enabled rows are
+    members of one root, and every one of them arrived by someone remembering
+    to re-run the tool.
+
+    It only ever adds. A link that is gone and a link whose target is briefly
+    unmounted are the same observation from here, and the registry's rule is
+    that removal is explicit -- the pruning version of that rule is what wiped
+    the fleet once already.
+    """
+    claimed: list[Path] = []
+    for entry in registry.enabled_projects():
+        if not entry.direct or not entry.path.is_dir():
+            continue
+        root_key = str(entry.path)
+        try:
+            members = discover(entry.path)
+        except ConfigError as exc:
+            # The same broken file that drops it from the watch set. Recorded,
+            # not raised: one unparseable repo must not stop the sweep.
+            registry.update(entry.path, last_error=str(exc))
+            continue
+        for member in members:
+            row = registry.get(member)
+            if row is not None and root_key in row.roots:
+                continue
+            registry.claim(member, root=entry.path)
+            claimed.append(member)
+    return claimed
 
 
 def unregister(root: Path | str) -> list[Path]:
