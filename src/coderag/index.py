@@ -128,7 +128,7 @@ def _drain() -> None:
             _state.failed += 1
             log.exception("indexing %s failed", job.project)
             with contextlib.suppress(Exception):
-                registry.update(job.project, last_error=f"{type(exc).__name__}: {exc}")
+                registry.record_error(job.project, f"{type(exc).__name__}: {exc}")
         finally:
             _state.current = None
             _queue.task_done()

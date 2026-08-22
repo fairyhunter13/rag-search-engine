@@ -24,6 +24,10 @@ class ProjectEntry:
     file_count: int = 0
     chunk_count: int = 0
     last_error: str | None = None
+    # Cleared on the next success, so with an hourly reconcile a failure is gone within
+    # the hour and nothing recorded that it happened. These two are never cleared.
+    last_error_at: float | None = None
+    error_total: int = 0
     config_signature: str = ""
 
     @property
@@ -45,6 +49,8 @@ class ProjectEntry:
             "file_count": self.file_count,
             "chunk_count": self.chunk_count,
             "last_error": self.last_error,
+            "last_error_at": self.last_error_at,
+            "error_total": self.error_total,
             "config_signature": self.config_signature,
         }
 
@@ -60,6 +66,8 @@ class ProjectEntry:
             file_count=int(row.get("file_count", 0)),
             chunk_count=int(row.get("chunk_count", 0)),
             last_error=row.get("last_error"),
+            last_error_at=row.get("last_error_at"),
+            error_total=int(row.get("error_total", 0)),
             config_signature=str(row.get("config_signature", "")),
         )
 

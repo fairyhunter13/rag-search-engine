@@ -248,3 +248,16 @@ def update(path: Path | str, **fields) -> None:
             return
         for name, value in fields.items():
             setattr(entry, name, value)
+
+
+def record_error(path: Path | str, message: str) -> None:
+    """The one place a failure is written, so the durable counters cannot drift apart
+    from `last_error` the way four independent call sites would let them."""
+    key = str(resolve(path))
+    with _mutate() as rows:
+        entry = rows.get(key)
+        if entry is None:
+            return
+        entry.last_error = message
+        entry.last_error_at = time.time()
+        entry.error_total += 1

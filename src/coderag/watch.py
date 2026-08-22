@@ -102,7 +102,7 @@ def _loop() -> None:
                 # file alters no row, so `rearm_if_changed` never fires on it.
                 log.warning("not watching %s until it is re-registered: %s", root, exc)
                 with contextlib.suppress(Exception):
-                    registry.update(root, last_error=str(exc))
+                    registry.record_error(root, str(exc))
 
         roots = [r for r in roots if r in configs]
         watched = tuple(roots)

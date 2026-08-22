@@ -119,3 +119,61 @@ def test_update_skips_a_row_that_was_unflagged_mid_index(tmp_path):
     p.mkdir()
     registry.update(p, chunk_count=99)
     assert registry.get(p) is None, "update() must not resurrect an unclaimed project"
+
+
+def test_a_failure_that_resolves_itself_still_leaves_a_trace(tmp_path):
+    """The whole point of the durable pair. `last_error` is cleared by the next success,
+    and the hourly reconcile means that happens within the hour -- so a project could fail
+    every sweep for a week and read clean at every moment anyone looked."""
+    p = tmp_path / "p"
+    p.mkdir()
+    registry.claim(p, direct=True)
+
+    registry.record_error(p, "embedding backend refused connection")
+    failed = registry.get(p)
+    assert failed.last_error == "embedding backend refused connection"
+    assert failed.last_error_at is not None
+    assert failed.error_total == 1
+
+    registry.update(p, last_error=None)
+    recovered = registry.get(p)
+    assert recovered.last_error is None, "a success still clears the live error"
+    assert recovered.last_error_at == failed.last_error_at, "when it broke must survive"
+    assert recovered.error_total == 1, "that it broke must survive"
+
+
+def test_the_error_total_accumulates_across_separate_failures(tmp_path):
+    """A counter that assigned rather than incremented would report 1 forever, which reads
+    as a single blip no matter how long the project has been failing."""
+    p = tmp_path / "p"
+    p.mkdir()
+    registry.claim(p, direct=True)
+
+    registry.record_error(p, "first")
+    registry.record_error(p, "second")
+
+    entry = registry.get(p)
+    assert entry.error_total == 2
+    assert entry.last_error == "second"
+
+
+def test_record_error_skips_a_row_that_was_unflagged_mid_index(tmp_path):
+    """Same contract as update(): finishing work for a project nobody claims must not
+    recreate its row."""
+    p = tmp_path / "p"
+    p.mkdir()
+    registry.record_error(p, "boom")
+    assert registry.get(p) is None
+
+
+def test_the_durable_error_fields_survive_a_round_trip_through_json(tmp_path):
+    """They are only useful if they persist -- a field the registry drops on reload
+    reports zero to every reader that opens the file fresh."""
+    p = tmp_path / "p"
+    p.mkdir()
+    registry.claim(p, direct=True)
+    registry.record_error(p, "boom")
+
+    reloaded = registry.load()[str(registry.resolve(p))]
+    assert reloaded.error_total == 1
+    assert reloaded.last_error_at is not None
