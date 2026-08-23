@@ -48,3 +48,14 @@ asserts the durable pair survives the clear — it fails against the old code be
 no durable pair. The accumulation test discriminates an increment from an assignment, which would
 report 1 forever and read as a single blip. The round-trip test exists because a field the registry
 drops on reload reports zero to every reader that opens the file fresh.
+
+A fifth arm holds the chokepoint itself. The four call sites were found by grep, which says nothing
+about the next one, and a writer that sets `last_error` directly leaves both counters behind — a row
+that reports a failure the total never saw. An AST walk over `src/coderag/` asserts `record_error` is
+the only function that flags one; clearing to `None` stays every caller's to do.
+
+Confirmed end to end rather than only at the unit: a project carrying a retired `.coderag.toml`
+raises `ConfigError` in the watcher, and the row came back `error_total: 1` with `last_error_at` set,
+`armed: False`, and the durable pair intact after a success cleared the string. Run against an
+isolated `CODERAG_STATE_DIR` in a subprocess, which is what keeps a red demo away from the fleet
+registry -- 244 rows before and after.
