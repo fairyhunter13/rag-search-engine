@@ -177,3 +177,31 @@ def test_the_durable_error_fields_survive_a_round_trip_through_json(tmp_path):
     reloaded = registry.load()[str(registry.resolve(p))]
     assert reloaded.error_total == 1
     assert reloaded.last_error_at is not None
+
+
+def test_record_error_is_the_only_thing_that_flags_a_failure():
+    """A fifth call site that sets `last_error` itself leaves the two durable counters
+    behind, and the row then reports a failure that never happened to the total. The
+    existing four were found by grep, which finds nothing about the next one."""
+    import ast
+
+    writers = set()
+    for path in sorted(Path(registry.__file__).parent.rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        for func in ast.walk(tree):
+            if not isinstance(func, ast.FunctionDef):
+                continue
+            for node in ast.walk(func):
+                if not isinstance(node, ast.Assign):
+                    continue
+                if isinstance(node.value, ast.Constant) and node.value.value is None:
+                    continue  # clearing on success stays every caller's to do
+                if any(
+                    isinstance(t, ast.Attribute) and t.attr == "last_error"
+                    for t in node.targets
+                ):
+                    writers.add(f"{path.name}::{func.name}")
+
+    assert writers == {"registry.py::record_error"}, (
+        f"last_error is flagged outside record_error: {sorted(writers)}"
+    )

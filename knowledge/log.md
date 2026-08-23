@@ -7,6 +7,8 @@ title: coderag knowledge history
 
 ## 2026-08-23
 
+- **Update**: the chokepoint is now held by a test rather than by having grepped once. An AST walk asserts `record_error` is the only function that flags `last_error`; a fifth call site setting it directly would leave both durable counters behind. Confirmed live against an isolated `CODERAG_STATE_DIR`: a retired `.coderag.toml` raises `ConfigError` in the watcher, the row reads `error_total: 1` with `last_error_at` set and `armed: False`, and the pair survives the success that clears the string. Fleet registry untouched, 244 rows before and after.
+
 - **Creation**: [a failure that resolved itself left no trace](defects/a-failure-that-resolved-itself-left-no-trace.md). `last_error` was a single overwritten string with no timestamp and no count, cleared by the next success — and `reconcile_all` supplies a success every hour, so any failure shorter than the sweep was erased before anyone could read it. `last_error_at` and `error_total` are never cleared, and the four sites that recorded a failure (indexer, `index` tool, watcher, federation sweep) now go through `registry.record_error`, which is the only writer. `/healthz` gains `projects_failing` and `errors_total`, because a liveness check stayed green through every project failing to index. Raising the log level was refused: 8,140 lines in 24 h at INFO is already the volume, and the defect was that errors were ephemeral, not unlogged. Pointing `coderag-alert@.service` at the new counts is outstanding — host-owned unit, no installer here.
 
 ## 2026-08-22
