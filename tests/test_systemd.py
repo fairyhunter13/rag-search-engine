@@ -57,3 +57,43 @@ def test_the_alert_is_wired_where_systemd_reads_it(unit):
     head, _, service = unit.read_text().partition("\n[Service]\n")
     assert "OnFailure=" in head
     assert "OnFailure=" not in service
+
+
+@pytest.fixture
+def health_units(tmp_path):
+    """The health check and its timer, written where systemd-analyze can read them."""
+    service = tmp_path / systemd.HEALTH_NAME
+    service.write_text(systemd.health_text("/usr/bin/true"))
+    timer = tmp_path / systemd.HEALTH_TIMER
+    timer.write_text(systemd.health_timer_text())
+    return service, timer
+
+
+@pytest.mark.skipif(not shutil.which("systemd-analyze"), reason="no systemd-analyze")
+def test_systemd_accepts_the_health_units(health_units):
+    for path in health_units:
+        out = subprocess.run(
+            ["systemd-analyze", "--user", "verify", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert "Unknown key name" not in out.stderr, out.stderr
+        assert out.returncode == 0, out.stderr
+
+
+def test_the_health_alert_is_wired_where_systemd_reads_it(health_units):
+    """Same failure as the daemon unit's: `OnFailure` under `[Service]` parses,
+    warns, and never fires -- and a health check nothing pages on is a cron job."""
+    head, _, service = health_units[0].read_text().partition("\n[Service]\n")
+    assert "OnFailure=" in head
+    assert "OnFailure=" not in service
+
+
+def test_the_health_check_runs_no_more_often_than_a_sweep(health_units):
+    """It decides "still failing" by comparing two consecutive runs. Check twice
+    inside one sweep and nothing has had the chance to retry, so every failure
+    reads as persistent and the alert is noise."""
+    found = re.search(r"OnUnitActiveSec=(\d+)s", health_units[1].read_text())
+    assert found, "no OnUnitActiveSec, so the timer fires once at boot and never again"
+    assert int(found[1]) >= config.SWEEP_EVERY_S

@@ -85,9 +85,15 @@ coderag search <query> [root] [-k N] [--mode hybrid|lexical|semantic]
 coderag list                               every registered project
 coderag doctor [--prune]                   GPU, missing projects, orphan rows and stores
 coderag release                            unload the models now
+coderag health [--url U]                   ask the daemon whether the fleet is indexing
 coderag bridge-stdio [--url U] [--idle S]  forward stdio JSON-RPC to the daemon
 coderag install-systemd [--no-enable]
 ```
+
+`install-systemd` also writes `coderag-health.timer`, which runs `coderag health` hourly and pages
+through the existing alert unit. `health` exits non-zero only for a project that was failing at the
+previous check as well: `last_error` clears on the hourly sweep, so a checker keyed on one sample
+pages for every transient failure.
 
 `doctor --prune` is the only destructive subcommand: it deletes store directories no registry row
 claims, holding the registry lock so nothing can claim one while it looks, and keeps any store

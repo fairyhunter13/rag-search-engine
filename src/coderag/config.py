@@ -95,6 +95,13 @@ RECONCILE_ON_START = _env_flag("RECONCILE_ON_START", True)
 # after its last `index` call was never discovered and a project dropped from
 # the watch set for an unparseable config never came back.
 SWEEP_EVERY_S = _env_int("SWEEP_EVERY_S", 3600)
+# The health check compares the failing set against the previous run's, so its
+# period has to be at least a sweep: check twice inside one and every failure
+# reads as still-failing because nothing has had a chance to retry.
+HEALTH_EVERY_S = _env_int("HEALTH_EVERY_S", SWEEP_EVERY_S)
+HEALTH_FAILING_CAP = _env_int("HEALTH_FAILING_CAP", 20)
+HEALTH_STATE_PATH = STATE_DIR / "health.json"
+HEALTHZ_URL = f"http://{HOST}:{PORT}/healthz"
 WATCH_DEBOUNCE_MS = _env_int("WATCH_DEBOUNCE_MS", 1500)
 
 # Fail-closed: a call that arrives with no workspace pin is refused. The unit
