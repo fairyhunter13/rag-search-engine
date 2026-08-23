@@ -3,7 +3,7 @@ type: Defect
 resource: src/coderag/registry.py, src/coderag/entry.py, src/coderag/server.py, tests/test_registry.py
 title: A failure that resolved itself left no trace, and liveness called that healthy
 description: "`last_error` was one overwritten string cleared by the next success, and the reconcile sweep supplies a success every hour — so a project failing every sweep for a week read clean at every moment anyone looked, while `coderag-alert@.service` checked only `is-active`."
-tags: [registry, observability, resolved]
+tags: [registry, observability, alerting, systemd, resolved]
 status: stable
 generated: { by: claude/opus-5, at: 2026-08-22T20:30:00Z }
 ---
@@ -34,9 +34,16 @@ recreate it.
 `/healthz` counted enabled projects, which stayed green through every one of them failing to index,
 and the alert unit asks systemd whether the process is up. It now also reports `projects_failing`
 and `errors_total`, which is what makes "up but nothing is indexing" a state something can alert on
-rather than a state only a reader of the journal could infer. Wiring the alert unit to that route is
-outstanding: it is a host-owned systemd unit with no installer in this repo, so replacing its
-check means editing a file at an absolute path that only the host owns.
+rather than a state only a reader of the journal could infer.
+
+Wiring the alert to it was recorded here as outstanding and host-owned, which was wrong:
+`src/coderag/systemd.py` generates both units and `cli install-systemd` writes and enables them, so
+none of it was outside this repo. What was actually in the way is that `OnFailure=` cannot see a
+daemon that is up, and that no single field of the row separates a transient failure from a stuck
+project. Both are settled in
+[a fleet alert decides on two samples](../constraints/a-fleet-alert-decides-on-two-samples-not-on-a-count.md):
+an hourly `coderag-health.timer` runs `cli health`, which pages only for a project failing at two
+consecutive checks, and reuses the existing alert unit through `OnFailure`.
 
 Raising the log level was considered and refused: 8,140 lines in 24 h at INFO is already the volume,
 and the defect was that errors were ephemeral and unstructured, not that they went unlogged.
@@ -59,3 +66,8 @@ raises `ConfigError` in the watcher, and the row came back `error_total: 1` with
 `armed: False`, and the durable pair intact after a success cleared the string. Run against an
 isolated `CODERAG_STATE_DIR` in a subprocess, which is what keeps a red demo away from the fleet
 registry -- 244 rows before and after.
+
+Eight more in `tests/test_health.py` hold the alerting rule, and each was confirmed against a broken
+checker rather than only against the fixed one: paging on a sample breaks four of them, comparing
+counts instead of identities breaks the two-projects-once-each arm, and writing state after a failed
+fetch breaks the restart arm.

@@ -20,6 +20,8 @@ from . import config
 
 UNIT_NAME = f"{config.APP}.service"
 ALERT_NAME = f"{config.APP}-alert@.service"
+HEALTH_NAME = f"{config.APP}-health.service"
+HEALTH_TIMER = f"{config.APP}-health.timer"
 UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
 
 
@@ -68,6 +70,8 @@ def alert_text() -> str:
     desktop notification for every one of those is how an alert gets muted --
     after which the outage that mattered is silent too.
     """
+    # "coderag down" was wrong once the health unit started using this path: the
+    # fleet failing to index is a daemon that is up. %i names which.
     return """\
 [Unit]
 Description=coderag failure alert for %i
@@ -76,7 +80,38 @@ Description=coderag failure alert for %i
 Type=oneshot
 ExecStartPre=/bin/sleep 8
 ExecStart=/bin/sh -c 'systemctl --user is-active --quiet %i || \
-  notify-send -u critical "coderag down" "%i is still failed after 8s"'
+  notify-send -u critical "coderag" "%i failed, re-checked after 8s"'
+"""
+
+
+def health_text(executable: str = "") -> str:
+    """`is-active` is a liveness check, and liveness stayed green through every
+    project failing to index. This asks the daemon about the fleet instead, and
+    `OnFailure` reuses the one notification path rather than adding a second."""
+    return f"""\
+[Unit]
+Description=coderag fleet health check
+OnFailure={config.APP}-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart={executable or sys.executable} -m coderag.cli health
+"""
+
+
+def health_timer_text() -> str:
+    # At least a sweep apart: checked twice inside one, every failure reads as
+    # still-failing because nothing has had the chance to retry it yet.
+    return f"""\
+[Unit]
+Description=hourly coderag fleet health check
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec={config.HEALTH_EVERY_S}s
+
+[Install]
+WantedBy=timers.target
 """
 
 
@@ -85,10 +120,15 @@ def install(enable: bool = True) -> Path:
     unit = UNIT_DIR / UNIT_NAME
     unit.write_text(unit_text())
     (UNIT_DIR / ALERT_NAME).write_text(alert_text())
+    (UNIT_DIR / HEALTH_NAME).write_text(health_text())
+    (UNIT_DIR / HEALTH_TIMER).write_text(health_timer_text())
 
     _systemctl("daemon-reload")
     if enable:
         _systemctl("enable", "--now", UNIT_NAME)
+        # The timer, not the service: enabling the oneshot would run the check
+        # at every boot and never again.
+        _systemctl("enable", "--now", HEALTH_TIMER)
     return unit
 
 

@@ -19,7 +19,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import config, embed, federation, gpu, index, registry, search, store, systemd
+from . import config, embed, federation, gpu, health, index, registry, search, store, systemd
 
 
 def _serve(args) -> int:
@@ -124,6 +124,12 @@ def _install(args) -> int:
     return 0
 
 
+def _health(args) -> int:
+    ok, message = health.check(args.url)
+    print(message)
+    return 0 if ok else 1
+
+
 def _release(_args) -> int:
     embed.release_models()
     print("models released")
@@ -156,6 +162,10 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--prune", action="store_true", help="delete stores no row claims")
     doctor.set_defaults(fn=_doctor)
     sub.add_parser("release", help="unload the models now").set_defaults(fn=_release)
+
+    checkup = sub.add_parser("health", help="ask the daemon whether the fleet is indexing")
+    checkup.add_argument("--url", default="")
+    checkup.set_defaults(fn=_health)
 
     bridge = sub.add_parser("bridge-stdio", help="forward stdio JSON-RPC to the daemon")
     bridge.add_argument("--url", default="")

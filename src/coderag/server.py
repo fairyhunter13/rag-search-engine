@@ -45,6 +45,8 @@ log = logging.getLogger(__name__)
 
 _ticker: threading.Thread | None = None
 _stop = threading.Event()
+# Keyed by job name so a recovery clears only its own entry.
+_tick_errors: dict[str, str] = {}
 
 
 def _notify(state: str) -> None:
@@ -76,22 +78,37 @@ def _sweep() -> None:
     watch.rearm_if_changed()
 
 
+def _guarded(name: str, job) -> None:
+    """One bad job must not stop the timer -- but suppressing it outright is how
+    a sweep that raised every hour stayed invisible: no log line, no registry
+    row, and `/healthz` green, because the sweep is what would have recorded it.
+    """
+    try:
+        job()
+    except Exception as exc:
+        _tick_errors[name] = f"{type(exc).__name__}: {exc}"
+        log.exception("scheduler job %s failed", name)
+    else:
+        _tick_errors.pop(name, None)
+
+
+def _watch_tick() -> None:
+    # `start` before the rearm check: a rearm only sets a flag, and a thread
+    # that died reads no flags. `start` is a no-op while one is alive.
+    watch.start()
+    watch.rearm_if_changed()
+
+
 def _tick() -> None:
     """One timer for four jobs, because four timers is four things to stop."""
     since_sweep = 0.0
     while not _stop.wait(config.SCHEDULER_TICK_S):
         _notify("WATCHDOG=1")
-        with contextlib.suppress(Exception):
-            # `start` before the rearm check: a rearm only sets a flag, and a
-            # thread that died reads no flags. `start` is a no-op while one is
-            # alive.
-            watch.start()
-            watch.rearm_if_changed()
+        _guarded("watch", _watch_tick)
         since_sweep += config.SCHEDULER_TICK_S
         if config.SWEEP_EVERY_S and since_sweep >= config.SWEEP_EVERY_S:
             since_sweep = 0.0
-            with contextlib.suppress(Exception):
-                _sweep()
+            _guarded("sweep", _sweep)
         idle = config.MODEL_IDLE_UNLOAD_S
         if idle and embed.loaded() and embed.idle_seconds() > idle:
             log.info("idle for %ds, releasing models", idle)
@@ -132,13 +149,21 @@ async def healthz(_request) -> JSONResponse:
     # One load for both: the count and the digest have to describe the same
     # registry, or a fixture comparing them across a run compares two moments.
     rows = registry.load()
+    failing = sorted(k for k, e in rows.items() if e.enabled and e.last_error)
     return JSONResponse(
         {
             "status": "ok",
             "projects": sum(1 for e in rows.values() if e.enabled),
             # A liveness check answers "is the process up", which stayed green through
             # every project failing to index. These two are what make that visible.
-            "projects_failing": sum(1 for e in rows.values() if e.enabled and e.last_error),
+            "projects_failing": len(failing),
+            # Identities, not just the count: a checker deciding "still failing" has to
+            # compare the same projects across two runs, and a count cannot tell one
+            # project failing twice from two failing once each.
+            "failing": failing[: config.HEALTH_FAILING_CAP],
+            # A dead scheduler is the failure no per-project field can carry: the
+            # sweep is what would have written one.
+            "scheduler_errors": dict(_tick_errors),
             "errors_total": sum(e.error_total for e in rows.values()),
             "fleet_digest": registry.fleet_digest(rows),
             "unclaimed_stores": len(registry.unclaimed_stores()),

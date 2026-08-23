@@ -205,6 +205,73 @@ async def test_healthz_reports_what_doctor_would_ask():
     assert body.status_code == 200
 
 
+async def test_healthz_names_the_failing_projects_not_only_how_many(tmp_path):
+    """The health check decides "still failing" by comparing two runs, and a
+    count cannot tell one project failing twice from two failing once each."""
+    import json
+
+    for name in ("a", "b"):
+        (tmp_path / name).mkdir()
+        registry.claim(tmp_path / name, direct=True)
+    registry.record_error(tmp_path / "a", "boom")
+
+    body = json.loads(bytes((await server.healthz(None)).body))
+    assert body["projects_failing"] == 1
+    assert body["failing"] == [str(registry.resolve(tmp_path / "a"))]
+
+
+def test_a_raising_scheduler_job_is_recorded_rather_than_dropped(monkeypatch, caplog):
+    """`contextlib.suppress(Exception)` around the sweep meant a reconcile that
+    raised every hour left no log line, no registry row -- the sweep is what
+    would have written one -- and a green `/healthz`. The whole freshness
+    mechanism could be dead and every check would say healthy."""
+    server._tick_errors.clear()
+
+    def boom():
+        raise RuntimeError("federation store is gone")
+
+    with caplog.at_level("ERROR"):
+        server._guarded("sweep", boom)
+
+    assert server._tick_errors == {"sweep": "RuntimeError: federation store is gone"}
+    assert "federation store is gone" in caplog.text, "the journal must carry the traceback"
+
+
+def test_a_recovered_scheduler_job_clears_only_its_own_entry():
+    """Keyed by job, or the watcher recovering hides a sweep that is still dead."""
+    server._tick_errors.clear()
+    server._guarded("sweep", lambda: (_ for _ in ()).throw(RuntimeError("x")))
+    server._guarded("watch", lambda: (_ for _ in ()).throw(RuntimeError("y")))
+
+    server._guarded("watch", lambda: None)
+
+    assert set(server._tick_errors) == {"sweep"}
+
+
+async def test_healthz_reports_a_dead_scheduler():
+    """No per-project field can carry this one, so the alert cannot see it
+    unless the route does."""
+    import json
+
+    server._tick_errors.clear()
+    server._guarded("sweep", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    try:
+        body = json.loads(bytes((await server.healthz(None)).body))
+        assert body["scheduler_errors"] == {"sweep": "RuntimeError: boom"}
+    finally:
+        server._tick_errors.clear()
+
+
+def test_the_scheduler_keeps_ticking_after_a_job_raises():
+    """The reason the exception was suppressed in the first place. Recording it
+    must not turn one bad job into a dead timer."""
+    server._tick_errors.clear()
+    ran = []
+    server._guarded("sweep", lambda: (_ for _ in ()).throw(RuntimeError("x")))
+    server._guarded("watch", lambda: ran.append(1))
+    assert ran == [1]
+
+
 @pytest.mark.parametrize("on,expected", [(True, 1), (False, 0)])
 async def test_the_startup_sweep_is_the_difference_between_serving_and_indexing(
     monkeypatch, on, expected
