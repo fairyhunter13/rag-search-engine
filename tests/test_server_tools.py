@@ -338,7 +338,7 @@ def test_install_writes_both_units_without_touching_systemd(tmp_path, monkeypatc
 def test_every_operator_action_stayed_off_the_mcp_surface():
     """The contraction is the decision; this is what holds it."""
     parser = build_choices()
-    assert {"doctor", "list", "serve", "install-systemd", "bridge-stdio"} <= parser
+    assert {"doctor", "forget", "list", "serve", "install-systemd", "bridge-stdio"} <= parser
     assert {t.name for t in _tool_names()} == {"index", "search"}
 
 
@@ -351,6 +351,26 @@ def _tool_names():
     import asyncio
 
     return asyncio.run(tools.mcp.list_tools())
+
+
+def test_forget_removes_a_row_whose_directory_is_still_there(tmp_path, capsys):
+    """A harness that creates a project and deletes it has to deregister it
+    while it still exists -- `--prune` can only reach the row afterwards, and
+    afterwards is when the hourly alert has already been paging on it."""
+    kept, gone = tmp_path / "kept", tmp_path / "gone"
+    for project in (kept, gone):
+        project.mkdir()
+        registry.claim(project, direct=True)
+
+    assert cli.main(["forget", str(gone)]) == 0
+
+    out = capsys.readouterr().out
+    assert f"forgot {registry.resolve(gone)}" in out
+    assert set(registry.load()) == {str(registry.resolve(kept))}
+    assert gone.is_dir(), "forget removes the row, never the directory"
+
+    assert cli.main(["forget", str(gone)]) == 0
+    assert f"not registered {registry.resolve(gone)}" in capsys.readouterr().out
 
 
 def test_search_from_the_cli_reports_the_error_rather_than_a_traceback(tmp_path, capsys):
