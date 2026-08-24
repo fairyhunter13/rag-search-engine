@@ -61,6 +61,19 @@ def _list(_args) -> int:
     return 0
 
 
+def _forget(args) -> int:
+    """The other half of `index` for a caller that creates a project and then
+    deletes it. Without it such a row can only be removed once its directory is
+    already gone, by which time the hourly sweep has been paging on it.
+    """
+    dropped, released = registry.forget(args.roots)
+    for key in dropped + released:
+        print(f"forgot {key}")
+    for key in sorted({str(registry.resolve(r)) for r in args.roots} - set(dropped)):
+        print(f"not registered {key}")
+    return 0
+
+
 def _doctor(args) -> int:
     problems = 0
     missing: list[str] = []
@@ -179,6 +192,11 @@ def build_parser() -> argparse.ArgumentParser:
     find.set_defaults(fn=_search)
 
     sub.add_parser("list", help="every registered project").set_defaults(fn=_list)
+
+    drop = sub.add_parser("forget", help="remove the named rows from the registry")
+    drop.add_argument("roots", nargs="+")
+    drop.set_defaults(fn=_forget)
+
     doctor = sub.add_parser("doctor", help="GPU, missing projects, orphan rows and stores")
     doctor.add_argument("--prune", action="store_true", help="delete stores no row claims")
     doctor.set_defaults(fn=_doctor)

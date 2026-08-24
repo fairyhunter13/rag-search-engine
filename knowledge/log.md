@@ -9,6 +9,8 @@ title: coderag knowledge history
 
 - **Creation**: [a dead row paged hourly](defects/a-dead-row-paged-hourly-and-nothing-could-remove-it.md), and this entry replaces the by-hand procedure the 08-23 entry below recorded. `registry.forget(keys)` and a `doctor --prune` that calls it are the removal path that did not exist; the gate is whether a live root still claims the row, not `last_error`, which the sweep clears. Twenty `/tmp` rows from a host's live tests had saturated `HEALTH_FAILING_CAP`, so the alert was full of junk and could not have carried a real failure.
 
+- **Update**: [a dead row paged hourly](defects/a-dead-row-paged-hourly-and-nothing-could-remove-it.md) gains the half the first entry missed. A live run under the silenced SessionStart card still made ten rows: `search` itself says "call index(root='/tmp/…') first" and the model obeys. The engine cannot refuse a temp root anywhere — every fixture project in this suite is a `tmp_path` directory, so the refusal reds the suite — which puts the fix on the caller that knows its directory is throwaway. `coderag forget <path>` is that surface, and ccw's `livecap` runner now forgets its workdir in the same defer that deletes it.
+
 - **Refused**: no concept for `forget` itself. It is four lines of loop under a docstring that already states its own why, and a bundle entry would restate the module docstring — which is what `log.md` exists to record instead.
 
 ## 2026-08-23

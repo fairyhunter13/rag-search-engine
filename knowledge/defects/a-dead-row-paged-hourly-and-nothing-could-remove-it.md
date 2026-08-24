@@ -49,6 +49,24 @@ It is deliberately not gated on `last_error`. The hourly sweep clears `last_erro
 success, so a rule that reads it makes `--prune` depend on where in the hour it was run — the same
 property that forced the alert onto two samples instead of one field.
 
+# Silencing the card did not stop it, because the engine says the same thing
+
+The host's SessionStart card was made silent under `TMPDIR` and a live run afterwards still
+produced ten new rows. The transcripts name the surviving source: `search` refuses an unindexed
+root with *"call index(root='/tmp/…') first"*, and the model does exactly that. The card was one
+of two mouths.
+
+The engine cannot close the other one. Refusing a temp root — in `search`'s message, in
+`tools.index_project`, anywhere — reds this repo's own suite, because every fixture project is a
+`tmp_path` directory. A throwaway agent workdir and a test fixture are the same object, and no
+predicate here separates them.
+
+What does separate them is the caller. Whoever creates a directory it will delete knows that at
+creation time, so `coderag forget <path>` exists for it to say so, and the harness pairs the two:
+`internal/livecap/runner.go` forgets the workdir in the same defer that removes it. The row is gone
+while the directory still exists, which is the only moment at which removing it is unambiguous —
+`--prune` can act only afterwards, and afterwards is when the page has already fired.
+
 # The freed store leaves the way every other store leaves
 
 The forget runs before the store walk, so a row's directory becomes unclaimed and exits through
