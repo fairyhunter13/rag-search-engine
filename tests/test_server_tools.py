@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import queue
+import shutil
 import threading
 import time
 
@@ -389,6 +390,68 @@ def test_doctor_names_a_store_no_row_claims(tmp_path, monkeypatch, capsys):
     assert "pruned gone-0123456789abcdef" in capsys.readouterr().out
     assert not orphan.exists()
     assert config.index_path(kept).parent.exists()
+
+
+def test_prune_forgets_a_row_whose_directory_is_gone(tmp_path, monkeypatch, capsys):
+    """The row that paged hourly and nothing could remove.
+
+    A temp directory registered by a session and deleted when it ended re-fails
+    on every sweep, so the two-sample alert rule sees it stuck forever. `doctor`
+    named it and `--prune` reached only stores, which left the fix as editing
+    projects.json by hand.
+    """
+    monkeypatch.setattr(cli.gpu, "providers", lambda: ["CUDAExecutionProvider"])
+    monkeypatch.setattr(cli.gpu, "free_vram_bytes", lambda: 0)
+    gone = tmp_path / "live-run"
+    gone.mkdir()
+    registry.claim(gone, direct=True)
+    key = str(gone.resolve())
+    store_dir = config.index_path(gone).parent
+    store_dir.mkdir(parents=True)
+    (store_dir / "index.db").write_bytes(b"x" * 2048)
+    gone.rmdir()
+
+    assert cli.main(["doctor"]) == 1
+    out = capsys.readouterr().out
+    assert f"MISSING {key}" in out
+    assert registry.get(key) is not None, "report-only has to keep the row"
+
+    # The freed store leaves through the same idle-gated walk as any other, so
+    # a row-driven rmtree is never added beside it.
+    os.utime(store_dir / "index.db", (0, 0))
+    os.utime(store_dir, (0, 0))
+    assert cli.main(["doctor", "--prune"]) == 0
+    out = capsys.readouterr().out
+    assert f"forgot {key}" in out
+    assert f"pruned {store_dir.name}" in out
+    assert registry.get(key) is None
+    assert not store_dir.exists()
+
+
+def test_prune_keeps_a_missing_member_a_live_root_still_claims(tmp_path, monkeypatch, capsys):
+    """The gate is the claim, not `last_error`, which the hourly sweep clears --
+    gating on that would make `--prune` depend on where in the hour it ran. A
+    root that still exists is a configuration saying this member belongs to it,
+    and the member is behind a broken symlink or an unmounted volume."""
+    monkeypatch.setattr(cli.gpu, "providers", lambda: ["CUDAExecutionProvider"])
+    monkeypatch.setattr(cli.gpu, "free_vram_bytes", lambda: 0)
+    root = tmp_path / "root"
+    root.mkdir()
+    member = tmp_path / "member"
+    member.mkdir()
+    registry.claim(member, root=root)
+    member.rmdir()
+
+    assert cli.main(["doctor", "--prune"]) == 1
+    out = capsys.readouterr().out
+    assert f"MISSING {member.resolve()}" in out
+    assert "forgot" not in out
+    assert registry.get(str(member.resolve())) is not None
+
+    shutil.rmtree(root)
+    assert cli.main(["doctor", "--prune"]) == 0
+    assert f"forgot {member.resolve()}" in capsys.readouterr().out
+    assert registry.get(str(member.resolve())) is None
 
 
 def test_prune_keeps_an_unclaimed_store_something_is_still_writing_to(

@@ -63,11 +63,11 @@ def _list(_args) -> int:
 
 def _doctor(args) -> int:
     problems = 0
+    missing: list[str] = []
     print(f"gpu: {gpu.providers()[0]}, {gpu.free_vram_bytes() // 2**20} MiB free")
     for entry in registry.enabled_projects():
         if not entry.path.is_dir():
-            print(f"MISSING {entry.key}")
-            problems += 1
+            missing.append(entry.key)
             continue
         try:
             counts = store.orphans(store.connect(entry.path, create=False))
@@ -77,6 +77,22 @@ def _doctor(args) -> int:
         if any(counts.values()):
             print(f"ORPHANS {entry.key}: {counts}")
             problems += 1
+
+    if getattr(args, "prune", False) and missing:
+        rows = registry.load()
+        # A vanished path whose root still exists is that root's configuration,
+        # not garbage. The gate is the claim rather than last_error, which the
+        # hourly sweep clears -- gating on it would make --prune depend on where
+        # in the hour it ran.
+        gone = [key for key in missing if not _root_alive(rows, key)]
+        missing = [key for key in missing if key not in set(gone)]
+        if gone:
+            dropped, released = registry.forget(gone)
+            for key in dropped + released:
+                print(f"forgot {key}")
+    for key in missing:
+        print(f"MISSING {key}")
+        problems += 1
 
     # The other direction, and against every row rather than the enabled ones:
     # unflagging keeps the store, so a disabled row's directory is claimed. What
@@ -103,6 +119,11 @@ def _doctor(args) -> int:
             problems += 1
     print(f"{problems} problem(s), pruned {pruned} store(s), {freed} MiB")
     return 1 if problems else 0
+
+
+def _root_alive(rows: dict, key: str) -> bool:
+    entry = rows.get(key)
+    return bool(entry) and any(Path(root).is_dir() for root in entry.roots)
 
 
 def _size_mib(store_dir: Path) -> int:

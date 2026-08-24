@@ -5,9 +5,15 @@ title: coderag knowledge history
 
 # Bundle history
 
+## 2026-08-24
+
+- **Creation**: [a dead row paged hourly](defects/a-dead-row-paged-hourly-and-nothing-could-remove-it.md), and this entry replaces the by-hand procedure the 08-23 entry below recorded. `registry.forget(keys)` and a `doctor --prune` that calls it are the removal path that did not exist; the gate is whether a live root still claims the row, not `last_error`, which the sweep clears. Twenty `/tmp` rows from a host's live tests had saturated `HEALTH_FAILING_CAP`, so the alert was full of junk and could not have carried a real failure.
+
+- **Refused**: no concept for `forget` itself. It is four lines of loop under a docstring that already states its own why, and a bundle entry would restate the module docstring — which is what `log.md` exists to record instead.
+
 ## 2026-08-23
 
-- **Update**: [a fleet alert decides on two samples](constraints/a-fleet-alert-decides-on-two-samples-not-on-a-count.md) gains what its first live page taught. Not a drill: the live lane claims roots under `tmp_path`, pytest deletes the directories, and the surviving rows fail at every sweep — so they cleared both samples and `cli health` exited 1 naming `/tmp/pytest-of-redacted-name-11/pytest-505/wroot0`. Released both dead rows by hand (245 to 243) and pruned 24 unclaimed stores, 72 MiB; the fleet reads `156 projects, none failing` twice running. Removal stays explicit — `claim()` gets no path-shaped refusal, because `tmp_path` is where the registry's own tests claim.
+- **Update**: [a fleet alert decides on two samples](constraints/a-fleet-alert-decides-on-two-samples-not-on-a-count.md) gains what its first live page taught. Not a drill: the live lane claims roots under `tmp_path`, pytest deletes the directories, and the surviving rows fail at every sweep — so they cleared both samples and `cli health` exited 1 naming a `tmp_path` under `/tmp/pytest-of-*/`. Released both dead rows by hand (245 to 243) and pruned 24 unclaimed stores, 72 MiB; the fleet reads `156 projects, none failing` twice running. Removal stays explicit — `claim()` gets no path-shaped refusal, because `tmp_path` is where the registry's own tests claim.
 
 - **Creation**: [the scheduler suppressed its own death](defects/the-scheduler-suppressed-its-own-death.md). Both scheduler jobs ran inside a bare `contextlib.suppress(Exception)` with no log call, and the sweep is what would have written a registry row — so a reconcile raising every hour left no traceback, no `last_error` anywhere on the fleet, and a green `/healthz`. Found by auditing the daemon's suppressions rather than by a failure: the alert shipped the same day could not have seen it. `_guarded` logs and records per job name, `/healthz` returns `scheduler_errors`, and the health check folds them in as `scheduler:<job>`.
 

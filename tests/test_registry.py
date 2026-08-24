@@ -205,3 +205,57 @@ def test_record_error_is_the_only_thing_that_flags_a_failure():
     assert writers == {"registry.py::record_error"}, (
         f"last_error is flagged outside record_error: {sorted(writers)}"
     )
+
+
+def test_forget_removes_only_the_rows_it_was_handed(tmp_path):
+    """No predicate and no disk read.
+
+    Every directory here exists, so a `forget` that decided for itself which
+    rows were dead would remove none -- and the version that did decide for
+    itself removed 236.
+    """
+    for name in ("a", "b", "c"):
+        (tmp_path / name).mkdir()
+        registry.claim(tmp_path / name, direct=True)
+
+    dropped, released = registry.forget([str(tmp_path / "b")])
+
+    assert dropped == [str((tmp_path / "b").resolve())]
+    assert released == []
+    assert set(registry.load()) == {str((tmp_path / n).resolve()) for n in ("a", "c")}
+
+
+def test_forget_strips_the_dead_root_from_the_members_that_survive_it(tmp_path):
+    """The rule `release` applies, over a set: a member claimed only by the
+    forgotten root goes with it, and one claimed directly stays with the dead
+    root gone from its `roots` -- a stale root there narrows the member's corpus
+    through the excludes it inherits, with the row count unmoved."""
+    for name in ("root", "member", "shared"):
+        (tmp_path / name).mkdir()
+    root, member, shared = (tmp_path / n for n in ("root", "member", "shared"))
+    registry.claim(root, direct=True)
+    registry.claim(member, root=root)
+    registry.claim(shared, direct=True, root=root)
+
+    dropped, released = registry.forget([str(root)])
+
+    assert dropped == [str(root.resolve())]
+    assert released == [str(member.resolve())]
+    assert registry.load()[str(shared.resolve())].roots == []
+
+
+def test_forget_leaves_one_backup_holding_every_row_it_removed(tmp_path):
+    """`_rotate_backup` stamps to the second, so a loop of `release` calls
+    overwrites its own backup within that second and what survives is a
+    half-pruned registry, which is not a restore point."""
+    keys = []
+    for name in ("a", "b", "c"):
+        (tmp_path / name).mkdir()
+        registry.claim(tmp_path / name, direct=True)
+        keys.append(str((tmp_path / name).resolve()))
+
+    registry.forget(keys)
+
+    newest = max(config.BACKUP_DIR.glob("projects.*.json"))
+    assert set(json.loads(newest.read_text())) == set(keys)
+    assert registry.load() == {}
