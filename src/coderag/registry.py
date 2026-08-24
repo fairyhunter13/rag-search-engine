@@ -10,7 +10,8 @@ Nothing prunes a row because its path is missing from disk. An unmounted
 volume, a repo moved for ten seconds, or a member behind a broken symlink all
 look identical to a deleted project, and the pruning version of this file wiped
 the fleet registry when a caller ran it in-process against the real state.
-Removal is always explicit.
+Removal is always explicit: `forget` is the bulk form of it and takes a list of
+keys, never a predicate.
 """
 
 from __future__ import annotations
@@ -225,6 +226,29 @@ def release(path: Path | str, *, direct: bool = False, root: Path | str | None =
             return True
         rows[key] = entry
         return False
+
+
+def forget(keys: list[str]) -> tuple[list[str], list[str]]:
+    """Remove the named rows outright, plus any member they leave unclaimed.
+
+    One write for the whole set: `_rotate_backup` stamps to the second, so a
+    loop of `release` calls overwrites its own backup and what survives is a
+    half-pruned registry.
+    """
+    targets = {str(resolve(key)) for key in keys}
+    with _mutate() as rows:
+        dropped = sorted(targets & rows.keys())
+        for key in dropped:
+            del rows[key]
+        released = []
+        for key, entry in list(rows.items()):
+            if not targets.intersection(entry.roots):
+                continue
+            entry.roots = [r for r in entry.roots if r not in targets]
+            if entry.orphaned:
+                del rows[key]
+                released.append(key)
+        return dropped, sorted(released)
 
 
 def set_enabled(path: Path | str, enabled: bool) -> None:
