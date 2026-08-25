@@ -174,6 +174,38 @@ def test_a_disabled_member_leaves_the_search_unit(tmp_path):
     assert federation.expand(root) == [root, members[1]]
 
 
+def test_a_member_asked_from_its_own_directory_reaches_the_federation(tmp_path):
+    """The live failure: a session inside a member searched 1 project of 143,
+    and the reply looked exactly like the federation's. The member cannot ask
+    for its root instead, because the root does not contain it."""
+    root, members = _tree(tmp_path, n=3)
+    federation.register(root)
+
+    reached = federation.unit(members[0])
+
+    assert reached[0] == members[0], "the caller's own project is the subject"
+    assert set(reached) == {root, *members}
+
+
+def test_a_root_is_its_own_unit(tmp_path):
+    """The widening is for members. A root already answers for its federation,
+    and a second pass over it would be the transitive walk this engine refuses."""
+    root, members = _tree(tmp_path, n=2)
+    federation.register(root)
+
+    assert federation.unit(root) == federation.expand(root) == [root, *members]
+
+
+def test_a_member_of_a_disabled_root_answers_alone(tmp_path):
+    """An unflagged root has no store to read, and its members are nobody's
+    corpus. Widening into it would search a project the operator turned off."""
+    root, members = _tree(tmp_path, n=2)
+    federation.register(root)
+    registry.set_enabled(root, False)
+
+    assert federation.unit(members[0]) == [members[0]]
+
+
 def test_discovery_is_depth_bounded(tmp_path):
     root, _ = _tree(tmp_path, n=0)
     deep = root / "a" / "b" / "c" / "d" / "e"

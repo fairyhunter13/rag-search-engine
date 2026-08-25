@@ -231,3 +231,24 @@ def test_search_from_a_root_reaches_its_members(tmp_path, repo):
     out = search.search("parseUserConfig", root, mode="lexical")
     assert any(r["project"] == str(repo) for r in out["results"])
     assert out["searched"]["projects"] == 2
+
+
+@pytest.mark.gpu
+def test_search_from_a_member_reaches_its_sibling(tmp_path, repo):
+    """The other direction, and the one that answered wrongly. The query names
+    code in a sibling member, which the caller's own project does not hold."""
+    sibling = tmp_path / "sibling"
+    (sibling / "src").mkdir(parents=True)
+    (sibling / "src" / "ledger.py").write_text("def postJournalEntry(rows):\n    return rows\n")
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "member").symlink_to(repo)
+    (root / "other").symlink_to(sibling)
+    federation.register(root)
+    for project in federation.expand(root):
+        index.index_project(project)
+
+    out = search.search("postJournalEntry", repo, mode="lexical")
+
+    assert out["searched"]["projects"] == 3
+    assert any(r["project"] == str(sibling) for r in out["results"])
