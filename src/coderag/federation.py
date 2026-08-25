@@ -190,6 +190,31 @@ def members_of(root: Path | str) -> list[Path]:
 
 
 def expand(root: Path | str) -> list[Path]:
-    """The search unit: the root together with its federated members."""
+    """One root together with its federated members."""
     root = registry.resolve(root)
     return [root, *members_of(root)]
+
+
+def unit(root: Path | str) -> list[Path]:
+    """The search unit for one directory, which for a member is its root's too.
+
+    `expand` answers for a root. A member asked from its own directory got
+    itself and nothing else. That answer is not narrow but wrong: on the live
+    tree it is 1 project of 143, and the reply reads the same either way. The
+    member cannot ask for its root instead, because `scope.enforce` refuses a
+    target the caller's workspace neither contains nor sits inside, and a
+    member lives outside its root's tree.
+
+    The member stays first in the list. `rank.pool_cut` gives the first project
+    half the slots, and the subject of the query is the directory the caller is
+    in.
+    """
+    root = registry.resolve(root)
+    entry = registry.get(root)
+    projects = expand(root)
+    for key in entry.roots if entry else []:
+        claiming = registry.get(key)
+        if claiming is None or not claiming.enabled:
+            continue
+        projects.extend(p for p in expand(claiming.path) if p not in projects)
+    return projects

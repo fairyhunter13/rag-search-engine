@@ -10,8 +10,10 @@ generated: { by: claude/opus-5, at: 2026-08-20T18:00:00Z }
 
 # What was already right, and it was most of it
 
-`search` searches exactly `federation.expand(root)`, which is `[root, *members_of(root)]` — **one
-level, not transitive**, so A federating B federating C does not reach C. There is no fleet-wide
+`search` searches `federation.unit(root)`. For a root that is `[root, *members_of(root)]` — **one
+level, not transitive**, so A federating B federating C does not reach C. For a member it is that
+member followed by the federation of every enabled root claiming it, which the last amendment
+below explains. There is no fleet-wide
 fan-out mode at all. The reason is a number: 164.78 s unscoped against 7.01 s scoped. The unscoped
 run answered a question about one repo with a member's vendored JavaScript. `registry.resolve` is
 `expanduser().resolve()`, so a symlink is never a key.
@@ -207,3 +209,23 @@ The predicate is now `.git` at the pin. A worktree carries it as a file, a neste
 directory, and a plain subdirectory not at all. A nested clone its parent does not gitignore is
 over-warned. That is the safe direction. The test's load-bearing arms are the two silent ones: a
 plain subdirectory and the root itself. The noisy version passes an unconditional string.
+
+# Fourth amendment, 2026-08-25: a member reaches upward, and that widens the boundary
+
+"Federation members sit outside the pin by design. That is the feature." The sentence held in one
+direction only. A root reached its members. A member reached nothing, and it could not ask for the
+root instead, because the root does not contain it. So a session inside a member searched 1
+project of 143 and the reply looked the same as the federation's. See [a member answered alone](../defects/a-member-answered-alone-and-read-like-the-federation.md).
+
+`federation.unit` is the search path now. A member's unit is the member, then the federation of
+every **enabled** root whose key sits in the member's `roots`. A root's unit is unchanged.
+
+State the widening plainly, because it is a change to this document's claim. A session inside one
+member now reads results from 142 projects it never named and never opened. Three things bound
+that. The projects are exactly what one registered root already claims. The row has to be enabled,
+so a disabled root is not a route. And the containment claim survives: the reachable set is still
+what the registry holds for the caller's own directory, not the fleet.
+
+The cost is real and it is recorded in the defect: 0.65 s narrow against 5.5 s to 17.6 s wide, on
+the same query from `gen3-app-c`. A root call in that federation already pays it.
+

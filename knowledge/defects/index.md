@@ -33,6 +33,10 @@
   project failing every sweep for a week read clean at every moment anyone looked. Meanwhile
   `coderag-alert@.service` checked only `is-active`.
 * [A floating range on onnxruntime-gpu changed the CUDA major version](a-floating-range-changed-the-cuda-major.md) - A resolver bump from onnxruntime-gpu 1.26 to 1.29 changed the linked CUDA major from 12 to 13 against a cu12 wheel set. Every GPU test failed on a missing libcublasLt.so.13 and the session fell back to CPU.
+* [A member answered alone, and the reply read like the
+  federation's](a-member-answered-alone-and-read-like-the-federation.md) - A search from a
+  member's own directory covered 1 project of 143. The reply carried no sign of it, and the caller
+  had no second call to make: `enforce` refuses a member that names its root.
 * [A project whose directory was gone could not be turned
   off](a-vanished-project-could-not-be-turned-off.md) - `index_project` refused every call for a
   path that is not a directory, and the refusal sat above the unflag branch. So the row an

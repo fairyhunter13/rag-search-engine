@@ -185,12 +185,17 @@ def search(
     preview_lines: int = 3,
     include_body: bool = False,
 ) -> dict:
-    """The root together with its federated members. One root, never a list.
+    """A root together with its federated members, or a member with its root's.
 
-    The expansion is the engine's job, not the caller's, and the fleet-wide
-    alternative is not offered at all: unscoped fan-out across 148 projects
-    measured 164.78 s against 7.01 s scoped, and answered a question about one
-    repo with a member's vendored JavaScript.
+    One root, never a list. The expansion is the engine's job, not the
+    caller's, and the fleet-wide alternative is not offered at all: unscoped
+    fan-out across 148 projects measured 164.78 s against 7.01 s scoped, and
+    answered a question about one repo with a member's vendored JavaScript.
+
+    `federation.unit` is what widens a member, and it is not free. Measured
+    from `gen3-app-c` on 2026-08-25: 0.65 s for the member alone against
+    17.6 s for the 143 projects its root federates. The one-project answer was
+    the cheaper of the two and it was the wrong one.
     """
     started = time.perf_counter()
     if mode not in config.MODES:
@@ -210,7 +215,7 @@ def search(
     entry = registry.get(root)
     if entry is None or not entry.enabled or entry.indexed_at is None:
         raise SearchError(f"{root} is not indexed -- call index(root={str(root)!r}) first")
-    projects = federation.expand(root)
+    projects = federation.unit(root)
 
     vector = None
     if mode in ("hybrid", "semantic"):
