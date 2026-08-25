@@ -96,6 +96,11 @@
   bounds the connection wait and nothing else. The 90 s was spent in the lifespan shutdown,
   waiting on a plain-`def` tool running under anyio's shield. The tool restarted the threads the
   finally block had just stopped.
+* [The watcher went blind in two ways, and reported
+  neither](the-watcher-went-blind-in-two-ways-and-said-neither.md) - A project dropped for a broken
+  config never re-armed: the repair moves no registry row, and the row was the whole comparison.
+  And an `OSError` out of inotify killed the thread, which `server._guarded` does not wrap. The
+  checker read 2 of the 12 fields `/healthz` publishes, so both read as healthy.
 * [The watcher woke the indexer for files git ignores, forever](the-watcher-woke-the-indexer-for-files-git-ignores.md) - `discover.indexable` is the shared predicate, but it never sees gitignore -- the indexer gets that from `git ls-files --exclude-standard`. So a gitignored build cache, which no pass will ever index, submitted a full-project job on every write to it. Caught mid-fleet-index: `3 changes detected` every ~4 s and a queue that grew while the worker drained it.
 * [watch.armed() answered for projects the watcher had just refused to
   watch](armed-reported-the-unfiltered-set.md) - `_armed` was assigned the unfiltered intent list.
