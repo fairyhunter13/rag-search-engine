@@ -199,10 +199,53 @@ def test_an_unknown_mode_reaches_the_caller_as_an_error(tmp_path, pin):
 # ------------------------------------------------------------------ the server
 
 
-def test_the_app_serves_two_routes_and_no_dashboard():
+def test_the_app_serves_three_routes_and_no_dashboard():
     paths = {getattr(r, "path", None) for r in server.build_app().routes}
-    assert "/mcp" in paths and "/healthz" in paths
+    assert {"/mcp", "/healthz", "/register"} <= paths
     assert not {p for p in paths if p and p.startswith("/api")}
+
+
+def test_register_names_its_own_root_where_the_index_tool_cannot(tmp_path, monkeypatch):
+    """The route a hook calls. `index` takes its root from the client handshake,
+    so a caller with no MCP session cannot say which directory it asks about."""
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(config, "RECONCILE_ON_START", False)
+    monkeypatch.setattr(index, "start_worker", lambda: None)
+    monkeypatch.setattr(watch, "start", lambda: None)
+    monkeypatch.setattr(watch, "rearm_if_changed", lambda: None)
+    project = tmp_path / "p"
+    project.mkdir()
+    (project / "a.py").write_text("x = 1\n")
+
+    with TestClient(server.build_app()) as client:
+        got = client.post("/register", json={"root": str(project)})
+        empty = client.post("/register", json={})
+
+    assert got.status_code == 200, got.text
+    assert got.json()["root"] == str(project)
+    assert registry.get(project) is not None
+    assert empty.status_code == 400
+
+
+def test_register_enqueues_the_walk_rather_than_running_it(tmp_path, monkeypatch):
+    """SessionStart is on the path of the first turn, so the route returns
+    before any file is read. The queue is what proves it."""
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(config, "RECONCILE_ON_START", False)
+    monkeypatch.setattr(index, "start_worker", lambda: None)
+    monkeypatch.setattr(watch, "start", lambda: None)
+    monkeypatch.setattr(watch, "rearm_if_changed", lambda: None)
+    monkeypatch.setattr(
+        index, "index_project", lambda *_a, **_k: pytest.fail("the route indexed inline")
+    )
+    project = tmp_path / "q"
+    project.mkdir()
+
+    with TestClient(server.build_app()) as client:
+        assert client.post("/register", json={"root": str(project)}).status_code == 200
+    assert index._queue.qsize() >= 1
 
 
 def test_mcp_answers_a_request_and_not_only_the_route_table(monkeypatch):

@@ -7,6 +7,10 @@ title: coderag knowledge history
 
 ## 2026-08-25
 
+- **Update**: the daemon serves a third route, `POST /register`, and the fifth amendment to [the search unit is the caller's own workspace](constraints/the-search-unit-is-the-callers-own-workspace.md) carries why it skips the pin. `index` takes its root from the client handshake, so a SessionStart hook has no way to name the directory it stands in. The route takes the root in the body and calls `enroll`, which is the half of the `index` tool that runs after the scope check. It enqueues the walk rather than running it, because the caller is on the path of a session's first turn. Containment is not authorization on a localhost daemon, so this reaches nothing a `curl` did not.
+
+- **Update**: the served instructions name the `ToolSearch` step. A client that defers a tool schema fails the first call, and every live run opened with that load. This is a factual step and not a fourth escalation of the prose, which [served prose does not beat grep](constraints/served-prose-does-not-beat-grep.md) measured three times.
+
 - **Creation**: [the watcher went blind in two ways, and reported neither](defects/the-watcher-went-blind-in-two-ways-and-said-neither.md), `status: resolved`. A project dropped for a broken `.coderag.yaml` never re-armed, because the repair moves no registry row and `_intent` held rows. `_intent` now stamps each path with the mtimes of `.coderag.yaml` and `.coderag.toml`, and both count: `projcfg` refuses a leftover TOML file rather than ignoring it. A claiming root's config is not stamped, because `effective` suppresses a broken one there.
 
 - **Update**: `_loop` catches `OSError` out of `_watch` now. That is where inotify raises at the per-user watch ceiling, and where a project deleted mid-pass raises. Uncaught it killed the thread, and `server._guarded` wraps the scheduler thread rather than this one. The failure lands in `watch.error()`, and `/healthz` publishes it under `scheduler_errors` as `watch`. Headroom today is 101,767 watches against a ceiling of 1,048,576, so this is a guard and not a fire.

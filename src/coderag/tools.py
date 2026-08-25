@@ -39,6 +39,9 @@ Code retrieval over the current project and the repos it federates.
   mode="semantic" for a question in English. The default fuses both.
 - `index` is the fix when `search` says a root is not indexed, and the reply
   names it. Any other project, ask the user first.
+- A client that defers a tool schema fails the first call. Where yours does,
+  `ToolSearch` on `select:mcp__coderag__search` loads it, and that load is the
+  first half of the call.
 """
 
 mcp = MCPServer(
@@ -96,6 +99,15 @@ def index_project(
             "members_released": [str(p) for p in removed],
         }
 
+    return enroll(target)
+
+
+def enroll(target: Path) -> dict[str, Any]:
+    """The half of `index` that runs after the scope check.
+
+    Shared with the daemon's `/register` route, whose caller is a SessionStart
+    hook standing in the directory rather than a model naming one.
+    """
     # After the unflag branch, not before it: a project whose directory has been
     # deleted is exactly the row an operator most needs to turn off, and gating
     # the whole tool on `is_dir` left two of them stuck enabled forever, retried
