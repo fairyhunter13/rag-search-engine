@@ -12,12 +12,9 @@ reads back.
 
 from __future__ import annotations
 
-import contextlib
-import json
-import time
 from typing import TYPE_CHECKING
 
-from . import config
+from . import config, ledger
 
 if TYPE_CHECKING:  # pragma: no cover
     from .scope import Verdict
@@ -36,18 +33,14 @@ def path():
 
 
 def record(verdict: Verdict, roots: int) -> None:
-    row = {
-        "ts": round(time.time(), 3),
-        "client": verdict.client,
-        "proto": verdict.proto,
-        "branch": verdict.branch,
-        "roots": roots,
-        "peer": verdict.peer,
-    }
-    target = path()
-    with contextlib.suppress(OSError):
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists() and target.stat().st_size >= MAX_BYTES:
-            target.replace(target.with_suffix(".jsonl.1"))
-        with target.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(row) + "\n")
+    ledger.append(
+        path(),
+        {
+            "client": verdict.client,
+            "proto": verdict.proto,
+            "branch": verdict.branch,
+            "roots": roots,
+            "peer": verdict.peer,
+        },
+        MAX_BYTES,
+    )

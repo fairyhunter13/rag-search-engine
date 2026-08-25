@@ -26,14 +26,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import chunk as chunker
-from . import discover, embed, filters, progress, projcfg, registry, store
+from . import discover, progress, projcfg, registry, runledger, store
+from .indexwrite import _relang, _wipe, _write_files
 
 log = logging.getLogger(__name__)
-
-# Files per transaction. One commit per file fsyncs 61,714 times; one commit per
-# project leaves a multi-hour build with nothing durable if the daemon stops.
-BATCH_FILES = 64
 
 
 @dataclass(slots=True)
@@ -41,6 +37,9 @@ class Job:
     project: Path
     paths: list[str] | None = None  # None means the whole project
     reason: str = "manual"
+    # Stamped by the producer, not the worker. The wait behind one queue is the
+    # half of a slow index that the pass itself cannot see.
+    queued_at: float = 0.0
 
 
 @dataclass
@@ -92,7 +91,7 @@ def submit(project: Path | str, paths: list[str] | None = None, reason: str = "m
                 for job in _queue.queue
             ):
                 return
-    _queue.put(Job(project=project, paths=paths, reason=reason))
+    _queue.put(Job(project=project, paths=paths, reason=reason, queued_at=time.time()))
 
 
 def status() -> dict:
@@ -120,41 +119,32 @@ def _drain() -> None:
         if job is None:
             _queue.task_done()
             return
+        row = {
+            "trace": runledger.trace_id(),
+            "project": str(job.project),
+            "reason": job.reason,
+            "paths": len(job.paths) if job.paths is not None else None,
+            "queued_ms": round((time.time() - job.queued_at) * 1000, 2) if job.queued_at else None,
+        }
+        started = time.perf_counter()
         try:
             _state.current = str(job.project)
-            index_project(job.project, job.paths)
+            row |= index_project(job.project, job.paths).pop("stage", {})
             _state.done += 1
         except Exception as exc:  # one bad project must not stop the queue
             _state.failed += 1
+            row["error"] = f"{type(exc).__name__}: {exc}"
             log.exception("indexing %s failed", job.project)
             with contextlib.suppress(Exception):
                 registry.record_error(job.project, f"{type(exc).__name__}: {exc}")
         finally:
             _state.current = None
+            # The registry keeps one `last_error` per project and the next
+            # failure overwrites it, so this is the only durable copy.
+            row["took_ms"] = round((time.perf_counter() - started) * 1000, 2)
+            runledger.record("index", row)
+            log.debug("index %s %s", job.project, row)
             _queue.task_done()
-
-
-def _relang(conn) -> int:
-    """Re-derive `lang` for stored files whose path now maps somewhere else.
-
-    Without this a `LANGS` or `FILENAMES` addition reaches only files that
-    happen to change afterwards: the content-hash diff sees no difference, so
-    2,058 `.groovy` files stay classified as nothing.
-    """
-    stale = [
-        (fresh, path)
-        for path, was in store.file_langs(conn).items()
-        if (fresh := filters.lang_of(path)) != was
-    ]
-    if stale:
-        store.set_langs(conn, stale)
-        conn.commit()
-    return len(stale)
-
-
-def _wipe(conn) -> None:
-    for table in ("chunks_fts", "chunks_vec", "chunks", "files"):
-        conn.execute(f"DELETE FROM {table}")
 
 
 def index_project(project: Path | str, paths: list[str] | None = None) -> dict:
@@ -169,16 +159,28 @@ def index_project(project: Path | str, paths: list[str] | None = None) -> dict:
         # files, delete every chunk it has, and report a successful pass.
         raise FileNotFoundError(f"{project} is not a directory")
 
+    stage: dict = {}
+    mark = time.perf_counter()
+
+    def since() -> float:
+        nonlocal mark
+        now = time.perf_counter()
+        elapsed, mark = round((now - mark) * 1000, 2), now
+        return elapsed
+
     entry = registry.get(project)
     roots = tuple(entry.roots) if entry else ()
     cfg = projcfg.effective(project, roots)
     conn = store.connect(project)
+
+    stage["open_ms"] = since()
 
     if reason := store.incompatible(conn):
         # A store built by another model or another chunker cannot be updated in
         # place: its vectors are in a different space and its line ranges were
         # cut to a different budget.
         log.warning("rebuilding %s: %s", project, reason)
+        stage["rebuilt"] = reason
         _wipe(conn)
         conn.commit()
 
@@ -187,9 +189,10 @@ def index_project(project: Path | str, paths: list[str] | None = None) -> dict:
         # The excludes changed -- a root was joined or left. This pass has to
         # *remove* what the new config excludes, not merely stop adding to it,
         # so the whole project is walked rather than the requested subset.
+        stage["widened"] = True
         paths = None
 
-    _relang(conn)
+    stage["relang"] = _relang(conn)
 
     known = store.file_digests(conn)
     if paths is None:
@@ -198,11 +201,14 @@ def index_project(project: Path | str, paths: list[str] | None = None) -> dict:
         write = [m for m in (discover.read(project, p) for p in paths) if m is not None]
         fresh = {m.rel for m in write}
         delete = [p for p in paths if p not in fresh and p in known]
+    stage |= {"known": len(known), "walk_ms": since()}
 
     deleted = store.delete_files(conn, delete)
     conn.commit()
+    stage["delete_ms"] = since()
 
     written = _write_files(conn, write, project)
+    stage["write_ms"] = since()
 
     store.stamp(conn)
     store.set_meta(conn, config_signature=signature, indexed_at=time.time())
@@ -223,52 +229,10 @@ def index_project(project: Path | str, paths: list[str] | None = None) -> dict:
         "chunks": chunks,
         "written": written,
         "deleted": deleted,
+        # `_drain` pops this into its ledger row, and the CLI prints it. The MCP
+        # tool never sees it: a model asking for status cannot act on a timing.
+        "stage": stage | {"written": written, "deleted": deleted, "files": files, "chunks": chunks},
     }
-
-
-def _write_files(conn, metas: list, project: Path | str = "") -> int:
-    """Chunk, embed and store, committing every BATCH_FILES.
-
-    The embed call sits outside the transaction on purpose: it is the slow part
-    and it takes the GPU lock, and holding a SQLite write transaction across it
-    would block every reader for the length of a batch.
-    """
-    written, pending = 0, []
-    progress.begin(project, len(metas))
-    for meta in metas:
-        chunks = chunker.chunk_text(meta.text, rel_path=meta.rel)
-        if chunks:
-            vectors = embed.get_embedder().embed(
-                [c.embed_text for c in chunks], side=embed.DOCUMENT
-            )
-            pending.append((meta, chunks, vectors))
-            if len(pending) >= BATCH_FILES:
-                written += _flush(conn, pending)
-                pending = []
-        progress.advance()
-    written += _flush(conn, pending)
-    progress.finish()
-    return written
-
-
-def _flush(conn, pending: list) -> int:
-    for meta, chunks, vectors in pending:
-        store.upsert_file(
-            conn,
-            {
-                "path": meta.rel,
-                "mtime": meta.mtime,
-                "size": meta.size,
-                "sha256": meta.sha256,
-                "lang": meta.lang,
-                "n_lines": meta.n_lines,
-            },
-            chunks,
-            vectors,
-        )
-    if pending:
-        conn.commit()
-    return len(pending)
 
 
 def suppressed_by_excludes(project: Path | str, roots: tuple[str, ...] = ()) -> int:

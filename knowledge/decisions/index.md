@@ -6,6 +6,12 @@
   `rank.py` hold zero log calls and the reply carries only `took_ms` and a project count. A louder
   journal was already refused on a measurement, so the record is a JSONL row per search rather
   than prose at INFO.
+* [The daemon records its own work, and the library that filled the journal goes
+  quiet](the-daemon-records-its-own-work-and-the-library-goes-quiet.md) - 454 index passes ran in
+  24 h and the journal described none of them, while 3,800 of its 5,912 lines were `watchfiles`
+  announcing a change count with no project name. One JSONL row per index pass, watch batch, sweep
+  and re-arm replaces that, and `watchfiles` drops to WARNING, so the journal gets quieter rather
+  than louder.
 * [CI runs no GPU and no live job, and the self-hosted runner is
   deregistered](ci-does-not-touch-the-gpu.md) - A self-hosted runner on a public personal-account
   repo cannot be scoped by a runner group. The GPU suites contend for the one card everything else

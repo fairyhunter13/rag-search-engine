@@ -146,7 +146,7 @@ def enroll(target: Path) -> dict[str, Any]:
 def _pending(unit: set[Path]) -> int:
     """Whole-project walks queued for this unit, where `queue_depth` is the fleet's.
 
-    Here rather than in `index` because that module is at its 300-line ceiling.
+    Here rather than in `index`, which owns the queue and does not read it.
     """
     with index._queue.mutex:  # noqa: SLF001
         return len({j.project for j in index._queue.queue if j is not None and j.project in unit})

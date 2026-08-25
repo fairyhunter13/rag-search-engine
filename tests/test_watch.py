@@ -523,5 +523,40 @@ def test_an_empty_batch_enqueues_nothing(tmp_path):
     assert _jobs() == []
 
 
+def test_an_empty_batch_records_nothing_either(tmp_path):
+    """A timeout yield is the common case. A row per one of those is the volume
+    the dated refusal ruled out."""
+    from coderag import runledger
+
+    watch._dispatch(set(), [tmp_path], {tmp_path: projcfg.ProjectConfig()})
+    assert runledger.read(kind="watch") == []
+
+
+def test_a_dropped_event_says_which_of_the_five_answers_applies(tmp_path):
+    """"I edited a file and it is not searchable" had five answers, and each
+    drop was a bare `continue`, so the daemon told none of them apart."""
+    from coderag import runledger
+
+    project = tmp_path / "p"
+    (project / "src").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    (project / ".gitignore").write_text("src/gen.py\n", encoding="utf-8")
+    batch = {
+        ("x", str(tmp_path / "elsewhere" / "a.py")),
+        ("x", str(project / ".env")),
+        ("x", str(project / "src" / "gen.py")),
+        ("x", str(project / "src" / "a.py")),
+    }
+
+    watch._dispatch(batch, [project], {project: projcfg.ProjectConfig()})
+
+    row = runledger.read(kind="watch")[0]
+    assert row["raw"] == 4
+    assert row["unowned"] == 1, row
+    assert row["filtered"] == 1, row
+    assert row["gitignored"] == 1, row
+    assert row["submitted"] == {str(project): 1}, row
+
+
 def test_the_owner_helper_accepts_the_project_root_itself(tmp_path):
     assert watch._owner(Path(tmp_path), [tmp_path]) == tmp_path

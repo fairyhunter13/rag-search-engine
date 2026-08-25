@@ -25,7 +25,7 @@ from pathlib import Path
 
 from watchfiles import watch as _watch
 
-from . import config, discover, index, projcfg, registry
+from . import config, discover, index, projcfg, registry, runledger
 
 log = logging.getLogger(__name__)
 
@@ -141,13 +141,18 @@ def _loop() -> None:
                 with contextlib.suppress(Exception):
                     registry.record_error(root, str(exc))
 
+        dropped = [str(r) for r in roots if r not in configs]
         roots = [r for r in roots if r in configs]
         watched = tuple(roots)
         if not roots:
+            runledger.record("arm", {"armed": 0, "dropped_config": dropped})
             if _stop.wait(config.SCHEDULER_TICK_S):
                 return
             continue
         log.info("watching %d projects", len(roots))
+        # A re-arm tears down every watch and rebuilds it, and inotify replays
+        # nothing, so the window is a real gap and its cause is worth dating.
+        runledger.record("arm", {"armed": len(roots), "dropped_config": dropped})
         try:
             for batch in _watch(
                 *roots,
@@ -176,6 +181,9 @@ def _loop() -> None:
             log.error("watch failed, re-arming: %s", exc)
             _armed = ()
             _error = f"{type(exc).__name__}: {exc}"
+            # `_error` is memory, and this failure is what causes the restart
+            # that erases it. inotify raises here at the per-user ceiling.
+            runledger.record("arm", {"armed": 0, "error": _error, "was_watching": len(roots)})
             if _stop.wait(config.SCHEDULER_TICK_S):
                 return
 
@@ -188,7 +196,9 @@ def _dispatch(batch, roots: list[Path], configs: dict) -> None:
     same walk it would have done anyway.
     """
     grouped: dict[Path, set[str]] = {}
+    seen = {"raw": 0, "unowned": 0, "outside": 0, "filtered": 0}
     for _change, raw in batch:
+        seen["raw"] += 1
         # inotify identifies a directory by inode, so a root and the member it
         # reaches through a symlink register the same watch, and notify reports
         # events under whichever was added last. Unresolved, a member's writes
@@ -198,20 +208,35 @@ def _dispatch(batch, roots: list[Path], configs: dict) -> None:
         path = Path(raw).resolve()
         project = _owner(path, roots)
         if project is None:
+            seen["unowned"] += 1
             continue
         try:
             rel = str(path.relative_to(project))
         except ValueError:
+            seen["outside"] += 1
             continue
         if not discover.indexable(rel, configs[project]):
+            seen["filtered"] += 1
             continue
         grouped.setdefault(project, set()).add(rel)
 
+    ignored, submitted = 0, {}
     for project, paths in grouped.items():
         if configs[project].respect_gitignore:
+            before = len(paths)
             paths -= discover.git_ignored(project, sorted(paths))
+            ignored += before - len(paths)
         if paths:
+            submitted[str(project)] = len(paths)
             index.submit(project, sorted(paths), reason="watch")
+
+    if seen["raw"]:
+        # Every drop above was a bare `continue`. So "I edited a file and it is
+        # not searchable" had five answers and the daemon told them apart in
+        # none of them. One row, and it names which one.
+        row = seen | {"gitignored": ignored, "submitted": submitted}
+        runledger.record("watch", row)
+        log.debug("watch batch %s", row)
 
 
 def start() -> threading.Thread:
