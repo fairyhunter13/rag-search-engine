@@ -35,13 +35,14 @@ import os
 import signal
 import socket
 import threading
+import time
 from collections.abc import AsyncIterator
 
 import anyio.to_thread
 import uvicorn
 from starlette.responses import JSONResponse
 
-from . import config, embed, federation, index, registry, watch
+from . import config, embed, federation, index, registry, runledger, watch
 from .tools import enroll, mcp
 
 log = logging.getLogger(__name__)
@@ -72,13 +73,21 @@ def _sweep() -> None:
     costs 5.4 s over 151 projects and inotify has no replay, so an
     unconditional re-arm here would blind the watcher for seconds every hour.
     """
+    started = time.perf_counter()
     claimed = federation.sweep()
     if claimed:
         log.info("sweep claimed %d new members", len(claimed))
         for member in claimed:
             index.submit(member, reason="sweep")
-    index.reconcile_all()
+    reconciled = index.reconcile_all()
     watch.rearm_if_changed()
+    # A sweep that claims nothing logs nothing, and nearly every sweep claims
+    # nothing. So the hourly job that enqueues the fleet left no evidence it ran.
+    runledger.record("sweep", {
+        "claimed": [str(m) for m in claimed],
+        "reconciled": reconciled,
+        "took_ms": round((time.perf_counter() - started) * 1000, 2),
+    })
 
 
 def _guarded(name: str, job) -> None:
@@ -91,6 +100,9 @@ def _guarded(name: str, job) -> None:
     except Exception as exc:
         _tick_errors[name] = f"{type(exc).__name__}: {exc}"
         log.exception("scheduler job %s failed", name)
+        # `_tick_errors` is memory. A scheduler failure that restarts the daemon
+        # is also what erases the only record of itself.
+        runledger.record("sched", {"job": name, "error": _tick_errors[name]})
     else:
         _tick_errors.pop(name, None)
 
@@ -237,6 +249,10 @@ def serve(host: str = "", port: int = 0) -> None:
     # on the message breaks in silence at the next SDK release. Here and not in
     # `build_app`, which the tests import.
     logging.getLogger("mcp.server.streamable_http").setLevel(logging.WARNING)
+    if config.LOG_LEVEL != "DEBUG":
+        # 3,800 of one day's 5,912 journal lines, each announcing a change count
+        # and naming no project. The watch ledger row names one.
+        logging.getLogger("watchfiles").setLevel(logging.WARNING)
     # uvicorn restores the handler it replaced and then re-raises the signal it
     # caught, so the exit below never ran on a stop: the process died -15 under
     # the default disposition. Installing this first makes ours the handler it

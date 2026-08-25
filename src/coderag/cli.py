@@ -17,12 +17,20 @@ import argparse
 import json
 import shutil
 import sys
-import time
 from pathlib import Path
 
 from . import (
-    config, embed, federation, gpu, health, index, registry, search, searchledger, store,
+    config,
+    embed,
+    federation,
+    gpu,
+    health,
+    index,
+    registry,
+    search,
+    store,
     systemd,
+    trace,
 )
 
 
@@ -163,32 +171,7 @@ def _install(args) -> int:
 
 
 def _trace(args) -> int:
-    """The search ledger, newest first. Stage sizes side by side is the point.
-
-    `pool` against `cut` is the pair that names a starved round-robin, and
-    `unit` against `pool_projects` names a federation that reached nothing.
-    """
-    rows = searchledger.read(args.n, args.errors)
-    if not rows:
-        print(f"no rows in {searchledger.path()}")
-        return 0
-    for row in rows:
-        when = time.strftime("%m-%d %H:%M:%S", time.localtime(row.get("ts", 0)))
-        head = f"{when} {row.get('trace', '-')} {row.get('client', '-')}"
-        if row.get("error"):
-            print(f"{head} FAILED {row['error']}")
-            continue
-        print(
-            f"{head} {row.get('root', '-')}\n"
-            f"    unit={row.get('unit')} pool={row.get('pool')}"
-            f" from {row.get('pool_projects')} proj"
-            f" -> filtered={row.get('filtered')} cut={row.get('cut')}"
-            f" from {row.get('cut_projects')} proj"
-            f" -> returned={row.get('returned')}\n"
-            f"    embed={row.get('embed_ms')}ms retrieve={row.get('retrieve_ms')}ms"
-            f" rerank={row.get('rerank_ms')}ms total={row.get('took_ms')}ms"
-        )
-    return 0
+    return trace.render(args.kind, args.n, args.errors)
 
 
 def _health(args) -> int:
@@ -235,7 +218,11 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.set_defaults(fn=_doctor)
     sub.add_parser("release", help="unload the models now").set_defaults(fn=_release)
 
-    trace = sub.add_parser("trace", help="the search ledger: stage sizes and timings per call")
+    trace = sub.add_parser("trace", help="the ledgers: what a search, an index pass or the watcher did")
+    # `search` is the default, so the invocation that existed before the other
+    # three ledgers did still means what it meant.
+    trace.add_argument("kind", nargs="?", default="search",
+                       choices=["search", "index", "watch", "sweep", "arm", "sched"])
     trace.add_argument("-n", type=int, default=20)
     trace.add_argument("--errors", action="store_true", help="only the calls that failed")
     trace.set_defaults(fn=_trace)
