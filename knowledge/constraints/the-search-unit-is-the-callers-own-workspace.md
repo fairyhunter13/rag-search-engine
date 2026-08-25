@@ -1,8 +1,8 @@
 ---
 type: Constraint
 resource: src/coderag/scope.py, src/coderag/tools.py, src/coderag/systemd.py, tests/test_scope.py, scripts/reach_census.py
-title: The search unit is the caller's own workspace plus what it federates, and that is containment rather than authorization
-description: "The root was a string the model wrote, so any of ~159 registered projects was reachable from any session by naming it. The boundary now comes from the client's own roots, through a parameter the model cannot see — and the honest claim for it is narrow."
+title: The pin bounds what a session enrolls, and the registry bounds what it reads
+description: "The root was a string the model wrote, so any of ~159 registered projects was reachable from any session by naming it. The boundary comes from the client's own roots, through a parameter the model cannot see. The sixth amendment keeps that on `index` and hands the read path to the registry row."
 tags: [mcp, roots, scoping, security, federation]
 status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T18:00:00Z }
@@ -246,3 +246,48 @@ registered root before this route existed.
 What it does add is a row created without a model asking for one. A registered root is a root the
 fleet reconciles hourly, so a hook that enrolls too eagerly is paid for at every sweep. The exempt
 cases are what bound it: a directory under the temp directory, and a directory in no git repo.
+
+# Sixth amendment, 2026-08-26: the pin gates the write, and the registry gates the read
+
+`search` no longer calls `enforce`. A caller may name any project the registry holds as
+registered, enabled and indexed, and that row is the whole boundary. `index` still calls it, so
+enrolling a project still requires standing in it.
+
+This document's own argument is what retires the read-side pin, in three steps it already
+records. **Containment is not authorization** here, and the fifth amendment already built
+`POST /register`, which takes a root in the body and skips the pin outright. **The fourth
+amendment already widened reach past the pin**: a session inside one member reads 142 projects it
+never named. Once a call answers from 142 unnamed projects, refusing the 143rd because the caller
+named it costs the honest caller and stops nobody. And the pin refused a real question in the
+session that changed this: a search of `rag-search-engine` from the `claude-code-workflows`
+workspace was refused, and the caller fell back to grep. That is the failure this document exists
+to avoid.
+
+Two claims flip and both were load-bearing. "A member is reachable through its root and is not
+nameable directly" is now half true: reach is unchanged, and naming is allowed. Naming the member
+is also the cheap path, at the fourth amendment's own 0.65 s narrow against 5.5 s to 17.6 s wide.
+And the 2026-08-20 amendment's live test carried the old half, so
+`tests/test_live_scoping.py` now holds the registry gate to the job: a named indexed stranger
+answers, a path no row holds is refused with `not indexed`, and the pinned expansion arm is
+untouched.
+
+The honest claim shrinks and it is worth stating in the new words. **coderag reads what the
+registry holds, and enrolling into the registry still requires standing in the directory.**
+`FORBIDDEN_ROOTS` still keeps `/` and `$HOME` from ever being a row, and a disabled row is still
+not a route.
+
+`resolution_note` needed a third silent arm, and it was `enforce` that had been holding it up.
+The note says the target is "the indexed project containing your workspace", which the pin check
+used to guarantee: a target was the pin or an ancestor of it. A named root is neither, so the
+sentence shipped false on the first live call after the restart. It is gated on containment now.
+A caller who wrote the path has no upward walk to be told about.
+
+`root=""` is unchanged. An empty root still resolves through `default_root(pinned)`, so the
+workspace still supplies the default, and a call carrying no roots is still refused. Only an
+explicit path widens.
+
+`scope.observe` is what survives the split. `enforce` recorded the caller and the pin as a side
+effect of refusing, so dropping the call would have dropped the record. `observe` holds the
+`log.info` and the `pinledger.record`, `enforce` calls it first and keeps the refusal, and
+`search_code` calls `observe` alone. A reader grouping calls by client cannot tell an absent
+record from an absent call, which is why this is not left to [the search ledger](../decisions/a-search-writes-one-row-and-the-log-level-stays.md).
