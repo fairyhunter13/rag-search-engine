@@ -1,9 +1,11 @@
-"""The daemon: two routes, five threads, and an exit that does not run atexit.
+"""The daemon: three routes, five threads, and an exit that does not run atexit.
 
-`/healthz` and `/mcp`. The old engine served sixteen routes; journald, a repeat
-`index` call and `coderag doctor` answer everything the other fourteen did, and
-one of them -- `/api/gpu/release` -- returned 200 without freeing any VRAM at
-all, which is worse than not having it.
+`/healthz`, `/register` and `/mcp`. The old engine served sixteen routes;
+journald, a repeat `index` call and `coderag doctor` answer everything the other
+fourteen did, and one of them -- `/api/gpu/release` -- returned 200 without
+freeing any VRAM at all, which is worse than not having it. `/register` is the
+one route no model calls: a SessionStart hook enrolls the directory it opens in,
+and nothing else in the engine can create a row without a model asking for it.
 
 Three lifecycle facts, each bought with an outage:
 
@@ -35,11 +37,12 @@ import socket
 import threading
 from collections.abc import AsyncIterator
 
+import anyio.to_thread
 import uvicorn
 from starlette.responses import JSONResponse
 
 from . import config, embed, federation, index, registry, watch
-from .tools import mcp
+from .tools import enroll, mcp
 
 log = logging.getLogger(__name__)
 
@@ -145,6 +148,26 @@ async def lifespan(_app) -> AsyncIterator[None]:
         index.stop_worker()
 
 
+async def register(request) -> JSONResponse:
+    """Enroll a directory whose caller is standing in it, with no model in the loop.
+
+    The `index` tool cannot serve this. It pins the target against the client's
+    MCP roots, and a SessionStart hook speaks plain HTTP and carries none. The
+    pin is containment rather than authorization on a localhost daemon, which
+    `scope` records, so this route widens nothing a `curl` did not already reach.
+    """
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "the body is not JSON"}, status_code=400)
+    root = (body or {}).get("root")
+    if not root:
+        return JSONResponse({"error": "the body names no root"}, status_code=400)
+    # Off the event loop: enroll walks the tree for members, and `/healthz`
+    # answers behind it otherwise.
+    return JSONResponse(await anyio.to_thread.run_sync(enroll, registry.resolve(root)))
+
+
 async def healthz(_request) -> JSONResponse:
     # One load for both: the count and the digest have to describe the same
     # registry, or a fixture comparing them across a run compares two moments.
@@ -198,6 +221,7 @@ def build_app():
 
     app.router.lifespan_context = both
     app.add_route("/healthz", healthz, methods=["GET"])
+    app.add_route("/register", register, methods=["POST"])
     return app
 
 

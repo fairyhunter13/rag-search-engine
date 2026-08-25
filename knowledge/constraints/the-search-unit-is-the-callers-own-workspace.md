@@ -229,3 +229,20 @@ what the registry holds for the caller's own directory, not the fleet.
 The cost is real and it is recorded in the defect: 0.65 s narrow against 5.5 s to 17.6 s wide, on
 the same query from `gen3-app-c`. A root call in that federation already pays it.
 
+
+# Fifth amendment, 2026-08-25: one route names its own root, and no model calls it
+
+`POST /register` takes the root in the body and enrolls it. It runs `enroll`, which is the half of
+the `index` tool that runs after the scope check, so it skips the pin outright.
+
+The caller is a SessionStart hook. It stands in the directory, and it holds no MCP session, so it
+has no roots to send. That is why the tool could not serve it. The hook posts the nearest ancestor
+holding a `.git`, and the client's own boundary never enters it.
+
+This costs the pin nothing, and the reason is the claim this document already makes. Containment is
+not authorization here. The daemon is localhost and unauthenticated, so a `curl` reached every
+registered root before this route existed.
+
+What it does add is a row created without a model asking for one. A registered root is a root the
+fleet reconciles hourly, so a hook that enrolls too eagerly is paid for at every sweep. The exempt
+cases are what bound it: a directory under the temp directory, and a directory in no git repo.
