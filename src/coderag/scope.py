@@ -191,12 +191,19 @@ def resolution_note(target: Path, pinned: ListRootsResult) -> str:
     an ancestor, so it means "the pin is a subdirectory" -- and 12,395 of 12,395
     live upward resolutions are plain subdirectories, whose files the answer
     already holds. Said there, the sentence below is false.
+
+    It is false in a second place since the sixth amendment. A named root need
+    not contain the pin at all now, and the caller wrote that path, so there is
+    no walk to disclose. `enforce` used to guarantee the containment this now
+    tests for.
     """
     roots = paths(pinned)
     # A worktree carries `.git` as a file, a nested clone as a directory; both
     # hold content the target's index cannot. A nested clone the target does not
     # gitignore is over-warned, which is the safe direction to be wrong in.
-    if not roots or roots[0] == target or not (roots[0] / ".git").exists():
+    if not roots or roots[0] == target or not roots[0].is_relative_to(target):
+        return ""
+    if not (roots[0] / ".git").exists():
         return ""
     return (
         f"searched {target}, the indexed project containing your workspace {roots[0]}; "
@@ -204,21 +211,31 @@ def resolution_note(target: Path, pinned: ListRootsResult) -> str:
     )
 
 
+def observe(pinned: ListRootsResult, verdict: Verdict | None = None) -> list[Path]:
+    """Record who called and what pin they sent, and hand back the pin.
+
+    Split out of `enforce` when `search` stopped refusing on the pin. Both
+    surfaces still have to be countable by client, and a reader grouping calls
+    cannot tell an absent record from an absent call.
+    """
+    roots = paths(pinned)
+    verdict = verdict or DIRECT
+    log.info("%s", verdict.line(len(roots)))
+    pinledger.record(verdict, len(roots))
+    return roots
+
+
 def enforce(target: Path, pinned: ListRootsResult, verdict: Verdict | None = None) -> None:
     """Refuse a root the caller's workspace does not contain, or sit inside.
 
     Both directions. A workspace opened on a subdirectory has to be able to name
-    its own project, and the ancestor arm cannot walk out: search still requires
-    the row to be registered, enabled and indexed, and `FORBIDDEN_ROOTS` means
-    `/` and `$HOME` can never become one.
+    its own project, and the ancestor arm cannot walk out: `FORBIDDEN_ROOTS`
+    means `/` and `$HOME` can never become a row.
+
+    `index` is the caller of this. `search` reaches any indexed project by name,
+    because enrolling a project is fleet work and reading one is not.
     """
-    roots = paths(pinned)
-    # Kept past the rollout it was built for: the refusal below is now visible
-    # breakage, and this is what says which client hit it and why. journald
-    # keeps seven days and cannot be grouped by client.
-    verdict = verdict or DIRECT
-    log.info("%s", verdict.line(len(roots)))
-    pinledger.record(verdict, len(roots))
+    roots = observe(pinned, verdict)
     if not roots:
         if not config.REQUIRE_CLIENT_ROOTS:
             return
@@ -226,6 +243,6 @@ def enforce(target: Path, pinned: ListRootsResult, verdict: Verdict | None = Non
     if any(target.is_relative_to(r) or r.is_relative_to(target) for r in roots):
         return
     raise ScopeError(
-        f"{target} is outside this session's workspace -- search reaches the current "
-        "project and the projects it federates, nothing else"
+        f"{target} is outside this session's workspace -- index the project you are "
+        "standing in, and search any indexed project by naming its path"
     )

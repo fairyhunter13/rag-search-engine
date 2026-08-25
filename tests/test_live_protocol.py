@@ -179,11 +179,13 @@ def test_the_client_roots_pin_arrives_and_bounds_the_search(rpc, tmp_path):
     mine, theirs = tmp_path / "mine", tmp_path / "theirs"
     args = {"query": "handler", "root": str(theirs), "mode": "lexical"}
 
-    pinned = rpc.modern_tool("search", roots=[str(mine)], **args)
+    # `index` is what the pin still bounds. `search` reads any indexed row by
+    # name since the sixth amendment, so the read path no longer carries this.
+    pinned = rpc.modern_tool("index", roots=[str(mine)], root=str(theirs))
     assert "outside this session's workspace" in pinned["structuredContent"]["error"]
 
     # The discriminator. Without it a server that refused every call would pass
-    # the assertion above, and "the pin bounded the search" would be unearned:
+    # the assertion above, and "the pin bounded the call" would be unearned:
     # declare no `roots` and the same call has to fail for a *different* reason.
     unpinned = rpc.modern_tool("search", **args)
     assert "sent no workspace roots" in unpinned["structuredContent"]["error"]

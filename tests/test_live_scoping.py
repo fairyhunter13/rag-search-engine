@@ -2,10 +2,14 @@
 
 Every other federation test pins at the root it already names, and every other
 scope test runs below the daemon. So the one claim the design rests on, that a
-member sits outside the workspace
-and is reached through the root anyway, was carried by prose alone: a change
-making `expand` transitive and a change making it pin-filtered break it in
-opposite directions and the suite stays green for both.
+member sits outside the workspace and is reached through the root anyway, was
+carried by prose alone: a change making `expand` transitive and a change making
+it pin-filtered break it in opposite directions and the suite stays green for
+both.
+
+The sixth amendment moved where the refusal comes from. A named root is now
+admitted by its registry row, so these tests hold the registry gate to the job
+the pin used to do, and they still hold the pin to expansion.
 
 Chain under test, end to end: client roots -> workspace pin -> containment ->
 registry resolve -> federation expand -> per-project stores -> one ranked list.
@@ -124,23 +128,42 @@ def test_2_the_roots_own_content_comes_back_from_the_same_pin(indexed, rpc):
     assert any(r["project"] == str(root) for r in out), out
 
 
-def test_3_a_project_outside_the_workspace_is_refused_by_name(indexed, rpc):
-    """Registered, enabled and indexed, so nothing downstream would stop it."""
+def test_3_a_project_outside_the_workspace_answers_once_it_is_indexed(indexed, rpc):
+    """The boundary is the registry, not the pin. Registered, enabled and
+    indexed, so the row itself is what admits this call. The pin was refusing it
+    until the sixth amendment, and the caller then fell back to grep."""
     root, _, stranger = indexed
-    out = _search(rpc, root, "unrelated", root=str(stranger))
-    assert "outside this session's workspace" in out.get("error", ""), out
+    out = until(
+        lambda: _search(rpc, root, "unrelated", root=str(stranger)).get("results"),
+        timeout=300,
+        what="the stranger's content to be searchable by name",
+    )
+    assert all(r["project"] == str(stranger) for r in out), out
 
 
-def test_4_a_member_is_reachable_through_its_root_and_not_nameable_directly(indexed, rpc):
-    """Containment, stated exactly: reach is not authorization. The member is
-    outside the workspace, so naming it is refused even though the same pinned
-    session is already searching it through the root."""
+def test_4_a_path_no_row_holds_is_still_refused(indexed, rpc):
+    """The discriminator for test 3. A server that answered every named root
+    would pass it, so name a path the registry has never held: the refusal has
+    to come from the registry gate and say so."""
+    root, _, stranger = indexed
+    out = _search(rpc, root, "unrelated", root=str(stranger.parent / "nobody"))
+    assert "not indexed" in out.get("error", ""), out
+
+
+def test_5_a_member_is_nameable_directly_now(indexed, rpc):
+    """Reach was never the pin's to grant: the same pinned session already read
+    this member through the root. Naming it is the cheap path, measured at
+    0.65 s narrow against 5.5 s wide on the same query."""
     root, member, _ = indexed
-    out = _search(rpc, root, MEMBER_NEEDLE, root=str(member))
-    assert "outside this session's workspace" in out.get("error", ""), out
+    out = until(
+        lambda: _search(rpc, root, MEMBER_NEEDLE, root=str(member)).get("results"),
+        timeout=300,
+        what="the member to answer under its own name",
+    )
+    assert all(r["project"] == str(member) for r in out), out
 
 
-def test_5_a_legacy_era_call_is_refused_now_that_the_flag_ships_on(indexed, rpc):
+def test_6_a_legacy_era_call_is_refused_now_that_the_flag_ships_on(indexed, rpc):
     """The rollout, landed: a pre-2026-07-28 client has nowhere to carry a pin,
     so it is refused with the message that says what to do -- and refused at
     the pin, not later at `is not indexed`, which the root's own index would

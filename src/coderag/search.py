@@ -22,12 +22,15 @@ when either list changes shape.
 from __future__ import annotations
 
 import difflib
+import logging
 import time
 from fnmatch import fnmatch
 from pathlib import Path
 
 from . import config, embed, federation, filters, lexical, registry, store
 from .rank import Hit, diversify, pool_cut
+
+log = logging.getLogger(__name__)
 
 
 class SearchError(ValueError):
@@ -217,15 +220,36 @@ def search(
         raise SearchError(f"{root} is not indexed -- call index(root={str(root)!r}) first")
     projects = federation.unit(root)
 
+    # Every stage size, because the reply carries the two ends and nothing
+    # between them. `pool_cut` starved 307 of 338 contributing projects and no
+    # run had written down how big the pool was on either side of it.
+    stage: dict[str, float | int] = {"unit": len(projects)}
+    mark = time.perf_counter()
+
+    def since() -> float:
+        nonlocal mark
+        now = time.perf_counter()
+        elapsed, mark = round((now - mark) * 1000, 2), now
+        return elapsed
+
     vector = None
     if mode in ("hybrid", "semantic"):
         vector = embed.get_embedder().embed([query], side=embed.QUERY)[0]
+    stage["embed_ms"] = since()
 
     pool: list[Hit] = []
     for project in projects:
         pool.extend(_project_candidates(project, query, vector, mode, config.CANDIDATES))
+    stage["pool"] = len(pool)
+    stage["pool_projects"] = len({h.project for h in pool})
+    stage["retrieve_ms"] = since()
+
     pool = _filter(pool, path_glob, lang)
+    stage["filtered"] = len(pool)
+
     pool = pool_cut(pool, root, config.CANDIDATES)
+    stage["cut"] = len(pool)
+    stage["cut_projects"] = len({h.project for h in pool})
 
     reranked = rerank and bool(pool)
     if reranked:
@@ -233,8 +257,12 @@ def search(
         for hit, score in zip(pool, scores, strict=True):
             hit.scores["rerank"] = round(float(score), 6)
         pool.sort(key=lambda h: h.scores["rerank"], reverse=True)
+    stage["rerank_ms"] = since()
 
     hits = diversify(pool, k, max_per_file, root)
+    stage["returned"] = len(hits)
+    stage["result_projects"] = len({h.project for h in hits})
+    log.debug("search %s stages %s", root, stage)
     files, chunks = 0, 0
     for project in projects:
         try:
@@ -249,6 +277,9 @@ def search(
         "reranked": reranked,
         "took_ms": round((time.perf_counter() - started) * 1000, 2),
         "searched": {"projects": len(projects), "files": files, "chunks": chunks},
+        # Stripped by `tools.search_code` before the reply reaches a model, and
+        # written to the ledger instead. A library caller keeps it.
+        "trace": stage,
         "results": [_payload(h, i + 1, preview_lines, include_body) for i, h in enumerate(hits)],
         "hint": "" if hits else "no matches; retry with mode='lexical' for an exact identifier",
     }

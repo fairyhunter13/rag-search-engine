@@ -15,7 +15,7 @@ one](per-project-ranks-were-truncated-as-if-comparable.md) built `pool_cut` for 
 federated 135 members. `limit` was `CANDIDATES`, which is 60. The caller's own project took
 `limit // 2` slots and the members shared the rest.
 
-Then `federation.unit` widened a member cwd to its root's whole unit. A search from one redacted-name-7
+Then `federation.unit` widened a member cwd to its root's whole unit. A search from one federated
 leaf now spans 358 projects rather than 1. The quota did not move with it. 337 members shared 30
 slots, in the order the federation lists them, and 307 of them reached nothing.
 

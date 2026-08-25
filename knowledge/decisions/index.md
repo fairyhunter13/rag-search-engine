@@ -1,5 +1,11 @@
 # Decision
 
+* [A search writes one structured row, and the fleet log level stays where it
+  is](a-search-writes-one-row-and-the-log-level-stays.md) - The pool cut starved 307 projects and
+  finding it needed an offline replay that rebuilt the pool by hand, because `search.py` and
+  `rank.py` hold zero log calls and the reply carries only `took_ms` and a project count. A louder
+  journal was already refused on a measurement, so the record is a JSONL row per search rather
+  than prose at INFO.
 * [CI runs no GPU and no live job, and the self-hosted runner is
   deregistered](ci-does-not-touch-the-gpu.md) - A self-hosted runner on a public personal-account
   repo cannot be scoped by a runner group. The GPU suites contend for the one card everything else

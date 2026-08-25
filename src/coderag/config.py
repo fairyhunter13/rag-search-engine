@@ -69,6 +69,11 @@ def index_path(project: Path | str) -> Path:
 
 # -------------------------------------------------------------------- serving
 
+# INFO by default and staying there. Raising the fleet default was refused on a
+# measurement -- the volume is already thousands of lines a day, and what was
+# missing was structure, not prose. This makes DEBUG askable for one run.
+LOG_LEVEL = _env("LOG_LEVEL", "INFO").upper()
+
 HOST = _env("HOST", "127.0.0.1")
 PORT = _env_int("PORT", 8765)
 MCP_URL = f"http://{HOST}:{PORT}/mcp"

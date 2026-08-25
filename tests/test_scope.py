@@ -111,12 +111,25 @@ def test_the_flag_never_softens_a_pin_that_did_arrive(two, monkeypatch, pin):
 # ------------------------------------------------------- what search refuses
 
 
-def test_search_refuses_a_root_outside_the_workspace(two, pin):
-    """Through the tool body, because the check being *called* is the half a
-    unit test of `enforce` cannot see."""
+def test_search_reads_an_indexed_root_outside_the_workspace(two, pin):
+    """The boundary is the registry, not the pin. Through the tool body, because
+    the check *not* being called is the half a unit test of `enforce` cannot see.
+
+    The pin was never authorization -- this daemon is localhost and
+    unauthenticated -- and it had already stopped being containment: a member's
+    unit answers from every project its root claims, none of them named.
+    """
     mine, theirs = two
     out = tools.search_code("handler", pin(mine), root=str(theirs), mode="lexical")
-    assert out["results"] == []
+    assert "error" not in out, out
+    assert out["searched"]["projects"] >= 1
+
+
+def test_index_still_refuses_a_root_outside_the_workspace(two, pin):
+    """The asymmetry search gave up. Enrolling a root is fleet work -- an hourly
+    reconcile and an inotify arm per file -- where reading one is a query."""
+    mine, theirs = two
+    out = tools.index_project(pin(mine), root=str(theirs))
     assert "outside this session's workspace" in out["error"]
 
 
@@ -138,8 +151,9 @@ def test_search_refuses_a_project_that_was_registered_but_never_indexed(tmp_path
 
 
 def test_index_is_pinned_too(two, pin):
-    """Or the gate on search is a formality: whatever can be indexed can be made
-    searchable, and `index` is the tool that sets the flag search reads."""
+    """`search` no longer needs this to be true, and `index` keeps it anyway: a
+    registered root is reconciled hourly and watched, so enrolling one is a
+    write against the fleet rather than a read."""
     mine, theirs = two
     out = tools.index_project(pin(mine), root=str(theirs))
     assert "outside this session's workspace" in out["error"]
@@ -245,6 +259,13 @@ def test_a_pin_that_resolved_up_is_told_so_in_the_reply(tmp_path, pin):
 
     at_root = tools.search_code("handler", pin(root), mode="lexical")["hint"]
     assert "containing your workspace" not in at_root, at_root
+
+    # The third silent arm, and the newest. `enforce` used to guarantee that the
+    # target contained the pin, so the sentence was safe to print on any
+    # disagreement. A named root holds no walk to disclose and no such relation.
+    stranger = _project(tmp_path / "stranger")
+    named = tools.search_code("handler", pin(tree), root=str(stranger), mode="lexical")["hint"]
+    assert "containing your workspace" not in named, named
 
 
 # ------------------------------------------------- the pin and federation
@@ -402,8 +423,10 @@ def test_the_verdict_reaches_enforce_from_a_real_resolver(caplog):
         meta={CLIENT_INFO_META_KEY: {"name": "probe", "version": "9"}},
         request=None,
     )
+    # `index`, because it is the tool that still refuses on the pin, and the
+    # refusal is what proves the verdict arrived rather than defaulted.
     with caplog.at_level(logging.INFO, logger=scope.log.name):
-        out = anyio.run(tools.mcp.call_tool, "search", {"query": "x", "root": "/tmp"}, ctx)
+        out = anyio.run(tools.mcp.call_tool, "index", {"root": "/tmp"}, ctx)
 
     assert "client=probe/9 proto=2025-06-18 branch=legacy-path roots=0" in caplog.text, caplog.text
     assert "branch=direct" not in caplog.text, "the tool never received the resolved verdict"

@@ -226,7 +226,10 @@ def build_app():
 
 
 def serve(host: str = "", port: int = 0) -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=getattr(logging, config.LOG_LEVEL, logging.INFO),
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
     # `Terminating session: None` once per /mcp request -- 11,649 lines a day,
     # burying the hourly `sweep claimed N`, which is this daemon's only
     # production signal. Not a bug: `stateless_http=True` means there is no

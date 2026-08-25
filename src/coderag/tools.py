@@ -15,12 +15,17 @@ it cannot.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
-from . import config, federation, index, projcfg, registry, scope, search, watch
+from . import (
+    config, federation, index, projcfg, registry, scope, search, searchledger, watch,
+)
+
+log = logging.getLogger(__name__)
 
 INSTRUCTIONS = """\
 Code retrieval over the current project and the repos it federates.
@@ -66,8 +71,8 @@ def index_project(
     enabled: bool = True,
     verdict: scope.Verdicted = None,
 ) -> dict[str, Any]:
-    # Pinned here too, or the gate on `search` is a formality: a caller that can
-    # index anything can make anything searchable.
+    # Pinned, and `search` is not. Enrolling a root is fleet work -- an hourly
+    # reconcile and an inotify arm on every file -- where reading one is a query.
     try:
         target = registry.resolve(root or scope.default_root(pinned))
         scope.enforce(target, pinned, verdict)
@@ -212,9 +217,28 @@ def search_code(
     include_body: bool = False,
     verdict: scope.Verdicted = None,
 ) -> dict[str, Any]:
+    trace = searchledger.trace_id()
+    seen = scope.observe(pinned, verdict)
+    row = {
+        "trace": trace,
+        "client": (verdict or scope.DIRECT).client,
+        "peer": (verdict or scope.DIRECT).peer,
+        "asked": root,
+        "pinned": len(seen),
+        "mode": mode,
+        "k": k,
+        "glob": path_glob or "",
+        "lang": lang or "",
+    }
     try:
+        # No `enforce`. The registry is the boundary: `search` refuses a row that
+        # is not registered, enabled and indexed, and `FORBIDDEN_ROOTS` keeps `/`
+        # and `$HOME` from ever being one. The pin never was authorization -- this
+        # daemon is localhost and unauthenticated -- and it had already stopped
+        # being containment, because a member's unit answers from every project
+        # its root claims, none of which the caller named.
         target = registry.resolve(root or scope.default_root(pinned))
-        scope.enforce(target, pinned, verdict)
+        row["root"] = str(target)
         out = search.search(
             query,
             target,
@@ -227,11 +251,21 @@ def search_code(
             preview_lines=preview_lines,
             include_body=include_body,
         )
+        # The stages are evidence, not an answer. A model that reads them spends
+        # context on pool sizes it cannot act on.
+        row |= out.pop("trace", {})
+        row["took_ms"] = out["took_ms"]
+        searchledger.record(row)
         # `hint` is the reply's existing advisory slot, so this follows prior
         # art rather than adding a key; both notes can be true at once.
         out["hint"] = "; ".join(filter(None, (out["hint"], scope.resolution_note(target, pinned))))
         return out
     except (search.SearchError, scope.ScopeError) as exc:
+        # A failed search wrote nothing anywhere until now, so the one call a
+        # reader most wants to find was the one call leaving no trace.
+        row["error"] = f"{type(exc).__name__}: {exc}"
+        searchledger.record(row)
+        log.warning("search %s failed: %s", trace, exc)
         # Returned rather than raised: an error that names what to call next is
         # actionable to an agent, where a transport-level failure is not.
-        return {"error": str(exc), "results": []}
+        return {"error": f"{exc} [trace {trace}]", "results": []}
