@@ -25,6 +25,7 @@
   something runs them. So one arm reads the workflow. It fails when the step that invokes them is
   gone, excused, unpinned, or attached to a trigger that never fires on a change.
 * [The bundle gate runs before the push, not after](the-bundle-gate-runs-before-the-push-not-after.md) - CI was this bundle's only enforcement, so every ungated change was already published by the time anything read it. A pre-push runs the same check at the moment the change is made, and four tests assert the hook itself is live.
+* [The content-hash skip is declined, because a store cannot see another project's duplicate](the-content-hash-skip-is-declined-because-stores-are-per-project.md) - Each project owns its own sqlite file, so two near-identical deployed refs are two stores and neither `files(sha256)` index can see the other. The path-keyed skip in `discover.plan` already covers the within-project case and uses no index. The dead index line is deleted, and the fleet prize is measured at 1147 MiB of worktree stores.
 * [The embedder is settled by a tie-break, because the two finalists are not
   distinguishable](the-embedder-is-settled-by-a-tie-break.md) - Ten arms over 300 paired queries.
   bge-base and gte-modernbert differ by 0.023 recall@10 with p=0.39. So the pre-committed order
