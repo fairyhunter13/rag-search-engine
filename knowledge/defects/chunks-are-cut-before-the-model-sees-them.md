@@ -2,7 +2,7 @@
 type: Defect
 resource: src/coderag/config.py
 title: The chunk budget and the token window do not fit each other
-description: 2,000 non-whitespace chars produces chunks of p50 904 and p95 1373 tokens against a 768-token window, so 70% of chunks are cut — and two arms then showed the cut costs no recall.
+description: "2,000 non-whitespace chars produces chunks of p50 904 and p95 1373 tokens against a 768-token window. So 70% of chunks are cut, and two arms then showed the cut costs no recall."
 tags: [chunking, embedding, recall]
 status: deprecated
 generated: { by: claude/opus-5, at: 2026-08-19T16:45:00Z }
@@ -21,8 +21,8 @@ sources:
 
 `CHUNK_CHARS = 2000` non-whitespace comes from cAST's unit ([arXiv:2506.15655](https://arxiv.org/abs/2506.15655))
 and sits inside the range [864 controlled configurations](https://arxiv.org/abs/2605.04763) explored.
-That study finds chunk size has "a weaker, non-monotonic effect" and names no default, so 2,000 is a
-round number in a flat region rather than a measured optimum. `EMBED_MAX_TOKENS = 768` *is* a peak:
+That study finds chunk size has "a weaker, non-monotonic effect" and names no default. So 2,000 is
+a round number in a flat region rather than a measured optimum. `EMBED_MAX_TOKENS = 768` *is* a peak:
 the 512→768 work, where 1024 regressed.
 
 Neither was chosen against the other, and on real code they do not fit. Tokenising the chunker's
@@ -34,7 +34,7 @@ own output with truncation disabled:
 | corpus B | 4,175 | 881 | 1,154 | 1,416 | **62.8%** | **17.5%** |
 
 `_tokenizer` sets `enable_truncation(max_length=EMBED_MAX_TOKENS)`, so the tail is discarded
-silently. The lexical lane still indexes the whole chunk; only the dense lane is blind to it, which
+silently. The lexical lane still indexes the whole chunk. Only the dense lane is blind to it, which
 is why this reads as a weak semantic lane rather than as a bug.
 
 # Why it stayed invisible
@@ -54,13 +54,13 @@ Corpus B, 300 queries, semantic lane, one run — the only way these are compara
 | `gte-chunk1000` (chunk cut to fit) | 0.1433 | 0.3133 | 0.1930 |
 
 Attacked from both ends and neither end moves the number the right way. Widening the window past
-the p95 changes recall by **exactly nothing** — identical to four decimals at both k — for double
-the tokens per chunk. Cutting the chunk to fit the window is **worse** at both k, which is the
-sharper half: the 2,000-char chunk is not merely tolerable, it beats the one that fits.
+the p95 changes recall by **exactly nothing**, the same to four decimals at both k. It doubles the
+tokens per chunk. Cutting the chunk to fit the window is **worse** at both k, which is the
+sharper half. The 2,000-char chunk is not merely tolerable, it beats the one that fits.
 
 So the 70% figure is real and the inference drawn from it was wrong. The discarded tail is the part
 of a 2,000-char chunk that carries no retrievable signal, and the lexical lane indexes it anyway.
 The product of the two constants is now measured, and `gte-win1536` is on record as a cost with no
-benefit — the more useful half of the finding, because it is the change someone will propose next.
+benefit. The more useful half of the finding, because it is the change someone will propose next.
 
 The freeze this file placed on both constants is lifted. They do not move.

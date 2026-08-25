@@ -1,39 +1,42 @@
 # coderag — Claude Code instructions
 
 The engine was rebuilt from zero in `src/coderag/`. The old package, its tests, its docs and its
-knowledge bundle are gone. `knowledge/` is the only prose plane; the previous engine's records live
+knowledge bundle are gone. `knowledge/` is the only prose plane. The previous engine's records live
 in git history at `365a235^` and are not a description of anything that exists.
 
 ## Standing rules
 
 - **No mocks.** A test either calls the real model on the real GPU or touches no model at all.
-- Every file in `src/coderag/` under 300 lines; the largest is 299, and
-  `tests/test_public_hygiene.py` enforces it. The package is 4,854 lines by
-  `wc -l` and **2,691 executable** — blanks, comments and docstrings excluded — the rest carrying
-  the whys this repo keeps out of prose. The budget is the executable number, so a `wc` figure alone
-  never reads as over. Test files are not held to the ceiling: four are over it, each because it
-  covers one subject end to end, and splitting a subject to satisfy a line count buys nothing.
+- Every file in `src/coderag/` under 300 lines. The largest is 299, and
+  `tests/test_public_hygiene.py` enforces it. The package is 4,854 lines by `wc -l` and **2,691
+  executable**, with blanks, comments and docstrings excluded. The rest carries the whys this repo
+  keeps out of prose. The budget is the executable number, so a `wc` figure alone never reads as
+  over. Test files are not held to the ceiling. Four are over it, each because it covers one
+  subject end to end, and splitting a subject to satisfy a line count buys nothing.
 
 ## Knowledge bundle
 
-`knowledge/` is an OKF v0.2 bundle. Read the concepts that touch the task before starting; write
-them back in the same commit as the code. The `okf-knowledge-bundle` skill owns how. It is small on
-purpose — a concept that restates a module docstring is not written, and `knowledge/log.md` records
-which ones were refused for that reason.
-Gate: `.githooks/pre-push`, which refuses the push. `uv run pytest tests/test_okf_bundle.py`
-fails rather than skips without `okf` and runs in CI, but only once the change is already pushed.
+`knowledge/` is an OKF v0.2 bundle. Read the concepts that touch the task before starting. Write
+them back in the same commit as the code. The `okf-knowledge-bundle` skill owns how.
+
+It is small on purpose. A concept that restates a module docstring is not written, and
+`knowledge/log.md` records which ones were refused for that reason. Gate: `.githooks/pre-push`,
+which refuses the push. `uv run pytest tests/test_okf_bundle.py` fails rather than skips without
+`okf` and runs in CI, but only once the change is already pushed.
 
 ## Two rules that outlive the rebuild
 
-**GPU or nothing.** CPU inference is forbidden. A working CPU path silently becomes the production
+**GPU or nothing**. CPU inference is forbidden. A working CPU path silently becomes the production
 path: it is 30× slower and nothing fails. `gpu.py` asserts it three times on *which providers the
-session got* and once — `check_placement` — on **where the nodes actually went**, which is the only
-one that can see a graph ORT quietly split. Nine shape-plumbing nodes per export are expected and
-allowed; anything else is fatal.
+session got*.
+
+It asserts once, in `check_placement`, on **where the nodes actually went**. That is the only one
+that can see a graph ORT quietly split. Nine shape-plumbing nodes per export are expected and
+allowed. Anything else is fatal.
 
 **The tracked tree is publishable.** This repo is public and MIT. No real company name, device
-name, or absolute home path in tracked content — `NAME_BAN` guards it, and an unset `NAME_BAN` is
-the failing state, not the passing one. Arm it as **`CODERAG_NAME_BAN`, comma-separated**; a clean
+name, or absolute home path in tracked content. `NAME_BAN` guards it, and an unset `NAME_BAN` is
+the failing state, not the passing one. Arm it as **`CODERAG_NAME_BAN`, comma-separated**. A clean
 clone with nothing to hide sets `CODERAG_NAME_BAN=none`. The list itself is never committed, which
 is why the variable has to be named here.
 

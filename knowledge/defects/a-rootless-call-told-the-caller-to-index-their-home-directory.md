@@ -2,7 +2,7 @@
 type: Defect
 resource: src/coderag/scope.py, src/coderag/tools.py
 title: A rootless call with no pin resolved to the daemon's cwd, which is $HOME
-description: "`scope.default_root` fell back to `Path.cwd()` when the client sent no roots. The daemon's cwd is the operator's home directory, so a real Claude Code session's rootless `search` came back as \"$HOME is not indexed -- call index(root=$HOME) first\" -- advice that, taken, indexes everything on the machine. It now refuses and names the fix."
+description: "`scope.default_root` fell back to `Path.cwd()` when the client sent no roots. The daemon's cwd is the operator's home directory. So a real Claude Code session's rootless `search` came back as \"$HOME is not indexed -- call index(root=$HOME) first\". Taken, that advice indexes everything on the machine. It now refuses and names the fix."
 tags: [scope, tools, mcp-roots]
 status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T18:10:00Z }

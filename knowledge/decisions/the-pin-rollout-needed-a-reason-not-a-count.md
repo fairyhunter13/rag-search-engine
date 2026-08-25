@@ -10,9 +10,9 @@ generated: { by: claude/opus-5, at: 2026-08-20T21:40:00Z }
 
 # What the count could not say
 
-`enforce` logged one line per call and it was the rollout's only observable. Two branches in `_ask`
-return an empty result — no `roots` client capability, or a negotiated version below `MRTR` — and
-both arrive at `enforce` as `0 root(s)`. The first means the pin can never arrive from that client;
+`enforce` logged one line per call and it was the rollout's only observable. Two branches in
+`_ask` return an empty result: no `roots` client capability, or a negotiated version below `MRTR`.
+Both arrive at `enforce` as `0 root(s)`. The first means the pin can never arrive from that client;
 the second means it is a client-config change away. The exit criterion Part D wrote — "a real pin
 from all five profiles" — was unreadable against a counter that conflates them.
 
@@ -27,7 +27,7 @@ workspace pin: 1 root(s)
 {"error": "... is outside this session's workspace ..."}
 ```
 
-So the capability and the era are both there in at least one profile, and the containment arm works
+So the capability and the era are both there in at least one profile. The containment arm works
 end to end against the real daemon. A legacy-protocol client on the same daemon logs
 `no ask, client advertises no roots capability` and falls through to no pin, as designed.
 
@@ -38,22 +38,22 @@ is now a thing that can be read rather than inferred: any profile still short wi
 two reasons it is. Flipping now would refuse every call from a client that has not been checked, and
 nothing has checked four of them.
 
-The check is close to a formality — all five profiles carry a byte-identical `coderag` entry
+The check is close to a formality. All five profiles carry a byte-identical `coderag` entry
 (`{"type": "http", "url": "http://127.0.0.1:8765/mcp"}`), so what negotiates the era is the Claude
-Code binary and not the profile. Close to, not the same as: the era is negotiated per session, and
-the reason a criterion is written per profile is that "should be identical" is what the four
-unchecked ones already look like.
+Code binary and not the profile. Close to, not the same as. The era is negotiated per session. A
+criterion is written per profile because "should be identical" is what the four unchecked ones
+already look like.
 
 # Amendment, 2026-08-20: the criterion is replaced, because it was unreadable
 
-"A real pin from all five profiles" cannot be checked. journald names no client at all — no
-`clientInfo` was logged, the formatter dropped `%(name)s`, and the access log is off — and the five
-profiles' `coderag` entries are kept byte-identical by `sync_global_mcp` at SessionStart, so there
+"A real pin from all five profiles" cannot be checked. journald names no client at all. No
+`clientInfo` was logged, the formatter dropped `%(name)s`, and the access log is off. The five
+profiles' `coderag` entries are kept byte-identical by `sync_global_mcp` at SessionStart. So there
 was never a per-profile variable to observe. Waiting longer produces no evidence.
 
-What the journal did show is a third case this decision did not name: of ~1865 zero-root pins, 97
-took the no-capability branch, **none** took the era branch, and the remaining ~1768 were `_ask`
-asking and the client answering with an **empty list**. At `REQUIRE_CLIENT_ROOTS=1` every one of
+What the journal did show is a third case this decision did not name. Of ~1865 zero-root pins, 97
+took the no-capability branch and **none** took the era branch. In the remaining ~1768, `_ask`
+asked and the client answered with an **empty list**. At `REQUIRE_CLIENT_ROOTS=1` every one of
 those is refused.
 
 So the criterion is now: flip when the answered-empty count reaches zero. `scope` distinguishes
@@ -89,13 +89,15 @@ and the code default of `1` stands.
 
 One caller was refused by the flip: the layer-3 agent test's own `claude -p`, on `2025-11-25`,
 `branch=legacy-path`, which cannot carry a pin at any setting. Four candidate causes were tested
-one at a time against the running daemon, and the one that moves the era is **`--strict-mcp-config`**:
-a server passed with `--mcp-config` and merged with the profile's config connects on `2025-11-25`,
-and the same server under `--strict-mcp-config` connects on `2026-07-28`. A fresh config dir, the
+one at a time against the running daemon, and the one that moves the era is
+**`--strict-mcp-config`**. A server passed with `--mcp-config` and merged with the profile's
+config connects on `2025-11-25`, and the same server under `--strict-mcp-config` connects on
+`2026-07-28`. A fresh config dir, the
 model, `--verbose` and a git-repo cwd all make no difference — each was ruled out by measurement, not
 by argument.
 
 That is a test gap, not a rollout blocker, and the flag it needed was one an isolation test should
 have been passing anyway. Two live assertions also changed, because the flip made their premises
-false rather than because they broke: an unpinned call is now refused rather than answered, and the
-agent session is no longer required to write a `root` — with a pin, `root=""` *is* the workspace.
+false rather than because they broke. An unpinned call is now refused rather than answered, and
+the agent session is no longer required to write a `root`. With a pin, `root=""` *is* the
+workspace.
