@@ -71,6 +71,11 @@
   two arms then showed the cut costs no recall.
 * [The ignore list only ever matched at the root, because fnmatch anchors](the-ignore-list-only-ever-matched-at-the-root.md) - `node_modules/*` matched `node_modules/a.js` and not `packages/a/node_modules/a.js`, and the same for vendor, dist, build, target, `__pycache__` and .git. 278 of 70,218 indexed files sat under a nested copy of a directory the list claims to exclude. Gitignore's own spelling for that list is `node_modules/`, with no leading slash, which matches at any depth.
 * [The index reply graded a project by one row of 143](the-index-reply-graded-a-project-by-one-row-of-143.md) - Every action takes the unit to be the root together with its members. The status the same tool returns did not: `indexed` was the root's own row, 33,053 chunks of the 185,453 the project answers from.
+* [The pool cut starved the members it was built to
+  reach](the-pool-cut-starved-the-members-it-was-built-to-reach.md) - `limit` was 60, so 337
+  members shared the 30 slots the caller's own half left, in federation order. 307 projects never
+  reached the reranker, and the leaf holding the answer was one of them. `limit` is a floor now,
+  and every project with a candidate contributes its best hit for about 3.2 s more.
 * [The pre-rerank cut ranked 136 projects by scores that are only meaningful in
   one](per-project-ranks-were-truncated-as-if-comparable.md) - RRF fuses lanes inside a project,
   so its scores are per-project ranks: every project's rank-1 hit scores about the same.

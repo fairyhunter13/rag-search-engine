@@ -42,6 +42,13 @@ def pool_cut(pool: list[Hit], root: Path, limit: int) -> list[Hit]:
     and the members share the rest round-robin. That order is also the answer's
     order when `rerank=False`, which is the caller-settable case where the
     incomparable score would otherwise be final.
+
+    `limit` is a floor, not a ceiling, because the round-robin has to reach the
+    end. A member cwd widens to its root's whole unit, so `federation.unit` now
+    returns 358 projects where it used to return one. 337 of them shared the 30
+    slots the caller's own half left over, in the order the federation lists
+    them, and the other 307 never reached the reranker at all. Every project
+    that produced a candidate contributes its best hit instead.
     """
     by_project: dict[str, deque[Hit]] = defaultdict(deque)
     for hit in sorted(pool, key=lambda h: h.scores["rrf"], reverse=True):
@@ -49,7 +56,9 @@ def pool_cut(pool: list[Hit], root: Path, limit: int) -> list[Hit]:
 
     own = by_project.pop(str(root), deque())
     members = list(by_project.values())
-    taken = [own.popleft() for _ in range(min(len(own), max(1, limit // 2)))]
+    own_share = min(len(own), max(1, limit // 2))
+    limit = max(limit, own_share + len(members))
+    taken = [own.popleft() for _ in range(own_share)]
     while len(taken) < limit and (own or any(members)):
         for queue in members:
             if queue and len(taken) < limit:
