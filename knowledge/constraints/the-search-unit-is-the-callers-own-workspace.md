@@ -286,6 +286,13 @@ A caller who wrote the path has no upward walk to be told about.
 workspace still supplies the default, and a call carrying no roots is still refused. Only an
 explicit path widens.
 
+**The no-pin refusal went with `enforce`, and the live lane caught it.** That refusal is a
+different rule from the containment one, and it lived in the same function. So a client that
+declared no workspace at all could name an indexed row and read it -- exactly the pre-2026-07-28
+era the flag rollout closed. `scope.require_pin` is that half, split out and called by both
+surfaces. Two live tests failed on it and neither is a unit test, because the flag is read from
+the daemon's own environment.
+
 `scope.observe` is what survives the split. `enforce` recorded the caller and the pin as a side
 effect of refusing, so dropping the call would have dropped the record. `observe` holds the
 `log.info` and the `pinledger.record`, `enforce` calls it first and keeps the refusal, and

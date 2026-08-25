@@ -200,10 +200,12 @@ def unit(root: Path | str) -> list[Path]:
 
     `expand` answers for a root. A member asked from its own directory got
     itself and nothing else. That answer is not narrow but wrong: on the live
-    tree it is 1 project of 143, and the reply reads the same either way. The
-    member cannot ask for its root instead, because `scope.enforce` refuses a
-    target the caller's workspace neither contains nor sits inside, and a
-    member lives outside its root's tree.
+    tree it is 1 project of 143, and the reply reads the same either way.
+
+    That was the whole reason until the sixth amendment. It also held that the
+    member could not ask for its root instead, which `search` now allows: a
+    caller may name any indexed row. The first reason stands on its own, and a
+    caller wanting the root alone can name the root.
 
     The member stays first in the list. `rank.pool_cut` gives the first project
     half the slots, and the subject of the query is the directory the caller is

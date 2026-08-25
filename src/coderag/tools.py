@@ -236,7 +236,9 @@ def search_code(
         # and `$HOME` from ever being one. The pin never was authorization -- this
         # daemon is localhost and unauthenticated -- and it had already stopped
         # being containment, because a member's unit answers from every project
-        # its root claims, none of which the caller named.
+        # its root claims, none of which the caller named. `require_pin` is the
+        # half that survives: a client declaring no workspace is still refused.
+        scope.require_pin(seen)
         target = registry.resolve(root or scope.default_root(pinned))
         row["root"] = str(target)
         out = search.search(
