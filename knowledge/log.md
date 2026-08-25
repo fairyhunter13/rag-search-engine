@@ -5,6 +5,12 @@ title: coderag knowledge history
 
 # Bundle history
 
+## 2026-08-25
+
+- **Creation**: [the index reply graded a project by one row of 143](defects/the-index-reply-graded-a-project-by-one-row-of-143.md), `status: resolved`. The audit went looking for an action that is not collective and found none. `register`, `submit`, `unregister`, the hourly `sweep`, the watch set and `expand` all take the unit to be the root together with its members. The answer was the exception. `indexed` was the root's own row, and that row is 33,053 chunks of the 185,453 the one federating root here searches.
+
+- **Update**: `indexed` now sums the enabled rows of `[root, *members]` and names how many it summed. `root_indexed`, `pending`, `members_watching` and `member_errors` carry the per-project grain, which is where one stuck member is visible at all. `watching` stays per project. A member dropped for a broken config never joins the armed set, so an all-of-them predicate would read false forever. The live fixtures poll that field before they write, and they would hang out their timeout. `suppressed_by_inherited_excludes` stays per project too: it walks the candidate set twice, and 143 of those walks is a fleet-sized cost on a status call.
+
 ## 2026-08-24
 
 - **Creation**: [a dead row paged hourly](defects/a-dead-row-paged-hourly-and-nothing-could-remove-it.md), and this entry replaces the by-hand procedure the 08-23 entry below recorded. `registry.forget(keys)` and a `doctor --prune` that calls it are the removal path that did not exist; the gate is whether a live root still claims the row, not `last_error`, which the sweep clears. Twenty `/tmp` rows from a host's live tests had saturated `HEALTH_FAILING_CAP`, so the alert was full of junk and could not have carried a real failure.

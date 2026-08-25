@@ -156,6 +156,35 @@ def test_unflagging_a_root_re_walks_the_members_it_released(tmp_path, monkeypatc
     assert submitted == [member], submitted
 
 
+def test_the_status_counts_the_members_and_not_only_the_root(tmp_path, monkeypatch, pin):
+    """A project is the root together with its members, and so is its state.
+
+    On the live fleet the one federation root holds 33,053 of 185,453 chunks, so
+    the root's own row answered "is my project indexed" with 17.8% of the answer,
+    and a member left behind by a broken config was invisible in every field.
+    """
+    monkeypatch.setattr(watch, "start", lambda: None)
+    monkeypatch.setattr(index, "start_worker", lambda: None)
+    member, root = tmp_path / "m", tmp_path / "r"
+    (member / "src").mkdir(parents=True)
+    root.mkdir()
+    (root / "linked").symlink_to(member, target_is_directory=True)
+    tools.index_project(pin(root), str(root))
+    registry.update(root, file_count=1, chunk_count=2)
+    registry.update(member, file_count=10, chunk_count=20)
+    registry.record_error(member, "broken .coderag.yaml")
+
+    out = tools.index_project(pin(root), str(root))
+
+    assert out["indexed"] == {"files": 11, "chunks": 22, "projects": 2}, out
+    assert out["root_indexed"] == {"files": 1, "chunks": 2}, out
+    assert out["member_errors"] == [
+        {"project": str(member), "error": "broken .coderag.yaml"}
+    ], out
+    # Whole-project walks for this unit, where `queue_depth` answers for the fleet.
+    assert out["pending"] == 2, out
+
+
 def test_a_search_error_is_returned_as_data_not_raised(tmp_path, pin):
     """An agent can act on an error that names what to call next; a transport
     failure is just a dead turn."""

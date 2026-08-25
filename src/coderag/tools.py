@@ -126,17 +126,45 @@ def index_project(
     return _status(target, members)
 
 
+def _pending(unit: set[Path]) -> int:
+    """Whole-project walks queued for this unit, where `queue_depth` is the fleet's.
+
+    Here rather than in `index` because that module is at its 300-line ceiling.
+    """
+    with index._queue.mutex:  # noqa: SLF001
+        return len({j.project for j in index._queue.queue if j is not None and j.project in unit})
+
+
 def _status(target: Path, members: list[Path]) -> dict[str, Any]:
     entry = registry.get(target)
     roots = list(entry.roots) if entry else []
+    # The unit is the root together with its members, so the counts are too. The
+    # root's own row is 33,053 chunks of the 185,453 this project answers from,
+    # and reporting it alone told a caller its project was 17.8% built.
+    rows = registry.load()
+    unit = [row for p in (target, *members) if (row := rows.get(str(p))) and row.enabled]
     out = {
         "root": str(target),
         "members": len(members),
         "roots": roots,
         "indexed": {
+            "files": sum(row.file_count for row in unit),
+            "chunks": sum(row.chunk_count for row in unit),
+            "projects": len(unit),
+        },
+        # Per project, because that is the grain the store, the watcher and the
+        # queue all work at, and one stuck member is invisible in any total.
+        "root_indexed": {
             "files": entry.file_count if entry else 0,
             "chunks": entry.chunk_count if entry else 0,
         },
+        "pending": _pending({row.path for row in unit}),
+        "members_watching": sum(1 for row in unit if row.path != target and watch.armed(row.path)),
+        "member_errors": [
+            {"project": str(row.path), "error": row.last_error}
+            for row in unit
+            if row.path != target and row.last_error
+        ],
         "suppressed_by_inherited_excludes": index.suppressed_by_excludes(target, tuple(roots)),
         "last_error": entry.last_error if entry else None,
         # Durable: last_error is cleared by the next success, so on an hourly reconcile
