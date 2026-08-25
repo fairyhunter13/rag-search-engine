@@ -59,10 +59,23 @@ def test_the_pool_cut_keeps_more_than_one_hit_from_the_callers_own_project():
 
     cut = search.pool_cut(own + members, Path("/root"), limit=60)
 
-    assert len(cut) == 60
     mine = [h for h in cut if h.project == "/root"]
     assert len(mine) == 10, "the caller's own project was cut down to its top hit"
     assert [h.rel_path for h in mine[:3]] == ["mine0.py", "mine1.py", "mine2.py"]
+
+
+def test_the_pool_cut_reaches_the_last_member_not_only_the_first_thirty():
+    """`limit` is a floor. 337 members shared the 30 slots the caller's own half
+    left, in federation order, so the leaf holding the answer never reached the
+    reranker. Reproduced against the live corpus before this was written."""
+    own = [_hit(f"mine{i}.py", project="/root") for i in range(60)]
+    members = [_hit("theirs.py", project=f"/member{i}") for i in range(337)]
+
+    cut = search.pool_cut(own + members, Path("/root"), limit=60)
+
+    assert {h.project for h in cut} >= {f"/member{i}" for i in range(337)}
+    assert sum(1 for h in cut if h.project == "/root") == 30, "the own share still comes off limit"
+    assert len(cut) == 30 + 337
 
 
 def test_the_pool_cut_still_reaches_every_member():
