@@ -2,7 +2,7 @@
 type: Decision
 resource: src/coderag/index.py
 title: The thermal pause is not what indexing costs, and the profile says so
-description: A 25-second py-spy sample of a live indexing worker put 80.7% of self-time inside the ONNX forward pass and 0.04% inside cool_down, so the cooldown stays and the lever is batch size.
+description: A 25-second py-spy sample of a live indexing worker put 80.7% of self-time inside the ONNX forward pass, and 0.04% inside cool_down. So the cooldown stays, and the lever is batch size.
 tags: [indexing, performance, gpu]
 status: deprecated
 generated: { by: claude/opus-5, at: 2026-08-19T16:20:00Z }
@@ -25,18 +25,20 @@ By containing frame: the embed call 84.2%, `chunk_text` 8.4%, `_flush` 7.3%, and
 one sample — 0.04%**. Removing the thermal governor buys nothing measurable, and it is the only
 thing standing between an 87 °C card and an unbounded build. It stays.
 
-**Deprecated 2026-08-21.** It went. The profile above is not what reversed it — the number still
-holds, and that is the point: costing nothing is also *saving* nothing, and what `cool_down` did
-cost was a config knob, a `/healthz` field, a systemd `Environment=` line, a test module and this
-concept. Deleted for size, not for speed. `elapsed_s` is uncorrected wall clock now and `cooled_s`
-is gone from the progress payload; throttling is the driver's problem. `free_vram_bytes()` and
-`adaptive_batch()` stayed — VRAM path, not thermal. The batch-size section below is untouched by
-any of this and is still the live result.
+**Deprecated 2026-08-21**. It went. The profile above is not what reversed it — the number still
+holds, and that is the point. Costing nothing is also *saving* nothing. What `cool_down` did cost
+was a config knob, a `/healthz` field, a systemd `Environment=` line, a test module and this
+concept. Deleted for size, not for speed.
+
+`elapsed_s` is uncorrected wall clock now and `cooled_s` is gone from the progress payload.
+Throttling is the driver's problem. `free_vram_bytes()` and `adaptive_batch()` stayed — VRAM path,
+not thermal. The batch-size section below is untouched by any of this and is still the live
+result.
 
 # Where the time is not: batch size
 
-`_write_files` called `embed()` **once per file** — 7.63 chunks against an `adaptive_batch` ceiling
-of 128 — so the obvious reading of that profile was that the card paid a full kernel launch for 6%
+`_write_files` called `embed()` **once per file**: 7.63 chunks against an `adaptive_batch` ceiling
+of 128. So the obvious reading of that profile was that the card paid a full kernel launch for 6%
 of a batch. It was wrong, and the A/B says so. Moving the embed call into `_flush`, batching 64
 files at a time, ABBA on the same repo with a warm model:
 
@@ -50,11 +52,11 @@ is a throughput result, not a correctness one.
 
 The reason is in the token lengths: **every chunk arrives at exactly `EMBED_MAX_TOKENS`**. Padding
 waste at batch 128 is 0.0%, sorted or unsorted, because there is nothing to pad — sequences are
-already full width. The GPU was doing dense work at 6 items per call and dense work at 128 per call,
-so there was no launch overhead to recover. Length-bucketing is refuted by the same number.
+already full width. The GPU was doing dense work at 6 items per call and dense work at 128 per
+call. There was no launch overhead to recover. Length-bucketing is refuted by the same number.
 
-That is what "80.7% in `session.run`" actually meant: the indexer is **token-throughput bound**, and
-the only levers left are fewer tokens or a smaller model — not a better batch shape.
+That is what "80.7% in `session.run`" actually meant. The indexer is **token-throughput bound**,
+and the only levers left are fewer tokens or a smaller model — not a better batch shape.
 
 # The measurement trap this walked into first
 

@@ -2,7 +2,7 @@
 type: Defect
 resource: src/coderag/index.py, src/coderag/store.py
 title: A derived column was stored and never re-derived, so widening LANGS reclassified nothing
-description: "`files.lang` comes from the path alone, but it is written once at read time and the content-hash diff never rewrites an unchanged file. Growing LANGS from 40 to 166 extensions therefore reached zero of the 2,058 `.groovy` files already indexed. Found by the corpus scan that was supposed to confirm the widening, which is the only reason it was found at all."
+description: "`files.lang` comes from the path alone, but it is written once at read time and the content-hash diff never rewrites an unchanged file. Growing LANGS from 40 to 166 extensions reached zero of the 2,058 `.groovy` files already indexed. The no-language bucket only fell because `.svg` was deleted from the index, which made the total look like progress."
 tags: [indexing, staleness, verification]
 status: stable
 generated: { by: claude/opus-5, at: 2026-08-21T00:00:00Z }
@@ -11,10 +11,10 @@ generated: { by: claude/opus-5, at: 2026-08-21T00:00:00Z }
 # The bug
 
 `discover.read` sets `lang=filters.lang_of(rel)` and `store.upsert_file` writes it. Staleness in
-this engine is one content-hash diff — correct, and the reason it is correct is that it asks whether
-the store matches the *disk*. `lang` is not on the disk. It is derived from the path by a table that
-lives in this repo, so a file whose bytes never change carries whatever classification the table
-gave it on the day it was first read.
+this engine is one content-hash diff. That is correct, because it asks whether the store matches
+the *disk*. `lang` is not on the disk. It is derived from the path by a table that lives in this
+repo. So a file whose bytes never change carries whatever classification the table gave it on the
+day it was first read.
 
 `store.incompatible` does not cover it either: it keys on the embedding model and the chunker
 settings, both of which govern what is *in* a chunk. Nothing there names the language table, and
@@ -44,14 +44,14 @@ that disagree. It touches no chunk, so it costs no embedding and no GPU — a `U
 over paths the store already holds.
 
 It runs unconditionally rather than behind a version stamp. A stamp would be a second thing to
-remember to bump, and the pass is a dictionary comparison over a table that is already being read.
+remember to bump. The pass is a dictionary comparison over a table that is already being read.
 
 # What generalises
 
-Any column computed from repo-local rules rather than from file content has this shape, and the
+Any column calculated from repo-local rules rather than from file content has this shape, and the
 content-hash diff is structurally blind to all of them. `lang` is the only one today. The guard is
-the rule, not the column: **if this repo's own tables can change the value, the diff cannot see it,
-and something has to re-derive it.**
+the rule, not the column. **if this repo's own tables can change the value, the diff cannot see
+it, and something has to re-derive it.**
 
 # The verification lesson
 
@@ -64,4 +64,4 @@ Then the fixed number cleared the prediction at 2,077, and that reading was also
 was `.local` mapped to `ini` — nginx server blocks, an extension in no linguist language, added in
 the same commit. The true figure is **3,782** and the prediction misses. Both errors point one way:
 a number was accepted because it landed on the side of the threshold that ended the check. The scan
-confirms a prediction; only a diff against the upstream source confirms a table.
+confirms a prediction. Only a diff against the upstream source confirms a table.

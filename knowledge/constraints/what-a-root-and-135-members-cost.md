@@ -2,7 +2,7 @@
 type: Constraint
 resource: src/coderag/server.py, src/coderag/systemd.py
 title: What a root and 135 federated members cost, and why MemoryHigh fires 404 times without hurting
-description: "Measured 2026-08-20 against the live daemon: 12 searches over a 135-member federation, p50 1.46 s, 91% of one core while working, 2.31 GiB anon. The cgroup sits at its 4 GiB MemoryHigh and has logged 404 high events -- and the total memory stall across the process's life is 27 ms, because the excess is page cache."
+description: "Measured 2026-08-20 against the live daemon: 12 searches over a 135-member federation, p50 1.46 s, 91% of one core while working, 2.31 GiB anon. The cgroup sits at its 4 GiB MemoryHigh and has logged 404 high events. The total memory stall across the process's life is 27 ms, because the excess is page cache."
 tags: [performance, memory, federation, systemd]
 status: stable
 generated: { by: claude/opus-5, at: 2026-08-20T21:10:00Z }
@@ -28,8 +28,8 @@ wanted.
 # `memory.events high` is the wrong thing to assert
 
 Four plans in a row wrote `high == 0` into a verification block. It reads as "the limit was never
-touched" and it means something else: `high` counts *reclaim passes*, and 292 sqlite stores read off
-disk put 1.66 GiB of page cache inside the cgroup. Page cache is what reclaim is for.
+touched" and it means something else. `high` counts *reclaim passes*, and 292 sqlite stores read
+off disk put 1.66 GiB of page cache inside the cgroup. Page cache is what reclaim is for.
 
 The cost of all 404 of them, from `memory.pressure`: **26.8 ms of stall, cumulative, over the
 daemon's entire uptime**. Anon never went near the limit.
