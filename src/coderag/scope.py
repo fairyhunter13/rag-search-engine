@@ -225,6 +225,18 @@ def observe(pinned: ListRootsResult, verdict: Verdict | None = None) -> list[Pat
     return roots
 
 
+def require_pin(roots: list[Path]) -> None:
+    """Refuse a client that declared no workspace at all.
+
+    Separate from `enforce` since the sixth amendment. `search` stopped
+    refusing on *which* root the pin holds, and that silently dropped this
+    refusal too -- so a pre-2026-07-28 client could read any indexed row by
+    naming it, which is the era the rollout closed.
+    """
+    if not roots and config.REQUIRE_CLIENT_ROOTS:
+        raise ScopeError("the client sent no workspace roots, so no root can be checked against it")
+
+
 def enforce(target: Path, pinned: ListRootsResult, verdict: Verdict | None = None) -> None:
     """Refuse a root the caller's workspace does not contain, or sit inside.
 
@@ -236,10 +248,9 @@ def enforce(target: Path, pinned: ListRootsResult, verdict: Verdict | None = Non
     because enrolling a project is fleet work and reading one is not.
     """
     roots = observe(pinned, verdict)
+    require_pin(roots)
     if not roots:
-        if not config.REQUIRE_CLIENT_ROOTS:
-            return
-        raise ScopeError("the client sent no workspace roots, so no root can be checked against it")
+        return
     if any(target.is_relative_to(r) or r.is_relative_to(target) for r in roots):
         return
     raise ScopeError(
