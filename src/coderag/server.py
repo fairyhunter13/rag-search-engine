@@ -163,7 +163,10 @@ async def healthz(_request) -> JSONResponse:
             "failing": failing[: config.HEALTH_FAILING_CAP],
             # A dead scheduler is the failure no per-project field can carry: the
             # sweep is what would have written one.
-            "scheduler_errors": dict(_tick_errors),
+            # The watcher joins them under its own key: it runs on its own thread,
+            # so `_guarded` never sees its failures, and a caught `OSError` leaves
+            # a live thread watching nothing.
+            "scheduler_errors": dict(_tick_errors) | ({"watch": watch.error()} if watch.error() else {}),
             "errors_total": sum(e.error_total for e in rows.values()),
             "fleet_digest": registry.fleet_digest(rows),
             "unclaimed_stores": len(registry.unclaimed_stores()),

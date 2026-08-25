@@ -64,3 +64,36 @@ That is the rule working. It is also why `coderag doctor --prune` belongs at the
 run, with an explicit release of the dead rows. Waiting until someone notices is too late. Removal stays by
 hand, and `claim()` gets no path-shaped refusal. `tmp_path` is where the registry's own tests
 claim, and a rule refusing temporary roots would fail the suite that proves the registry works.
+
+# Amendment, 2026-08-25: three readings the checker was not taking
+
+`/healthz` publishes twelve fields and `check` read two of them. Three failures went through that
+gap. Each is now an identity in the same failing set, under the same two-sample rule.
+
+**A dead watcher.** `watching` was published and unread, so a thread that died hours ago passed
+every check. [The watcher went blind in two
+ways](../defects/the-watcher-went-blind-in-two-ways-and-said-neither.md) is what it was hiding. An
+absent field reads as watching, because an older daemon is not evidence of a failure.
+
+**A queue that stopped draining.** Depth alone is not a failure. The hourly reconcile enqueues every
+enabled row, so a deep queue is the ordinary state of a healthy fleet. The rule is a depth at or
+above `HEALTH_QUEUE_STUCK` that did not fall since the previous check. That is why the state file
+now holds the depth beside the failing set.
+
+That identity carries its own two samples, so it pages at the check that sees the stall. The
+persistence rule on top of it would page three checks later instead.
+
+**A fleet failing past the cap.** `failing` is truncated at `HEALTH_FAILING_CAP`, which is 20.
+`projects_failing` carries the true count and was unread. Past 20, the extra failures were in no set
+the checker compares. The identity is a constant string, because one carrying the count changes
+between two samples and pages on neither.
+
+# The report that is not an alert
+
+`coderag-doctor.timer` runs `doctor` daily and pages nobody. `doctor` exits 1 on any finding, so
+`OnFailure` here would fire every day until a human acts. That is how the alert beside it gets
+muted. `SuccessExitStatus=0 1` is what keeps a finding out of systemd's failure path.
+
+`--prune` stays hand-typed, because the registry records two fleet-wide index wipes caused by code
+that pruned. The orphan stores and the missing rows this reports were paging hourly through health
+instead, because nothing else ever looked.

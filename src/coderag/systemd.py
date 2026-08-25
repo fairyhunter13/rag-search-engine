@@ -22,6 +22,8 @@ UNIT_NAME = f"{config.APP}.service"
 ALERT_NAME = f"{config.APP}-alert@.service"
 HEALTH_NAME = f"{config.APP}-health.service"
 HEALTH_TIMER = f"{config.APP}-health.timer"
+DOCTOR_NAME = f"{config.APP}-doctor.service"
+DOCTOR_TIMER = f"{config.APP}-doctor.timer"
 UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
 
 
@@ -115,6 +117,44 @@ WantedBy=timers.target
 """
 
 
+def doctor_text(executable: str = "") -> str:
+    """The rows and stores nobody is paging about, written down once a day.
+
+    No `OnFailure` and no `--prune`, and both omissions are the design. `doctor`
+    exits 1 on any finding, so an alert here fires every day until a human acts,
+    which is how the health alert beside it gets muted. And `registry` records
+    two fleet-wide index wipes caused by code that pruned, so the destructive
+    half stays a hand-typed command.
+
+    Health pages hourly for a missing row today, because nothing else ever
+    looked. This is what looks.
+    """
+    return f"""\
+[Unit]
+Description=coderag registry and store report
+
+[Service]
+Type=oneshot
+SuccessExitStatus=0 1
+ExecStart={executable or sys.executable} -m coderag.cli doctor
+"""
+
+
+def doctor_timer_text() -> str:
+    return f"""\
+[Unit]
+Description=daily coderag registry and store report
+
+[Timer]
+OnBootSec=30min
+OnUnitActiveSec={config.DOCTOR_EVERY_S}s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+"""
+
+
 def install(enable: bool = True) -> Path:
     UNIT_DIR.mkdir(parents=True, exist_ok=True)
     unit = UNIT_DIR / UNIT_NAME
@@ -122,6 +162,8 @@ def install(enable: bool = True) -> Path:
     (UNIT_DIR / ALERT_NAME).write_text(alert_text())
     (UNIT_DIR / HEALTH_NAME).write_text(health_text())
     (UNIT_DIR / HEALTH_TIMER).write_text(health_timer_text())
+    (UNIT_DIR / DOCTOR_NAME).write_text(doctor_text())
+    (UNIT_DIR / DOCTOR_TIMER).write_text(doctor_timer_text())
 
     _systemctl("daemon-reload")
     if enable:
@@ -129,6 +171,7 @@ def install(enable: bool = True) -> Path:
         # The timer, not the service: enabling the oneshot would run the check
         # at every boot and never again.
         _systemctl("enable", "--now", HEALTH_TIMER)
+        _systemctl("enable", "--now", DOCTOR_TIMER)
     return unit
 
 

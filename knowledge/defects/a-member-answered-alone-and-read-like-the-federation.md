@@ -14,7 +14,7 @@ generated: { by: claude/opus-5, at: 2026-08-25T12:45:00Z }
 claims. A root asked from its own directory got all of them. A member asked from its own
 directory got itself.
 
-Measured on the live tree, from `redacted-name-7/gen3-app-c`:
+Measured on the live tree, from one member of a 143-project federation:
 
 ```
 "searched": {"projects": 1, "files": 612, "chunks": 1880}
@@ -65,7 +65,7 @@ narrow, and this table is the only reading taken so far.
 
 # What this does not fix
 
-The corpus is still the primary clones. For 31 redacted-name-7 services the indexed clone is older
+The corpus is still the primary clones. For 31 services in that federation the indexed clone is older
 than the deployed worktree, median gap 382 days. Widening the unit reaches 142 more projects of
 that same corpus. A question whose answer lives only in a worktree leaf is still unanswerable
 here.

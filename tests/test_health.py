@@ -133,3 +133,57 @@ def test_a_dead_scheduler_pages_on_the_same_two_sample_rule(daemon, tmp_path):
     ok, message = health.check(url, state)
     assert ok is False
     assert "scheduler:sweep" in message
+
+
+def test_a_dead_watcher_pages_on_the_same_two_sample_rule(daemon, tmp_path):
+    """`/healthz` publishes twelve fields and this read two of them. So a
+    watcher thread that died hours ago passed: the fleet stopped noticing every
+    write while every reading anyone took stayed green."""
+    url, body = daemon
+    state = tmp_path / "health.json"
+    body["watching"] = False
+
+    ok, first = health.check(url, state)
+    assert ok, first
+    ok, message = health.check(url, state)
+    assert ok is False
+    assert "watcher:" in message
+
+
+def test_a_queue_that_keeps_draining_does_not_page(daemon, tmp_path):
+    """The discriminating half. The hourly reconcile enqueues every enabled row,
+    so a deep queue is the ordinary state of a healthy fleet, and a checker keyed
+    on depth alone pages once an hour forever."""
+    url, body = daemon
+    state = tmp_path / "health.json"
+    body["indexer"] = {"queue_depth": 400}
+
+    assert health.check(url, state)[0]
+    body["indexer"] = {"queue_depth": 380}
+    ok, message = health.check(url, state)
+    assert ok, message
+
+
+def test_a_queue_that_stops_draining_pages(daemon, tmp_path):
+    url, body = daemon
+    state = tmp_path / "health.json"
+    body["indexer"] = {"queue_depth": 400}
+
+    assert health.check(url, state)[0]
+    ok, message = health.check(url, state)
+    assert ok is False
+    assert "indexer:" in message
+
+
+def test_failures_past_the_reply_cap_are_not_dropped(daemon, tmp_path):
+    """`failing` is truncated at `HEALTH_FAILING_CAP` and `projects_failing`
+    carries the true count. Reading the list alone, a fleet failing past the cap
+    is a fleet whose extra failures were in no set the checker compares."""
+    url, body = daemon
+    state = tmp_path / "health.json"
+    body.update(projects_failing=44, failing=[f"/repo/{i}" for i in range(20)])
+
+    health.check(url, state)
+    ok, message = health.check(url, state)
+    assert ok is False
+    assert "past the reply's cap" in message

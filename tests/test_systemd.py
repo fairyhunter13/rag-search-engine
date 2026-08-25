@@ -97,3 +97,36 @@ def test_the_health_check_runs_no_more_often_than_a_sweep(health_units):
     found = re.search(r"OnUnitActiveSec=(\d+)s", health_units[1].read_text())
     assert found, "no OnUnitActiveSec, so the timer fires once at boot and never again"
     assert int(found[1]) >= config.SWEEP_EVERY_S
+
+
+@pytest.fixture
+def doctor_units(tmp_path):
+    service = tmp_path / systemd.DOCTOR_NAME
+    service.write_text(systemd.doctor_text("/usr/bin/true"))
+    timer = tmp_path / systemd.DOCTOR_TIMER
+    timer.write_text(systemd.doctor_timer_text())
+    return service, timer
+
+
+@pytest.mark.skipif(not shutil.which("systemd-analyze"), reason="no systemd-analyze")
+def test_systemd_accepts_the_doctor_units(doctor_units):
+    for path in doctor_units:
+        out = subprocess.run(
+            ["systemd-analyze", "--user", "verify", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert "Unknown key name" not in out.stderr, out.stderr
+        assert out.returncode == 0, out.stderr
+
+
+def test_the_doctor_report_pages_nobody_and_deletes_nothing(doctor_units):
+    """`doctor` exits 1 on any finding, so an `OnFailure` here fires every day
+    until a human acts -- which is how the health alert beside it gets muted.
+    `--prune` stays hand-typed: the registry records two fleet-wide index wipes
+    caused by code that pruned."""
+    text = doctor_units[0].read_text()
+    assert "OnFailure=" not in text
+    assert "--prune" not in text
+    assert "SuccessExitStatus=0 1" in text, "a finding would be recorded as a unit failure"

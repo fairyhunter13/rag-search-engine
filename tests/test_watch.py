@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import queue
 import subprocess
 import threading
@@ -364,7 +365,7 @@ def test_the_tick_does_not_rearm_a_watch_set_that_has_not_changed(tmp_path, monk
     The assertion is in two halves because either alone passes on the broken
     code: unconditional `rearm` passes the second, a `pass` passes the first.
     """
-    monkeypatch.setattr(watch, "_intent", tuple(watch._roots()))
+    monkeypatch.setattr(watch, "_intent", watch._watch_set())
     watch._rearm.clear()
     watch.rearm_if_changed()
     assert not watch._rearm.is_set(), "an unchanged registry re-armed the watcher"
@@ -374,6 +375,65 @@ def test_the_tick_does_not_rearm_a_watch_set_that_has_not_changed(tmp_path, monk
     registry.claim(project, direct=True)
     watch.rearm_if_changed()
     assert watch._rearm.is_set(), "a newly registered project was never picked up"
+
+
+def test_repairing_a_config_rearms_the_project_it_unwatched(tmp_path, monkeypatch):
+    """The repair is invisible to the registry, and the registry was the whole
+    comparison. A project the loop drops for a broken config stays enabled, so
+    fixing the file re-armed nothing and that project stayed unwatched until the
+    daemon restarted -- the hourly sweep kept its store fresh, which is why this
+    reads as healthy everywhere it is asked."""
+    project = tmp_path / "typo"
+    project.mkdir()
+    registry.claim(project, direct=True)
+    (project / config.PROJECT_CONFIG_NAME).write_text("exclude: [oops\n")
+    monkeypatch.setattr(watch, "_intent", watch._watch_set())
+    watch._rearm.clear()
+
+    (project / config.PROJECT_CONFIG_NAME).write_text("exclude: [ok]\n")
+    os.utime(project / config.PROJECT_CONFIG_NAME, (2e9, 2e9))
+    watch.rearm_if_changed()
+
+    assert watch._rearm.is_set(), "the repaired project was never picked up again"
+
+
+def test_the_retired_config_name_is_stamped_too(tmp_path, monkeypatch):
+    """`projcfg` refuses a leftover `.coderag.toml` rather than ignoring it, so
+    it drops the project exactly as a broken YAML file does. Deleting it is the
+    repair, and it moves no other file."""
+    project = tmp_path / "retired"
+    project.mkdir()
+    registry.claim(project, direct=True)
+    (project / config.RETIRED_CONFIG_NAME).write_text("[index]\n")
+    monkeypatch.setattr(watch, "_intent", watch._watch_set())
+    watch._rearm.clear()
+
+    (project / config.RETIRED_CONFIG_NAME).unlink()
+    watch.rearm_if_changed()
+
+    assert watch._rearm.is_set(), "removing the retired config re-armed nothing"
+
+
+def test_an_oserror_out_of_the_watcher_is_recorded_rather_than_fatal(tmp_path, monkeypatch):
+    """inotify raises here at the per-user watch ceiling. Uncaught it killed the
+    thread, and nothing covers this one: `server._guarded` wraps the scheduler
+    thread, not this one. So the fleet stopped noticing writes, `watching` read
+    False with no reason attached, and the only recovery was the 60 s respawn."""
+    project = tmp_path / "p"
+    project.mkdir()
+    registry.claim(project, direct=True)
+
+    def raising(*_a, **_k):
+        watch._stop.set()
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(watch, "_watch", raising)
+    watch._stop.clear()
+    watch._loop()
+
+    assert watch.error() is not None
+    assert "No space left" in watch.error()
+    assert not watch.armed(project), "a failed pass still reported itself armed"
 
 
 def test_the_loop_records_what_it_armed_so_the_tick_can_compare(tmp_path):
@@ -413,7 +473,7 @@ def test_the_index_tool_does_not_rearm_a_registry_it_did_not_change(tmp_path, mo
 
     workspace = pin(tmp_path)
     tools.index_project(workspace, root=str(project))
-    monkeypatch.setattr(watch, "_intent", tuple(watch._roots()))
+    monkeypatch.setattr(watch, "_intent", watch._watch_set())
     watch._rearm.clear()
 
     tools.index_project(workspace, root=str(project))

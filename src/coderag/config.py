@@ -100,7 +100,11 @@ SWEEP_EVERY_S = _env_int("SWEEP_EVERY_S", 3600)
 # reads as still-failing because nothing has had a chance to retry.
 HEALTH_EVERY_S = _env_int("HEALTH_EVERY_S", SWEEP_EVERY_S)
 HEALTH_FAILING_CAP = _env_int("HEALTH_FAILING_CAP", 20)
+# A fleet reconcile enqueues every enabled row at once, so a deep queue is
+# ordinary. Only a deep queue that did not fall between two checks is a stall.
+HEALTH_QUEUE_STUCK = _env_int("HEALTH_QUEUE_STUCK", 50)
 HEALTH_STATE_PATH = STATE_DIR / "health.json"
+DOCTOR_EVERY_S = _env_int("DOCTOR_EVERY_S", 86400)
 HEALTHZ_URL = f"http://{HOST}:{PORT}/healthz"
 WATCH_DEBOUNCE_MS = _env_int("WATCH_DEBOUNCE_MS", 1500)
 

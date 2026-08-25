@@ -35,7 +35,10 @@ _rearm = threading.Event()
 _armed: tuple[Path, ...] = ()
 # What this pass is arming, which is what "has the set changed" has to compare
 # against; `_armed` is empty until the watches are actually in place.
-_intent: tuple[Path, ...] = ()
+_intent: tuple[tuple[Path, tuple[float, ...]], ...] = ()
+# The one failure no registry row can carry: it belongs to the thread, not to a
+# project. Cleared by the first yield of the next pass, which is the recovery.
+_error: str | None = None
 _lock = threading.Lock()
 
 
@@ -54,6 +57,38 @@ def _roots() -> list[Path]:
     return [e.path for e in registry.enabled_projects() if e.path.is_dir()]
 
 
+def _config_stamp(root: Path) -> tuple[float, ...]:
+    """When each config file this project is dropped for last moved.
+
+    Both files, because both drop it: an unparseable `.coderag.yaml`, and a
+    leftover `.coderag.toml`, which `projcfg` refuses rather than ignores. A
+    missing file stamps 0.0, so writing one, repairing one and deleting the
+    retired one all move the stamp.
+
+    Only the project's own pair. `projcfg.effective` reads a claiming root's
+    config too, but it suppresses a broken one there -- a root's typo raises
+    for the root, never for the member.
+    """
+    stamps = []
+    for name in (config.PROJECT_CONFIG_NAME, config.RETIRED_CONFIG_NAME):
+        try:
+            stamps.append((root / name).stat().st_mtime)
+        except OSError:
+            stamps.append(0.0)
+    return tuple(stamps)
+
+
+def _watch_set() -> tuple[tuple[Path, tuple[float, ...]], ...]:
+    """Every enabled directory paired with the config state that can drop it.
+
+    The registry row alone is not enough. A project dropped below for a broken
+    config stays enabled, so the repair changes nothing a row-keyed comparison
+    can see, and the watcher stays blind on that project until the daemon
+    restarts. The stamp moves when the repair lands, which is the signal.
+    """
+    return tuple((root, _config_stamp(root)) for root in _roots())
+
+
 def rearm_if_changed() -> None:
     """Re-arm only when the watch set actually differs. The only entry point.
 
@@ -69,24 +104,26 @@ def rearm_if_changed() -> None:
     survived a 300 s poll three runs running while the watcher reported itself
     healthy and the delivery path tested correct at every layer.
     """
-    if tuple(_roots()) != _intent:
+    if _watch_set() != _intent:
         _rearm.set()
 
 
 def _loop() -> None:
     while not _stop.is_set():
-        roots = _roots()
+        intent = _watch_set()
+        roots = [root for root, _ in intent]
         if not roots:
             if _stop.wait(config.SCHEDULER_TICK_S):
                 return
             continue
 
         _rearm.clear()
-        global _armed, _intent
-        # The unfiltered list on purpose: a project dropped below for a broken
+        global _armed, _intent, _error
+        # The unfiltered set on purpose: a project dropped below for a broken
         # config is still enabled, so comparing against the filtered one would
         # differ on every tick and re-arm forever -- the bug this replaces.
-        _intent = tuple(roots)
+        # The stamp carries the repair, which no registry row does.
+        _intent = intent
         _armed = ()
         configs = {}
         for root in list(roots):
@@ -111,22 +148,36 @@ def _loop() -> None:
                 return
             continue
         log.info("watching %d projects", len(roots))
-        for batch in _watch(
-            *roots,
-            stop_event=_stop,
-            debounce=config.WATCH_DEBOUNCE_MS,
-            rust_timeout=config.WATCH_POLL_MS,
-            yield_on_timeout=True,
-        ):
-            # Only now. Establishing ~120,000 watches takes seconds, and a write
-            # in that window is lost -- so anything waiting on `armed` has to
-            # wait for the first yield, not for the decision to rebuild.
-            # What was armed, not what was intended: the two differ by whatever
-            # the config loop dropped, and `armed` is asked before a write.
-            _armed = watched
-            _dispatch(batch, roots, configs)
-            if _rearm.is_set() or _stop.is_set():
-                break
+        try:
+            for batch in _watch(
+                *roots,
+                stop_event=_stop,
+                debounce=config.WATCH_DEBOUNCE_MS,
+                rust_timeout=config.WATCH_POLL_MS,
+                yield_on_timeout=True,
+            ):
+                # Only now. Establishing ~120,000 watches takes seconds, and a
+                # write in that window is lost -- so anything waiting on `armed`
+                # has to wait for the first yield, not for the decision to
+                # rebuild. What was armed, not what was intended: the two differ
+                # by whatever the config loop dropped, and `armed` is asked
+                # before a write.
+                _armed = watched
+                _error = None
+                _dispatch(batch, roots, configs)
+                if _rearm.is_set() or _stop.is_set():
+                    break
+        except OSError as exc:
+            # inotify raises here when the per-user watch ceiling is reached, and
+            # a project deleted mid-pass raises here too. Uncaught, this kills
+            # the thread: `server._guarded` wraps the scheduler, not this one, so
+            # the only recovery is the 60 s respawn, every event in between is
+            # lost with no replay, and `watching` reads False with no reason.
+            log.error("watch failed, re-arming: %s", exc)
+            _armed = ()
+            _error = f"{type(exc).__name__}: {exc}"
+            if _stop.wait(config.SCHEDULER_TICK_S):
+                return
 
 
 def _dispatch(batch, roots: list[Path], configs: dict) -> None:
@@ -181,6 +232,16 @@ def stop(timeout: float = 5.0) -> None:
 
 def watching() -> bool:
     return _thread is not None and _thread.is_alive()
+
+
+def error() -> str | None:
+    """The last watch failure, or None once a later pass has armed again.
+
+    A live thread is not the whole answer. The loop survives an `OSError` from
+    inotify now, so it can be alive and watching nothing at all, and that reads
+    the same as healthy everywhere else.
+    """
+    return _error
 
 
 def armed(project: Path | str) -> bool:
