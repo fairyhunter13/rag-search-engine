@@ -48,5 +48,8 @@ The cache is keyed by path, so an **unlinked** store keeps its handle and its di
 pinned 4 deleted test-fixture stores. `reap_idle` closes those whatever the idle stamp says.
 
 And a pass can outlive the threshold. `reap_idle` skips a cache it cannot lock without blocking, and
-`store.session()` holds that lock for the whole of `index_project` and the retrieval loop of
+`conns.session()` holds that lock for the whole of `index_project` and the retrieval loop of
 `search`, so nothing is closed under a live cursor.
+
+Both rules and the cross-thread reach have an arm in `tests/test_conns.py`. Each was run against
+the behaviour removed, and each fails there.
