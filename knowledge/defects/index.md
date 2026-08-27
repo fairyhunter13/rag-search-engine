@@ -101,6 +101,11 @@
   bounds the connection wait and nothing else. The 90 s was spent in the lifespan shutdown,
   waiting on a plain-`def` tool running under anyio's shield. The tool restarted the threads the
   finally block had just stopped.
+* [The watchdog ping rode the job loop, so slow and dead were the same
+  observation](liveness-rode-the-job-loop.md) - `_tick` sent `WATCHDOG=1` as its first statement
+  and then ran every job, and `WatchdogSec` was three of those ticks. A job slower than the
+  remaining budget therefore reads as a dead process. systemd killed a working daemon at exactly
+  180 s, five times, and each restart re-entered the load that caused it.
 * [The watcher went blind in two ways, and reported
   neither](the-watcher-went-blind-in-two-ways-and-said-neither.md) - A project dropped for a broken
   config never re-armed: the repair moves no registry row, and the row was the whole comparison.

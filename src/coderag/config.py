@@ -99,6 +99,16 @@ MODEL_IDLE_UNLOAD_S = _env_int("MODEL_IDLE_UNLOAD_S", 900)
 BRIDGE_IDLE_S = _env_int("BRIDGE_IDLE_S", 0)
 SCHEDULER_TICK_S = _env_int("SCHEDULER_TICK_S", 60)
 
+# The unit's WatchdogSec. It was three scheduler ticks, back when the tick sent
+# the ping; the ping has its own thread now, so a longer tick must not silently
+# buy a wedged process more time.
+WATCHDOG_SEC = _env_int("WATCHDOG_SEC", 90)
+
+# A cycle is the tick plus its jobs. The worst sweep measured is 15.4 s on a
+# quiet card and load stretches it, so this catches a job that never returns
+# rather than a slow one.
+SCHEDULER_STALL_S = _env_int("SCHEDULER_STALL_S", 900)
+
 # An absolute deadline on stopping, because nothing downstream of the advisory
 # 5 s joins is bounded: a tool call runs in a shielded anyio thread the session
 # manager's cancel cannot reach, and its task group then waits for that thread.

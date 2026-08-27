@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import queue
 import shutil
@@ -10,7 +11,7 @@ import time
 
 import pytest
 
-from coderag import cli, config, index, registry, server, store, systemd, tools, watch
+from coderag import cli, config, index, registry, server, store, systemd, tools, watch, watchdog
 
 
 @pytest.fixture(autouse=True)
@@ -357,7 +358,7 @@ async def test_the_startup_sweep_is_the_difference_between_serving_and_indexing(
     monkeypatch.setattr(index, "reconcile_all", lambda: called.append(1) or 1)
     monkeypatch.setattr(index, "start_worker", lambda: None)
     monkeypatch.setattr(watch, "start", lambda: None)
-    monkeypatch.setattr(server, "_notify", lambda _msg: None)
+    monkeypatch.setattr(watchdog, "notify", lambda _msg: None)
 
     async with server.lifespan(None):
         pass
@@ -366,7 +367,87 @@ async def test_the_startup_sweep_is_the_difference_between_serving_and_indexing(
 
 def test_the_notifier_is_silent_without_a_socket(monkeypatch):
     monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
-    server._notify("READY=1")  # must not raise outside systemd
+    watchdog.notify("READY=1")  # must not raise outside systemd
+
+
+# --------------------------------------------------------------- the watchdog
+
+
+def _armed(monkeypatch, alive: bool = True):
+    """A scheduler thread the gate can read, doing no work at all."""
+    stop = threading.Event()
+    thread = threading.Thread(target=stop.wait, daemon=True)
+    thread.start()
+    if not alive:
+        stop.set()
+        thread.join(2)
+    monkeypatch.setattr(watchdog, "_scheduler", thread)
+    return stop
+
+
+def test_the_ping_lands_while_a_job_takes_longer_than_the_deadline(monkeypatch):
+    """The defect this thread exists for: the ping was the first statement of
+    the job loop, so a sweep outrunning the deadline read as a dead process and
+    systemd killed a daemon that was working."""
+    sent: list[str] = []
+    _armed(monkeypatch)
+    watchdog.beat()
+    monkeypatch.setattr(watchdog, "notify", lambda state: sent.append(state))
+    monkeypatch.setattr(watchdog, "interval_s", lambda: 0.01)
+
+    stop = threading.Event()
+    pinger = threading.Thread(target=watchdog._ping, args=(stop,), daemon=True)
+    pinger.start()
+    time.sleep(0.15)  # no cycle completes in it: `beat` is never called again
+    stop.set()
+    pinger.join(2)
+
+    assert sent.count("WATCHDOG=1") >= 2, sent
+
+
+def test_a_wedged_scheduler_stops_the_ping(monkeypatch):
+    """An unconditional ping is a watchdog that cannot fire."""
+    sent: list[str] = []
+    _armed(monkeypatch)
+    monkeypatch.setattr(watchdog, "_last", time.monotonic() - 10_000)
+    monkeypatch.setattr(watchdog, "notify", lambda state: sent.append(state))
+    monkeypatch.setattr(watchdog, "interval_s", lambda: 0.01)
+
+    stop = threading.Event()
+    pinger = threading.Thread(target=watchdog._ping, args=(stop,), daemon=True)
+    pinger.start()
+    time.sleep(0.05)
+    stop.set()
+    pinger.join(2)
+
+    assert sent == []
+    assert "no scheduler cycle" in watchdog.stall()
+
+
+def test_a_dead_scheduler_thread_is_a_stall(monkeypatch):
+    """`release_models` runs outside `_guarded`, so the timer thread can die
+    while the process serves on."""
+    _armed(monkeypatch, alive=False)
+    watchdog.beat()
+    assert watchdog.stall() == "the scheduler thread is gone"
+
+
+async def test_the_stall_reaches_healthz(monkeypatch):
+    """A restart in 90 s erases the journal context, so the reason has to be
+    readable from the outside before it happens."""
+    _armed(monkeypatch, alive=False)
+    monkeypatch.setattr(server, "_tick_errors", {})
+    monkeypatch.setattr(watch, "error", lambda: "")
+    body = json.loads(bytes((await server.healthz(None)).body))
+    assert body["scheduler_errors"]["heartbeat"] == "the scheduler thread is gone"
+
+
+def test_the_interval_follows_the_installed_units_deadline(monkeypatch):
+    """An installed unit can predate the config default it was generated from."""
+    monkeypatch.setenv("WATCHDOG_USEC", str(30_000_000))
+    assert watchdog.interval_s() == 10
+    monkeypatch.delenv("WATCHDOG_USEC")
+    assert watchdog.interval_s() == config.WATCHDOG_SEC / 3
 
 
 # ------------------------------------------------------------------- the unit
@@ -376,7 +457,14 @@ def test_the_unit_carries_the_number_that_was_bought_with_an_outage():
     text = systemd.unit_text("/usr/bin/python3")
     assert "LimitNOFILE=65536" in text, "150 repos x 3 fds under WAL against a 1024 default"
     assert "Restart=on-failure" in text
-    assert "Type=notify" in text and "WatchdogSec=" in text
+    assert "Type=notify" in text and f"WatchdogSec={config.WATCHDOG_SEC}" in text
+
+
+def test_the_deadline_does_not_move_with_the_scheduler_tick(monkeypatch):
+    """It was three ticks, and the tick sent the ping. Now the pinger has its
+    own thread, so a longer tick must not buy a wedged process more time."""
+    monkeypatch.setattr(config, "SCHEDULER_TICK_S", 600)
+    assert f"WatchdogSec={config.WATCHDOG_SEC}" in systemd.unit_text("/usr/bin/python3")
 
 
 def test_on_failure_sits_in_unit_where_systemd_reads_it():
