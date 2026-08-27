@@ -15,7 +15,7 @@ in 15 minutes.** Every row read `reason: watch`, `paths: 1` and `queued_ms: 0.19
 woke the indexer named a single file, and it waited for nothing.
 
 The cost is not the file. `index_project` hashes every tracked file to find what moved, so a
-one-line save on `redacted-name-10-project` walks 10,408 files. The walk is the pass.
+one-line save on the largest project in the fleet walks 10,408 files. The walk is the pass.
 
 Debouncing harder in the watcher does not reach this. `WATCH_DEBOUNCE_MS` is the Rust batch window
 inside `watchfiles`, and these events arrive 5 to 20 seconds apart. A batch window wide enough to
