@@ -39,7 +39,10 @@ OnFailure={config.APP}-alert@%n.service
 [Service]
 Type=notify
 NotifyAccess=all
-WatchdogSec={config.SCHEDULER_TICK_S * 3}
+# Not derived from the scheduler tick any more: `watchdog.py` pings from its own
+# thread at a third of this, so the deadline bounds a wedged process rather than
+# a slow job.
+WatchdogSec={config.WATCHDOG_SEC}
 ExecStart={executable or sys.executable} -m coderag.cli serve
 Restart=on-failure
 RestartSec=5

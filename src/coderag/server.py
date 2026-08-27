@@ -33,7 +33,6 @@ import contextlib
 import logging
 import os
 import signal
-import socket
 import threading
 import time
 from collections.abc import AsyncIterator
@@ -42,7 +41,7 @@ import anyio.to_thread
 import uvicorn
 from starlette.responses import JSONResponse
 
-from . import config, conns, embed, federation, index, registry, runledger, watch
+from . import config, conns, embed, federation, index, registry, runledger, watch, watchdog
 from .tools import enroll, mcp
 
 log = logging.getLogger(__name__)
@@ -51,17 +50,6 @@ _ticker: threading.Thread | None = None
 _stop = threading.Event()
 # Keyed by job name so a recovery clears only its own entry.
 _tick_errors: dict[str, str] = {}
-
-
-def _notify(state: str) -> None:
-    """sd_notify without the systemd python binding, which is a C extension."""
-    addr = os.environ.get("NOTIFY_SOCKET")
-    if not addr:
-        return
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-    with contextlib.suppress(OSError), sock:
-        sock.connect("\0" + addr[1:] if addr.startswith("@") else addr)
-        sock.sendall(state.encode())
 
 
 def _sweep() -> None:
@@ -118,7 +106,6 @@ def _tick() -> None:
     """One timer for four jobs, because four timers is four things to stop."""
     since_sweep = 0.0
     while not _stop.wait(config.SCHEDULER_TICK_S):
-        _notify("WATCHDOG=1")
         _guarded("watch", _watch_tick)
         since_sweep += config.SCHEDULER_TICK_S
         if config.SWEEP_EVERY_S and since_sweep >= config.SWEEP_EVERY_S:
@@ -129,6 +116,7 @@ def _tick() -> None:
         if idle and embed.loaded() and embed.idle_seconds() > idle:
             log.info("idle for %ds, releasing models", idle)
             embed.release_models()
+        watchdog.beat()
 
 
 @contextlib.asynccontextmanager
@@ -144,13 +132,14 @@ async def lifespan(_app) -> AsyncIterator[None]:
     _stop.clear()
     _ticker = threading.Thread(target=_tick, name="scheduler", daemon=True)
     _ticker.start()
+    watchdog.start(_stop, _ticker)
 
     log.info("ready: %d projects queued", queued)
-    _notify("READY=1")
+    watchdog.notify("READY=1")
     try:
         yield
     finally:
-        _notify("STOPPING=1")
+        watchdog.notify("STOPPING=1")
         # Armed here, in the inner context, so it is running strictly before
         # the session manager's `__aexit__` -- the window that hangs. Its task
         # group waits on children, and a plain-`def` tool runs under anyio's
@@ -160,6 +149,7 @@ async def lifespan(_app) -> AsyncIterator[None]:
         deadline.daemon = True
         deadline.start()
         _stop.set()
+        watchdog.disarm()
         watch.stop()
         index.stop_worker()
 
@@ -205,7 +195,11 @@ async def healthz(_request) -> JSONResponse:
             # The watcher joins them under its own key: it runs on its own thread,
             # so `_guarded` never sees its failures, and a caught `OSError` leaves
             # a live thread watching nothing.
-            "scheduler_errors": dict(_tick_errors) | ({"watch": watch.error()} if watch.error() else {}),
+            "scheduler_errors": dict(_tick_errors)
+            | ({"watch": watch.error()} if watch.error() else {})
+            # The withheld ping is a restart in 90 s, so it has to be readable
+            # before the restart erases the journal context that explains it.
+            | ({"heartbeat": stalled} if (stalled := watchdog.stall()) else {}),
             "errors_total": sum(e.error_total for e in rows.values()),
             "fleet_digest": registry.fleet_digest(rows),
             "unclaimed_stores": len(registry.unclaimed_stores()),
