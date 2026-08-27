@@ -21,6 +21,7 @@ from pathlib import Path
 
 from . import (
     config,
+    daemon,
     embed,
     federation,
     gpu,
@@ -61,7 +62,17 @@ def _index(args) -> int:
 
 
 def _search(args) -> int:
-    out = search.search(args.query, args.root or Path.cwd(), k=args.k, mode=args.mode)
+    root = args.root or Path.cwd()
+    try:
+        out = daemon.call("search", root, query=args.query, k=args.k, mode=args.mode)
+    except daemon.Unreachable:
+        # Nothing to share the card with, so the second session this avoids
+        # does not exist. Locally is the only way the answer arrives at all.
+        out = search.search(args.query, root, k=args.k, mode=args.mode)
+    # The tool returns a failed search rather than raising it, and an empty
+    # result set that exits 0 is the false zero a caller cannot see.
+    if out.get("error"):
+        raise search.SearchError(out["error"])
     print(json.dumps(out, indent=2))
     return 0
 
