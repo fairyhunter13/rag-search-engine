@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-import time
 
 from coderag import config, conns, runledger, server, store
 
@@ -108,24 +107,29 @@ def test_open_count_reaches_across_threads(tmp_path):
     _reset()
     project = tmp_path / "elsewhere"
     project.mkdir()
-    done = threading.Event()
+    opened, done, failed = threading.Event(), threading.Event(), []
 
-    def _open():
-        store.connect(project)
-        done.wait(5)
+    def _open() -> None:
+        # A thread's exception is swallowed, so a raising `connect` reached the
+        # assertion below as a bare 0 and read as the count failing.
+        try:
+            store.connect(project)
+        except Exception as exc:
+            failed.append(exc)
+        finally:
+            opened.set()
+        done.wait(10)
 
     worker = threading.Thread(target=_open)
     worker.start()
     try:
-        for _ in range(100):
-            if conns.open_count():
-                break
-            time.sleep(0.01)
+        assert opened.wait(10)
+        assert failed == []
         assert conns.open_count() >= 1
         assert conns.cache().conns == {}
     finally:
         done.set()
-        worker.join(5)
+        worker.join(10)
 
 
 def test_a_reap_that_closes_nothing_writes_no_row(tmp_path, monkeypatch):
