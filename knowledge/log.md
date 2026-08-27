@@ -387,3 +387,20 @@ title: coderag knowledge history
   the suite did not check. `tests/test_conns.py` covers both, plus the cross-thread reach that makes
   a reap possible at all, and every arm was run against the behaviour removed.
 
+- **Creation**: [a watch batch carries one event](constraints/a-watch-batch-carries-one-event.md).
+  `runs.jsonl` recorded 2,085 index passes in an hour and 303 in 15 minutes, every row
+  `reason: watch`, `paths: 1`, `queued_ms: 0.19`. A pass hashes the whole tree to find what moved,
+  so a one-line save walks 10,408 files. `WATCH_DEBOUNCE_MS` cannot reach it: that is the Rust
+  batch window, and these events arrive 5 to 20 s apart. `quiet.py` holds a job per project for
+  `WATCH_QUIET_MS`, 15,000 ms, and each further event widens the paths and restarts the countdown.
+  It is a new module for the same reason `conns.py` was: `index.py` sits at 291 lines against the
+  300 ceiling. An explicit `index` call still submits with no delay and **takes the held job with
+  it**, so it never runs a narrower pass than the one it displaced. Two surfaces exist because the
+  hold is off the queue and `queue_depth` cannot see it: `index.status()` publishes `held`, and
+  `tools._pending` counts a held project, without which `index` answers 0 to "I saved a file and
+  nothing happened". Losing a held job at shutdown is safe here and nowhere else, because staleness
+  is one content-hash diff and the hourly reconcile finds it. This is also why the idle half of
+  `conns.reap_idle` had never fired live: the indexer thread was never quiet for `STORE_IDLE_S`,
+  measured as 1,291 to 2,065 open handles over 1,400 s with no reap. Eight mutations were run and
+  each reds exactly one arm; the two that were uncaught on the first pass -- the watcher dropping
+  the delay, and `_pending` ignoring the hold -- are the two arms added for them.

@@ -81,6 +81,16 @@ STORE_IDLE_S = _env_int("STORE_IDLE_S", 600)
 # 40 is the page-cache figure multiplied by 40.
 THREAD_LIMIT = _env_int("THREAD_LIMIT", 8)
 
+# How long a project must stop changing before a watch job runs. A batch carries
+# one event, and each pass is a whole content-hash walk, so an editor saving
+# through a build cost 303 passes in 15 minutes. This is not the Rust debounce
+# in `watch`: the events arrive seconds apart, past any window that stays
+# immediate. `WATCH_QUIET_MS=0` restores per-batch passes.
+WATCH_QUIET_MS = _env_int("WATCH_QUIET_MS", 15000)
+
+# How often the worker wakes to promote a held job when the queue is empty.
+QUIET_POLL_S = 1.0
+
 
 # -------------------------------------------------------------------- serving
 

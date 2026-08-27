@@ -24,6 +24,10 @@
   .zig file is chunked, embedded and searchable the day the language exists. It carries lang=""
   and is reachable only by leaving the lang filter unset. That used to return an empty result
   instead of saying so.
+* [A watch batch carries one event, and each one paid for a whole
+  walk](a-watch-batch-carries-one-event.md) - The watcher submitted per batch, so an editor saving
+  through a build cost 303 index passes in 15 minutes. A pass is a full content-hash walk whatever
+  moved. A 15 s per-project quiet window merges them, and the freshness it gives up is the window.
 * [An eval query is removed from the corpus it is hunting, and the corpus contains what the arm
   changes](an-eval-query-must-not-be-findable-by-identity.md) - Leaving the lead block in the
   indexed copy makes every arm score near 1.000 on string identity. An arm whose file type is
