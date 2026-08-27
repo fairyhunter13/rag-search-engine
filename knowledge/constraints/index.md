@@ -6,6 +6,10 @@
   says nothing about whether this project's inotify watches exist. It is `watch.armed(project)`
   now, which is membership in the armed set. The rebuild lands up to WATCH_POLL_MS plus ~5 s after
   registration, and a write inside that window is gone for good.
+* [A cached SQLite handle is not free at rest, and the cache was per thread and per
+  project](a-sqlite-handle-is-not-free-at-rest.md) - Every connection carries its own page cache,
+  2.12 MB once filled at the default. The daemon held 1,506 handles over 415 stores on four threads
+  and closed none, which is 3.2 GB of the 3.5 GiB it was resident at.
 * [A fleet alert decides on two samples, because every field in the row describes the wrong
   span](a-fleet-alert-decides-on-two-samples-not-on-a-count.md) - `last_error` is cleared by the
   hourly sweep, `last_error_at` is restamped by every failure, and `error_total` never resets. So
