@@ -538,6 +538,46 @@ def test_search_from_the_cli_reports_the_error_rather_than_a_traceback(tmp_path,
     assert "error" in capsys.readouterr().err
 
 
+def test_the_cli_asks_the_daemon_rather_than_loading_a_second_model(tmp_path, monkeypatch, capsys):
+    """A search in the CLI process builds a CUDA session beside the daemon's,
+    and one 16 GB card does not hold two of them plus a third caller."""
+    asked = {}
+
+    def answer(name, root, **arguments):
+        asked.update({"name": name, "root": str(root)} | arguments)
+        return {"results": [], "query": arguments["query"]}
+
+    monkeypatch.setattr(cli.daemon, "call", answer)
+    monkeypatch.setattr(cli.search, "search", _never_locally)
+
+    assert cli.main(["search", "a question", str(tmp_path), "--mode", "semantic"]) == 0
+    assert asked == {
+        "name": "search",
+        "root": str(tmp_path),
+        "query": "a question",
+        "k": 10,
+        "mode": "semantic",
+    }
+    assert json.loads(capsys.readouterr().out)["query"] == "a question"
+
+
+def test_the_cli_searches_locally_where_no_daemon_answers(tmp_path, monkeypatch, capsys):
+    """Nothing shares the card, so the session this avoids does not exist."""
+
+    def refuse(*_a, **_k):
+        raise cli.daemon.Unreachable("connection refused")
+
+    monkeypatch.setattr(cli.daemon, "call", refuse)
+    monkeypatch.setattr(cli.search, "search", lambda *a, **k: {"results": [], "local": True})
+
+    assert cli.main(["search", "a question", str(tmp_path)]) == 0
+    assert json.loads(capsys.readouterr().out)["local"] is True
+
+
+def _never_locally(*_a, **_k):
+    raise AssertionError("the CLI loaded its own model rather than asking the daemon")
+
+
 def test_doctor_names_a_store_no_row_claims(tmp_path, monkeypatch, capsys):
     """The row-driven half starts from a row, so a store whose row is gone was
     the one class it could never reach: 143 dirs, 0.46 GiB, under a `doctor`

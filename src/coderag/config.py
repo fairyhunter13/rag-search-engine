@@ -92,6 +92,9 @@ LOG_LEVEL = _env("LOG_LEVEL", "INFO").upper()
 HOST = _env("HOST", "127.0.0.1")
 PORT = _env_int("PORT", 8765)
 MCP_URL = f"http://{HOST}:{PORT}/mcp"
+# The CLI delegates a search to the daemon, and a cold daemon loads two models
+# before it answers the first one.
+CLI_TIMEOUT_S = _env_int("CLI_TIMEOUT_S", 300)
 
 # 0 disables the timer. Unprompted, an idle daemon holds 12.2 GB: the ONNX BFC
 # arena never shrinks, so only an explicit unload returns the VRAM.
