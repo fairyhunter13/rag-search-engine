@@ -22,7 +22,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from . import (
-    config, federation, index, projcfg, registry, scope, search, searchledger, watch,
+    config, federation, index, projcfg, quiet, registry, scope, search, searchledger, watch,
 )
 
 log = logging.getLogger(__name__)
@@ -144,12 +144,15 @@ def enroll(target: Path) -> dict[str, Any]:
 
 
 def _pending(unit: set[Path]) -> int:
-    """Whole-project walks queued for this unit, where `queue_depth` is the fleet's.
+    """Walks queued or held for this unit, where `queue_depth` is the fleet's.
 
-    Here rather than in `index`, which owns the queue and does not read it.
+    Here rather than in `index`, which owns the queue and does not read it. The
+    held half counts: a watch job waits out the quiet window off the queue, and
+    reporting 0 there is "I saved a file and nothing happened".
     """
     with index._queue.mutex:  # noqa: SLF001
-        return len({j.project for j in index._queue.queue if j is not None and j.project in unit})
+        queued = {j.project for j in index._queue.queue if j is not None and j.project in unit}
+    return len(queued | (quiet.projects() & unit))
 
 
 def _status(target: Path, members: list[Path]) -> dict[str, Any]:

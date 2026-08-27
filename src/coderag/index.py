@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import conns, discover, progress, projcfg, registry, runledger, store
+from . import config, conns, discover, progress, projcfg, quiet, registry, runledger, store
 from .indexwrite import _relang, _wipe, _write_files
 
 log = logging.getLogger(__name__)
@@ -54,6 +54,7 @@ class State:
         out = {
             "state": "indexing" if self.current or depth else "idle",
             "queue_depth": depth,
+            "held": quiet.pending(),
             "current": self.current,
             "completed": self.done,
             "failed": self.failed,
@@ -67,8 +68,18 @@ _worker: threading.Thread | None = None
 _worker_lock = threading.Lock()
 
 
-def submit(project: Path | str, paths: list[str] | None = None, reason: str = "manual") -> None:
+def submit(
+    project: Path | str,
+    paths: list[str] | None = None,
+    reason: str = "manual",
+    delay: float = 0.0,
+) -> None:
     """Enqueue a walk, unless an identical whole-project walk is already waiting.
+
+    `delay` holds the job until the project has been quiet that long, and every
+    further event on it restarts the countdown. An undelayed submit takes any
+    held job with it, so an explicit call never runs a narrower pass than the
+    one it displaced.
 
     The hourly reconcile enqueues all 149 rows and `index` is polled for status,
     so the same full walk piles up behind one worker. Only whole-project jobs
@@ -81,6 +92,11 @@ def submit(project: Path | str, paths: list[str] | None = None, reason: str = "m
     silently drops every later submit for that project.
     """
     project = registry.resolve(project)
+    if delay > 0:
+        quiet.hold(project, paths, reason, delay)
+        return
+    if (taken := quiet.release(project)) is not None:
+        paths = None if paths is None or taken[1] is None else sorted({*paths, *taken[1]})
     if paths is None:
         with _queue.mutex:
             # A concurrent submit can still slip a duplicate past this; the cost
@@ -115,7 +131,12 @@ def stop_worker(timeout: float = 5.0) -> None:
 
 def _drain() -> None:
     while True:
-        job = _queue.get()
+        for project, paths, reason in quiet.due():
+            _queue.put(Job(project=project, paths=paths, reason=reason, queued_at=time.time()))
+        try:
+            job = _queue.get(timeout=config.QUIET_POLL_S)
+        except queue.Empty:
+            continue
         if job is None:
             _queue.task_done()
             return

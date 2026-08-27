@@ -11,16 +11,26 @@ from pathlib import Path
 
 import pytest
 
-from coderag import config, index, projcfg, registry, tools, watch
+from coderag import config, index, projcfg, quiet, registry, tools, watch
 
 
 @pytest.fixture(autouse=True)
 def fresh_queue(monkeypatch):
     monkeypatch.setattr(index, "_queue", queue.Queue())
     monkeypatch.setattr(index, "_state", index.State())
+    quiet.flush()
+    yield
+    quiet.flush()
+
+
+def _promote() -> None:
+    """A watch job waits out `WATCH_QUIET_MS`. Routing is what these assert."""
+    for project, paths, reason in quiet.flush():
+        index.submit(project, paths, reason=reason)
 
 
 def _jobs() -> list:
+    _promote()
     out = []
     while not index._queue.empty():
         out.append(index._queue.get_nowait())
@@ -30,6 +40,7 @@ def _jobs() -> list:
 def _wait_for_job(timeout: float = 20.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        _promote()
         if not index._queue.empty():
             return index._queue.get_nowait()
         time.sleep(0.1)
@@ -69,6 +80,17 @@ def test_a_storm_becomes_one_job_per_project(tmp_path):
 
     assert len(jobs) == 2
     assert sum(len(j.paths) for j in jobs) == 201
+
+
+def test_a_batch_is_held_for_the_quiet_window_and_not_queued(tmp_path):
+    """303 passes in 15 minutes, because a batch carries one event."""
+    project = tmp_path / "p"
+    project.mkdir()
+
+    watch._dispatch({("x", str(project / "a.py"))}, [project], {project: projcfg.ProjectConfig()})
+
+    assert index._queue.empty()
+    assert quiet.pending() == 1
 
 
 def test_churn_in_an_excluded_directory_never_reaches_the_queue(tmp_path):

@@ -228,7 +228,8 @@ def _dispatch(batch, roots: list[Path], configs: dict) -> None:
             ignored += before - len(paths)
         if paths:
             submitted[str(project)] = len(paths)
-            index.submit(project, sorted(paths), reason="watch")
+            quiet_s = config.WATCH_QUIET_MS / 1000
+            index.submit(project, sorted(paths), reason="watch", delay=quiet_s)
 
     if seen["raw"]:
         # Every drop above was a bare `continue`. So "I edited a file and it is
