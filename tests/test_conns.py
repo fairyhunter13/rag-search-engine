@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 
-from coderag import config, conns, store
+from coderag import config, conns, runledger, server, store
 
 
 def _reset() -> None:
@@ -100,3 +101,53 @@ def test_the_reap_reaches_a_cache_the_reaping_thread_never_opened(tmp_path):
         threading.Event().wait(0.05)
 
     assert conns.reap_idle(0) == 1
+
+
+def test_open_count_reaches_across_threads(tmp_path):
+    """The scheduler thread reports the fleet's handles, not its own."""
+    _reset()
+    project = tmp_path / "elsewhere"
+    project.mkdir()
+    done = threading.Event()
+
+    def _open():
+        store.connect(project)
+        done.wait(5)
+
+    worker = threading.Thread(target=_open)
+    worker.start()
+    try:
+        for _ in range(100):
+            if conns.open_count():
+                break
+            time.sleep(0.01)
+        assert conns.open_count() >= 1
+        assert conns.cache().conns == {}
+    finally:
+        done.set()
+        worker.join(5)
+
+
+def test_a_reap_that_closes_nothing_writes_no_row(tmp_path, monkeypatch):
+    """It runs every tick, so a row per tick would bury the one that matters."""
+    _reset()
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path)
+
+    server._reap_stores()
+
+    assert runledger.read(kind="reap") == []
+
+
+def test_a_reap_records_what_it_closed(tmp_path, monkeypatch):
+    _reset()
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(config, "STORE_IDLE_S", 0)
+    project = tmp_path / "stale"
+    project.mkdir()
+    store.connect(project)
+
+    server._reap_stores()
+
+    rows = runledger.read(kind="reap")
+    assert [(r["closed"], r["open"]) for r in rows] == [(1, 0)]
+

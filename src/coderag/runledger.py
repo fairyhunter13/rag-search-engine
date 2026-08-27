@@ -18,6 +18,8 @@ What each kind makes durable, where nothing did:
 - `sweep` -- a sweep that claims nothing is silent, and it nearly always claims
   nothing. `_tick_errors` and `watch._error` live in memory, so the restart that
   a scheduler failure causes is also what erases it.
+- `reap` -- `conns.reap_idle` returned a count the scheduler discarded, so the
+  only evidence a reap ever ran was the process's open file descriptors.
 
 Best-effort by construction, like every ledger here: the daemon must not fail on
 its own bookkeeping.

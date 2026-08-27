@@ -233,7 +233,7 @@ def build_parser() -> argparse.ArgumentParser:
     # `search` is the default, so the invocation that existed before the other
     # three ledgers did still means what it meant.
     trace.add_argument("kind", nargs="?", default="search",
-                       choices=["search", "index", "watch", "sweep", "arm", "sched"])
+                       choices=["search", "index", "watch", "sweep", "arm", "sched", "reap"])
     trace.add_argument("-n", type=int, default=20)
     trace.add_argument("--errors", action="store_true", help="only the calls that failed")
     trace.set_defaults(fn=_trace)
