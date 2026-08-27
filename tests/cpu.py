@@ -80,7 +80,7 @@ def _vm_hwm_mb() -> float:
 
 
 def _worker(project: Path) -> int:
-    from coderag import index, registry, store
+    from coderag import conns, index, registry
 
     corpus = materialize(project, config.STATE_DIR / "corpus")
     registry.claim(corpus, direct=True)
@@ -93,7 +93,7 @@ def _worker(project: Path) -> int:
         # measures the diff and nothing else. `close_all` first: the cached
         # handle keeps the unlinked file alive, which is what made the first
         # run report three 0.03 s passes over 287 chunks it never built.
-        store.close_all()
+        conns.close_all()
         shutil.rmtree(config.INDEX_DIR, ignore_errors=True)
         before, peak, stop = _thread_cpu(), [], threading.Event()
         poller = threading.Thread(target=_peak_threads, args=(stop, peak), daemon=True)

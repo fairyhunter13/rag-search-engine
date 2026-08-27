@@ -27,7 +27,7 @@ import time
 from fnmatch import fnmatch
 from pathlib import Path
 
-from . import config, embed, federation, filters, lexical, registry, store
+from . import config, conns, embed, federation, filters, lexical, registry, store
 from .rank import Hit, diversify, pool_cut
 
 log = logging.getLogger(__name__)
@@ -238,8 +238,9 @@ def search(
     stage["embed_ms"] = since()
 
     pool: list[Hit] = []
-    for project in projects:
-        pool.extend(_project_candidates(project, query, vector, mode, config.CANDIDATES))
+    with conns.session():
+        for project in projects:
+            pool.extend(_project_candidates(project, query, vector, mode, config.CANDIDATES))
     stage["pool"] = len(pool)
     stage["pool_projects"] = len({h.project for h in pool})
     stage["retrieve_ms"] = since()
@@ -263,19 +264,21 @@ def search(
     stage["returned"] = len(hits)
     stage["result_projects"] = len({h.project for h in hits})
     log.debug("search %s stages %s", root, stage)
-    files, chunks = 0, 0
-    for project in projects:
-        try:
-            counted = store.counts(store.connect(project, create=False))
-        except FileNotFoundError:
-            continue
-        files, chunks = files + counted[0], chunks + counted[1]
+    # The registry row, not the stores. Opening every member again for a display
+    # field cost 8.3 ms and 716 statements a search, and it is what made the
+    # whole handle set resident on whichever worker ran the query.
+    rows = registry.load()
+    counted = [rows[key] for p in projects if (key := str(p)) in rows]
+    files = sum(e.file_count for e in counted)
+    chunks = sum(e.chunk_count for e in counted)
 
     return {
         "query": query,
         "mode": mode,
         "reranked": reranked,
         "took_ms": round((time.perf_counter() - started) * 1000, 2),
+        # `files` and `chunks` are as of each project's last pass, so a store
+        # being written right now still reports its previous count.
         "searched": {"projects": len(projects), "files": files, "chunks": chunks},
         # Stripped by `tools.search_code` before the reply reaches a model, and
         # written to the ledger instead. A library caller keeps it.

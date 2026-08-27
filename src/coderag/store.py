@@ -17,12 +17,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import threading
 from pathlib import Path
 
 import sqlite_vec
 
 from . import config
+from .conns import cache
 from .lexical import identifier_tokens
 
 SCHEMA = """
@@ -62,8 +62,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
-_local = threading.local()
-
 
 def _vec_ddl() -> str:
     return (
@@ -79,14 +77,14 @@ def connect(project: Path | str, *, create: bool = True) -> sqlite3.Connection:
     Thread-local because SQLite connections are not shareable across threads
     and this daemon has five: sharing one is an intermittent
     ProgrammingError under load, which is the worst possible failure shape.
+    `conns` owns the lifetime of what this returns.
     """
     path = config.index_path(project)
     key = str(path)
-    cache = getattr(_local, "conns", None)
-    if cache is None:
-        cache = _local.conns = {}
-    if key in cache:
-        return cache[key]
+    live = cache()
+    with live.lock:
+        if key in live.conns:
+            return live.conns[key]
 
     if not create and not path.exists():
         raise FileNotFoundError(f"no index for {project}")
@@ -101,17 +99,13 @@ def connect(project: Path | str, *, create: bool = True) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute(f"PRAGMA cache_size=-{config.SQLITE_CACHE_KIB}")
     conn.executescript(SCHEMA)
     conn.execute(_vec_ddl())
     conn.commit()
-    cache[key] = conn
+    with live.lock:
+        live.conns[key] = conn
     return conn
-
-
-def close_all() -> None:
-    for conn in getattr(_local, "conns", {}).values():
-        conn.close()
-    _local.conns = {}
 
 
 def get_meta(conn: sqlite3.Connection, key: str, default=None):

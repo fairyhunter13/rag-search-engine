@@ -67,6 +67,21 @@ def index_path(project: Path | str) -> Path:
     return INDEX_DIR / f"{Path(resolved).name}-{digest}" / "index.db"
 
 
+# SQLite gives every connection its own page cache, and one federated search
+# opens the whole unit on one thread. At the 2 MiB default, 1,506 live handles
+# held 3.2 GB. 256 KiB costs a 40-store query pass 5.3 ms -> 6.9 ms.
+SQLITE_CACHE_KIB = _env_int("SQLITE_CACHE_KIB", 256)
+
+# How long a thread's whole handle set may sit unused before `conns.reap_idle`
+# closes it. Reopening 358 stores is 79 ms, paid by the first search after a
+# quiet spell.
+STORE_IDLE_S = _env_int("STORE_IDLE_S", 600)
+
+# The anyio worker pool. Each worker keeps its own handle set, so the default
+# 40 is the page-cache figure multiplied by 40.
+THREAD_LIMIT = _env_int("THREAD_LIMIT", 8)
+
+
 # -------------------------------------------------------------------- serving
 
 # INFO by default and staying there. Raising the fleet default was refused on a

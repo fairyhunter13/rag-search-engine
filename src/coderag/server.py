@@ -42,7 +42,7 @@ import anyio.to_thread
 import uvicorn
 from starlette.responses import JSONResponse
 
-from . import config, embed, federation, index, registry, runledger, watch
+from . import config, conns, embed, federation, index, registry, runledger, watch
 from .tools import enroll, mcp
 
 log = logging.getLogger(__name__)
@@ -124,6 +124,7 @@ def _tick() -> None:
         if config.SWEEP_EVERY_S and since_sweep >= config.SWEEP_EVERY_S:
             since_sweep = 0.0
             _guarded("sweep", _sweep)
+        _guarded("stores", conns.reap_idle)
         idle = config.MODEL_IDLE_UNLOAD_S
         if idle and embed.loaded() and embed.idle_seconds() > idle:
             log.info("idle for %ds, releasing models", idle)
@@ -132,6 +133,9 @@ def _tick() -> None:
 
 @contextlib.asynccontextmanager
 async def lifespan(_app) -> AsyncIterator[None]:
+    # Each worker keeps its own SQLite handles, so anyio's default 40 is one
+    # federated unit's page caches multiplied by 40.
+    anyio.to_thread.current_default_thread_limiter().total_tokens = config.THREAD_LIMIT
     index.start_worker()
     queued = index.reconcile_all() if config.RECONCILE_ON_START else 0
     watch.start()

@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import discover, progress, projcfg, registry, runledger, store
+from . import conns, discover, progress, projcfg, registry, runledger, store
 from .indexwrite import _relang, _wipe, _write_files
 
 log = logging.getLogger(__name__)
@@ -150,8 +150,15 @@ def _drain() -> None:
 def index_project(project: Path | str, paths: list[str] | None = None) -> dict:
     """One idempotent pass. Safe to call twice; the second is a no-op.
 
-    Runs on the worker thread. Callers use `submit`.
+    Runs on the worker thread. Callers use `submit`. The session is what stops
+    `conns.reap_idle` closing this store mid-pass on a tree big enough to run
+    past the idle threshold.
     """
+    with conns.session():
+        return _index_project(project, paths)
+
+
+def _index_project(project: Path | str, paths: list[str] | None) -> dict:
     project = registry.resolve(project)
     if not project.is_dir():
         # A project that is unmounted, renamed or on a detached drive must not
