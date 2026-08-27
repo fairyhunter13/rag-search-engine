@@ -53,3 +53,19 @@ And a pass can outlive the threshold. `reap_idle` skips a cache it cannot lock w
 
 Both rules and the cross-thread reach have an arm in `tests/test_conns.py`. Each was run against
 the behaviour removed, and each fails there.
+
+# A reap that leaves no trace cannot be verified
+
+`reap_idle` returned a count and the scheduler threw it away, so the only live evidence a reap ran
+was the process's open file descriptors. An audit spent three watches on `/proc/<pid>/fd` deciding
+whether it fires at all, and the answer needed a 361-project search to isolate a thread that would
+certainly go idle. It fired 660 s later and closed 363 handles.
+
+`server._reap_stores` records a `reap` row carrying `closed` and `open`. It stays silent when it
+closes nothing, which is nearly every tick, on the same rule an empty watch batch follows. `open`
+comes from `conns.open_count`, because the count that matters spans every thread and no single
+thread can see it.
+
+Closing a handle does not return the memory. `MemoryCurrent` was higher after that reap than
+before, at 3.91 GiB, because the page cache goes back to the allocator and `malloc_trim` runs only
+on model release.

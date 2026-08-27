@@ -87,6 +87,13 @@ def reap_idle(seconds: float | None = None) -> int:
     return closed
 
 
+def open_count() -> int:
+    """Handles live across every thread, which no single thread can count."""
+    with _caches_lock:
+        live_caches = list(_caches)
+    return sum(len(live.conns) for live in live_caches)
+
+
 def close_all() -> None:
     live = getattr(_local, "cache", None)
     if live is None:

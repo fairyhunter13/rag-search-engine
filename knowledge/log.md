@@ -404,3 +404,15 @@ title: coderag knowledge history
   measured as 1,291 to 2,065 open handles over 1,400 s with no reap. Eight mutations were run and
   each reds exactly one arm; the two that were uncaught on the first pass -- the watcher dropping
   the delay, and `_pending` ignoring the hold -- are the two arms added for them.
+
+- **Update**: [a SQLite handle is not free at rest](constraints/a-sqlite-handle-is-not-free-at-rest.md),
+  amended: the reap was unobservable. `_guarded("stores", conns.reap_idle)` discarded the returned
+  count and logged nothing, so `/proc/<pid>/fd` was the only evidence one ever ran. Confirming it
+  live took three watches and a 361-project search to isolate a thread certain to go idle -- it
+  fired at 660 s and closed 363 handles. `server._reap_stores` records a `reap` row with `closed`
+  and `open`, silent when it closes nothing, on the rule an empty watch batch already follows.
+  `open` needs `conns.open_count` because the number spans every thread. Two facts the row does not
+  fix are written down instead: `MemoryCurrent` rose across that reap, since a closed handle returns
+  its page cache to the allocator and `malloc_trim` runs only on model release; and the indexer
+  thread calls `connect` about every 18 s, so it never reaches `STORE_IDLE_S` while any watched
+  project is written.

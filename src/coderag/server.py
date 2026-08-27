@@ -95,6 +95,15 @@ def _guarded(name: str, job) -> None:
         _tick_errors.pop(name, None)
 
 
+def _reap_stores() -> None:
+    # Silent when it closes nothing, which is nearly every tick. A reap left no
+    # log line and no row, so `/proc/<pid>/fd` was the only evidence it ran, and
+    # an audit spent three watches deciding whether it fires at all.
+    closed = conns.reap_idle()
+    if closed:
+        runledger.record("reap", {"closed": closed, "open": conns.open_count()})
+
+
 def _watch_tick() -> None:
     # `start` before the rearm check: a rearm only sets a flag, and a thread
     # that died reads no flags. `start` is a no-op while one is alive.
@@ -111,7 +120,7 @@ def _tick() -> None:
         if config.SWEEP_EVERY_S and since_sweep >= config.SWEEP_EVERY_S:
             since_sweep = 0.0
             _guarded("sweep", _sweep)
-        _guarded("stores", conns.reap_idle)
+        _guarded("stores", _reap_stores)
         idle = config.MODEL_IDLE_UNLOAD_S
         if idle and embed.loaded() and embed.idle_seconds() > idle:
             log.info("idle for %ds, releasing models", idle)
