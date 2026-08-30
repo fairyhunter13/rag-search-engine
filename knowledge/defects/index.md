@@ -40,8 +40,8 @@
 * [A populated submodule was invisible to discovery, so a third of the Gen-3 PHP corpus was never
   indexed](a-submodule-is-invisible-to-discovery.md) - `git ls-files` lists a gitlink as one entry
   and never descends, so every file inside a checked-out submodule was absent from the index. 22
-  Acme worktrees hold one, and 2,584 PHP files sat behind them. `--recurse-submodules` is not
-  the fix, because git refuses it beside `--others`.
+  worktrees in the estate this instance indexes hold one, and 2,584 PHP files sat behind them.
+  `--recurse-submodules` is not the fix, because git refuses it beside `--others`.
 * [A project whose directory was gone could not be turned
   off](a-vanished-project-could-not-be-turned-off.md) - `index_project` refused every call for a
   path that is not a directory, and the refusal sat above the unflag branch. So the row an
