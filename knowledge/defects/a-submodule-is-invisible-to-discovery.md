@@ -2,7 +2,7 @@
 type: Defect
 resource: src/coderag/discover.py, tests/test_discover.py
 title: A populated submodule was invisible to discovery, so a third of the Gen-3 PHP corpus was never indexed
-description: "`git ls-files` lists a gitlink as one entry and never descends, so every file inside a checked-out submodule was absent from the index. 22 Acme worktrees hold one, and 2,584 PHP files sat behind them. `--recurse-submodules` is not the fix, because git refuses it beside `--others`."
+description: "`git ls-files` lists a gitlink as one entry and never descends, so every file inside a checked-out submodule was absent from the index. 22 worktrees in the estate this instance indexes hold one, and 2,584 PHP files sat behind them. `--recurse-submodules` is not the fix, because git refuses it beside `--others`."
 tags: [discovery, submodule, git, corpus, coverage, resolved]
 status: stable
 generated: { by: claude/opus-5, at: 2026-08-30T00:00:00Z }
@@ -47,19 +47,19 @@ the count before the fix was 0.
 
 | Worktree | PHP files | Inside a gitlink |
 |---|---:|---:|
-| `gen3-app-support/1.12.1` | 651 | 492 |
-| `gen3-app-a/submodule-pin_2.1` | 531 | 128 |
-| `gen3-app-vendor-portal/1.6.2` | 526 | 252 |
-| `gen3-app-kpi/5.4.6` | 505 | 102 |
-| `gen3-app-bms/1.1.1` | 128 | 10 |
+| worktree 1 | 651 | 492 |
+| worktree 2 | 531 | 128 |
+| worktree 3 | 526 | 252 |
+| worktree 4 | 505 | 102 |
+| worktree 5 | 128 | 10 |
 
-`gen3-app-a/submodule-pin_2.1` went from 403 files to 531. Every submodule is mounted at `Domain/` or
+Worktree 2 went from 403 files to 531. Every submodule is mounted at `Domain/` or
 `Shared/`, which is where the aggregates live, so the missing third was not incidental code.
 
 # A count in the commit message that is wrong
 
 `2ea7ab4` says *23 worktrees hold a populated submodule*. **The number is 22.**
-`gen3-app-production/mitme-1.1` holds gitlink directories whose `.git` file points at a missing gitdir,
+One worktree holds gitlink directories whose `.git` file points at a missing gitdir,
 so it is neither empty nor a checkout, and it enumerates nothing. The commit is left as it stands,
 because it records what was believed then. This concept is where a reader looks.
 
