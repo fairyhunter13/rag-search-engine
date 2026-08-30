@@ -64,9 +64,7 @@ def _gitlinks(project: Path) -> list[str]:
     return names
 
 
-def _git_files(
-    project: Path, *, depth: int = 0, seen: set[str] | None = None
-) -> list[str] | None:
+def _git_files(project: Path, *, depth: int = 0, seen: set[str] | None = None) -> list[str] | None:
     """Relative paths from git, or None when this is not a git work tree.
 
     A populated submodule is enumerated by the same command run inside it, and
