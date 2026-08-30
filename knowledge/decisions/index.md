@@ -1,5 +1,6 @@
 # Decision
 
+* [A row leaves on a delete event and never on a scan](a-row-leaves-on-a-delete-event-and-never-on-a-scan.md) - The registry refused to prune a missing path, because an unmount and a deletion look the same to a scan. They do not look the same to a delete event, so removal became automatic on the event, behind a parent test and a grace period.
 * [A search writes one structured row, and the fleet log level stays where it
   is](a-search-writes-one-row-and-the-log-level-stays.md) - The pool cut starved 307 projects and
   finding it needed an offline replay that rebuilt the pool by hand, because `search.py` and

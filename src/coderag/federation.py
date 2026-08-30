@@ -60,15 +60,16 @@ def _excluded(rel: Path, target: Path, patterns: tuple[str, ...]) -> bool:
     return any(fnmatch(str(rel), p) or fnmatch(str(target), p) for p in patterns)
 
 
-def discover(root: Path | str, cfg: ProjectConfig | None = None) -> list[Path]:
-    """Resolved member paths reachable by symlink from `root`, deduped.
+def links(root: Path | str, cfg: ProjectConfig | None = None) -> dict[Path, Path]:
+    """Every member symlink under `root`, mapped to the project it resolves to.
 
-    Returns sorted paths so that two runs over the same tree agree; the walk
-    order otherwise follows inode order and would churn the registry.
+    The link path is kept because the watcher needs it. A member's own deletion
+    fires an event on the member, but a link removed while its target lives on
+    fires only on the link, and nothing else ever reports it.
     """
     root = registry.resolve(root)
     cfg = cfg or effective(root)
-    seen: set[Path] = set()
+    found: dict[Path, Path] = {}
 
     for dirpath, dirnames, _ in os.walk(root, followlinks=False):
         here = Path(dirpath)
@@ -97,9 +98,18 @@ def discover(root: Path | str, cfg: ProjectConfig | None = None) -> list[Path]:
             if _excluded(link.relative_to(root), target, cfg.federation_exclude):
                 continue
             if _looks_like_a_project(target):
-                seen.add(target)
+                found[link] = target
 
-    return sorted(seen)
+    return found
+
+
+def discover(root: Path | str, cfg: ProjectConfig | None = None) -> list[Path]:
+    """Resolved member paths reachable by symlink from `root`, deduped.
+
+    Returns sorted paths so that two runs over the same tree agree; the walk
+    order otherwise follows inode order and would churn the registry.
+    """
+    return sorted(set(links(root, cfg).values()))
 
 
 def register(root: Path | str) -> list[Path]:
@@ -126,10 +136,11 @@ def sweep() -> list[Path]:
     members of one root, and every one of them arrived by someone remembering
     to re-run the tool.
 
-    It only ever adds. A link that is gone and a link whose target is briefly
-    unmounted are the same observation from here, and the registry's rule is
-    that removal is explicit -- the pruning version of that rule is what wiped
-    the fleet once already.
+    It only ever adds, because a scan cannot tell a link that is gone from a
+    link whose target is briefly unmounted, and the pruning version of that rule
+    is what wiped the fleet once already. `release_gone` is the other half, and
+    it is not a scan: `prune.py` calls it on the delete event for the link
+    itself, behind a grace period.
     """
     claimed: list[Path] = []
     for entry in registry.enabled_projects():
@@ -150,6 +161,31 @@ def sweep() -> list[Path]:
             registry.claim(member, root=entry.path)
             claimed.append(member)
     return claimed
+
+
+def release_gone(root: Path | str) -> list[Path]:
+    """Release this root's claim on every member its links no longer reach.
+
+    The counterpart to `sweep`, and the reason it is safe: `registry.release`
+    drops one claim and removes the row only when nothing else holds it. A
+    member two roots reach, or one enrolled directly, keeps its row.
+
+    Only `prune.py` calls this, and only on a delete event for a link under this
+    root. Called on a timer it would be the scan the registry refuses.
+    """
+    base = registry.resolve(root)
+    root_key = str(base)
+    reachable = set(discover(base))
+    released: list[Path] = []
+    for key, entry in registry.load().items():
+        if root_key not in entry.roots:
+            continue
+        member = Path(key)
+        if member in reachable:
+            continue
+        registry.release(member, root=base)
+        released.append(member)
+    return sorted(released)
 
 
 def unregister(root: Path | str) -> list[Path]:
