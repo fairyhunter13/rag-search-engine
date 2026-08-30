@@ -25,7 +25,7 @@ from pathlib import Path
 
 from watchfiles import watch as _watch
 
-from . import config, discover, index, projcfg, registry, runledger
+from . import config, discover, federation, index, projcfg, prune, registry, runledger
 
 log = logging.getLogger(__name__)
 
@@ -40,8 +40,6 @@ _intent: tuple[tuple[Path, tuple[float, ...]], ...] = ()
 # project. Cleared by the first yield of the next pass, which is the recovery.
 _error: str | None = None
 _lock = threading.Lock()
-
-
 def _owner(path: Path, roots: list[Path]) -> Path | None:
     """Which watched project a changed path belongs to: the longest match.
 
@@ -149,6 +147,7 @@ def _loop() -> None:
             if _stop.wait(config.SCHEDULER_TICK_S):
                 return
             continue
+        prune.register_paths(roots)
         log.info("watching %d projects", len(roots))
         # A re-arm tears down every watch and rebuilds it, and inotify replays
         # nothing, so the window is a real gap and its cause is worth dating.
@@ -169,6 +168,13 @@ def _loop() -> None:
                 # before a write.
                 _armed = watched
                 _error = None
+                # Before the dispatch, because a deleted project's files are
+                # filtered out down there and the deletion would never be seen.
+                prune.note_deletions(batch)
+                pruned = prune.PRUNER.run_due()
+                if pruned["forgotten"] or pruned["unclaimed"]:
+                    runledger.record("prune", pruned)
+                    rearm_if_changed()
                 _dispatch(batch, roots, configs)
                 if _rearm.is_set() or _stop.is_set():
                     break

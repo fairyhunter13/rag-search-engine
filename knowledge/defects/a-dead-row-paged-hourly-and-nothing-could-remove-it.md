@@ -37,7 +37,11 @@ in-process against the real state. Three things are indistinguishable from a del
 moment of the read. They are an unmounted volume, a repo moved for ten seconds, and a member
 behind a broken symlink.
 
-So the judgement lives in `doctor --prune`, where a human invoked it, and `forget` only executes it.
+So the judgement lived in `doctor --prune`, where a human invoked it, and `forget` only executed
+it. On 2026-08-30 [a row leaves on a delete
+event](../decisions/a-row-leaves-on-a-delete-event-and-never-on-a-scan.md) added the one case a
+human need not judge: the watcher saw the deletion happen. The predicate is still refused, and
+`forget` still takes keys. `doctor --prune` still owns every row nobody was awake for.
 
 One `_mutate()` write for the whole set, which is not tidiness. `_rotate_backup` stamps to the
 second: twenty per-row `release()` calls overwrite one backup, and what survives as the restore
