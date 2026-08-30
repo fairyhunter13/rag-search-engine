@@ -6,6 +6,10 @@ files, honouring the whole chain -- repo `.gitignore`, nested ones, `.git/info/
 exclude`, and the user's global excludesfile -- including the negation rules
 that hand-rolled matchers get wrong. Reimplementing that is a few hundred lines
 whose failure mode is indexing a `node_modules` nobody asked for.
+
+`ls-files` lists a gitlink as one entry and never descends into it, so a
+populated submodule contributed nothing. `--recurse-submodules` is not the fix:
+git refuses it beside `--others`. So the command runs once per gitlink instead.
 """
 
 from __future__ import annotations
@@ -30,8 +34,45 @@ class FileMeta:
     text: str
 
 
-def _git_files(project: Path) -> list[str] | None:
-    """Relative paths from git, or None when this is not a git work tree."""
+GITLINK_MODE = "160000"
+MAX_SUBMODULE_DEPTH = 4
+
+
+def _gitlinks(project: Path) -> list[str]:
+    """Relative paths of the submodule entries in this index.
+
+    Read from the index and not from `.gitmodules`, because `.gitmodules`
+    declares a submodule the tree may never have checked out.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "--stage", "-z"],
+            cwd=project,
+            capture_output=True,
+            timeout=120,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    names: list[str] = []
+    for entry in out.stdout.decode("utf-8", "replace").split("\0"):
+        if not entry.startswith(GITLINK_MODE):
+            continue
+        _, _, name = entry.partition("\t")
+        if name:
+            names.append(name)
+    return names
+
+
+def _git_files(
+    project: Path, *, depth: int = 0, seen: set[str] | None = None
+) -> list[str] | None:
+    """Relative paths from git, or None when this is not a git work tree.
+
+    A populated submodule is enumerated by the same command run inside it, and
+    its paths are prefixed back to the outer project, so every caller still
+    receives one flat list relative to that project and nothing else changes.
+    """
     try:
         out = subprocess.run(
             ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
@@ -42,7 +83,31 @@ def _git_files(project: Path) -> list[str] | None:
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    return [p for p in out.stdout.decode("utf-8", "replace").split("\0") if p]
+    found = [p for p in out.stdout.decode("utf-8", "replace").split("\0") if p]
+    if depth >= MAX_SUBMODULE_DEPTH:
+        return found
+    # A visited-realpath set, shared across the whole recursion: a link back to
+    # an ancestor and two links to one target are both enumerated once.
+    if seen is None:
+        seen = set()
+    seen.add(str(project.resolve()))
+    for name in _gitlinks(project):
+        sub = project / name
+        if sub.is_symlink() or not sub.is_dir():
+            continue
+        real = str(sub.resolve())
+        if real in seen:
+            continue
+        try:
+            if not any(sub.iterdir()):
+                continue
+        except OSError:
+            continue
+        inner = _git_files(sub, depth=depth + 1, seen=seen)
+        if inner is None:
+            inner = _walked_files(sub)
+        found.extend(f"{name}/{rel}" for rel in inner)
+    return found
 
 
 def git_ignored(project: Path, rels: list[str]) -> set[str]:
