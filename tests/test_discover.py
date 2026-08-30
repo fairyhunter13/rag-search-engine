@@ -191,6 +191,62 @@ def test_gitignored_files_never_reach_the_indexer(repo):
     assert "ignored/junk.py" not in found, "git's own exclude chain must be honoured"
 
 
+def _submodule(outer: Path, at: str, tmp_path: Path, files: dict[str, str], name="inner") -> Path:
+    """Add a real, populated submodule and stage the gitlink."""
+    inner = tmp_path / name
+    inner.mkdir(parents=True)
+    for rel, text in files.items():
+        (inner / rel).parent.mkdir(parents=True, exist_ok=True)
+        (inner / rel).write_text(text)
+    subprocess.run(["git", "init", "-q"], cwd=inner, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=inner, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "seed"],
+        cwd=inner, check=True,
+    )
+    subprocess.run(
+        # `protocol.file.allow` is denied by default since CVE-2022-39253,
+        # and a local path is the only clone source a test has.
+        ["git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", "--",
+         str(inner), at],
+        cwd=outer, check=True, capture_output=True,
+    )
+    return outer / at
+
+
+def test_a_populated_submodule_reaches_the_indexer(repo, tmp_path):
+    """`ls-files` lists a gitlink and never descends, so this was empty."""
+    _submodule(repo, "Domain", tmp_path, {"b.py": "y = 2\n", "deep/c.py": "z = 3\n"})
+
+    found = discover.candidates(repo, ProjectConfig())
+    assert "Domain/b.py" in found
+    assert "Domain/deep/c.py" in found
+    assert "src/app.py" in found
+
+
+def test_an_exclude_still_drops_a_submodule_file(repo, tmp_path):
+    """The path is prefixed back to the outer project, so the outer list bites."""
+    _submodule(repo, "Domain", tmp_path, {"b.py": "y = 2\n"})
+    _submodule(repo, "Other", tmp_path, {"c.py": "z = 3\n"}, name="other")
+
+    found = discover.candidates(repo, ProjectConfig(exclude=("Domain/*",)))
+    assert "Domain/b.py" not in found
+    # The kept sibling is what reds this arm on the pre-fix code, where the
+    # absence above holds for the wrong reason.
+    assert "Other/c.py" in found
+    assert "src/app.py" in found
+
+
+def test_an_empty_submodule_directory_adds_nothing(repo, tmp_path):
+    """47 of 69 worktrees in this workspace hold exactly this."""
+    _submodule(repo, "Domain", tmp_path, {"b.py": "y = 2\n"})
+    subprocess.run(["git", "submodule", "deinit", "-f", "Domain"], cwd=repo, check=True,
+                   capture_output=True)
+
+    assert (repo / "Domain").is_dir()
+    assert [f for f in discover.candidates(repo, ProjectConfig()) if f.startswith("Domain")] == []
+
+
 def test_the_walk_fallback_works_without_git(tmp_path):
     (tmp_path / "a.py").write_text("x = 1\n")
     (tmp_path / "node_modules").mkdir()
