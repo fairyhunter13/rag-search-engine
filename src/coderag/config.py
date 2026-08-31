@@ -252,6 +252,8 @@ CHUNK_ALGO = 3
 RRF_K = _env_int("RRF_K", 60)
 CANDIDATES = _env_int("CANDIDATES", 60)
 MAX_K = 50
+# Questions one `search` call may carry. The cap keeps a batch from becoming a fleet scan.
+MAX_QUERIES = 5
 MODES = ("hybrid", "lexical", "semantic")
 
 # ------------------------------------------------------------------ discovery

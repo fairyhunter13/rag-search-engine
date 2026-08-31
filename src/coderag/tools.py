@@ -42,6 +42,10 @@ Code retrieval over the current project and the repos it federates.
   the ranges you want. Pass include_body=True only when you need bodies inline.
 - Use mode="lexical" for an exact identifier, signature or error string, and
   mode="semantic" for a question in English. The default fuses both.
+- `search` takes `queries` for up to five questions in one call. A round trip is
+  charged the whole resident context, so ask the questions you already have
+  together rather than one per call. The reply carries one answer per question,
+  in order.
 - `index` is the fix when `search` says a root is not indexed, and the reply
   names it. Any other project, ask the user first.
 - A client that defers a tool schema fails the first call. Where yours does,
@@ -196,6 +200,22 @@ def _status(target: Path, members: list[Path]) -> dict[str, Any]:
     return out | index.status()
 
 
+def _batched(answers: list[dict[str, Any]], note: str) -> dict[str, Any]:
+    """One envelope for N questions, with the fields that do not vary hoisted out.
+
+    `mode` and `searched` are the same for every question in one call, so they
+    are hoisted and only the four per-answer keys repeat.
+    """
+    keys = ("query", "reranked", "results", "hint")
+    return {
+        "mode": answers[0]["mode"],
+        "searched": answers[0]["searched"],
+        "took_ms": round(sum(a["took_ms"] for a in answers), 2),
+        "answers": [{k: a[k] for k in keys} for a in answers],
+        "hint": note,
+    }
+
+
 @mcp.tool(
     name="search",
     # The decision-time text, and the one a model weighs against its own grep.
@@ -203,12 +223,14 @@ def _status(target: Path, members: list[Path]) -> dict[str, Any]:
     # the part that competes, and on a literal string nothing here wins.
     description="Find code by describing it, across the current root and every project it "
     "federates -- your own tools see one working tree, this sees all of them. Returns ranked "
-    "locations (path + line range + preview), not file bodies.",
+    "locations (path + line range + preview), not file bodies. Pass `query`, or `queries` to ask "
+    "up to five questions in one call -- a round trip is charged the whole resident context, so "
+    "three questions batched cost about a third of three separate calls.",
     structured_output=True,
 )
 def search_code(
-    query: str,
-    pinned: scope.Pinned,
+    query: str = "",
+    pinned: scope.Pinned = None,
     root: str = "",
     k: int = 10,
     mode: str = "hybrid",
@@ -218,20 +240,17 @@ def search_code(
     max_per_file: int = 2,
     preview_lines: int = 3,
     include_body: bool = False,
+    queries: list[str] | None = None,
     verdict: scope.Verdicted = None,
 ) -> dict[str, Any]:
     trace = searchledger.trace_id()
     seen = scope.observe(pinned, verdict)
-    row = {
-        "trace": trace,
-        "client": (verdict or scope.DIRECT).client,
-        "peer": (verdict or scope.DIRECT).peer,
-        "asked": root,
-        "pinned": len(seen),
-        "mode": mode,
-        "k": k,
-        "glob": path_glob or "",
-        "lang": lang or "",
+    # `queries` replaces `query` when given, and the reply keeps the question order.
+    asked = [q for q in (queries if queries is not None else [query]) if q.strip()]
+    base = {
+        "trace": trace, "client": (verdict or scope.DIRECT).client,
+        "peer": (verdict or scope.DIRECT).peer, "asked": root, "pinned": len(seen),
+        "mode": mode, "k": k, "glob": path_glob or "", "lang": lang or "",
     }
     try:
         # No `enforce`. The registry is the boundary: `search` refuses a row that
@@ -242,34 +261,38 @@ def search_code(
         # its root claims, none of which the caller named. `require_pin` is the
         # half that survives: a client declaring no workspace is still refused.
         scope.require_pin(seen)
+        if not asked:
+            raise search.SearchError("query is empty")
+        if len(asked) > config.MAX_QUERIES:
+            raise search.SearchError(
+                f"at most {config.MAX_QUERIES} queries in one call, not {len(asked)}")
         target = registry.resolve(root or scope.default_root(pinned))
-        row["root"] = str(target)
-        out = search.search(
-            query,
-            target,
-            k=k,
-            mode=mode,
-            rerank=rerank,
-            path_glob=path_glob,
-            lang=lang,
-            max_per_file=max_per_file,
-            preview_lines=preview_lines,
-            include_body=include_body,
-        )
-        # The stages are evidence, not an answer. A model that reads them spends
-        # context on pool sizes it cannot act on.
-        row |= out.pop("trace", {})
-        row["took_ms"] = out["took_ms"]
-        searchledger.record(row)
-        # `hint` is the reply's existing advisory slot, so this follows prior
-        # art rather than adding a key; both notes can be true at once.
-        out["hint"] = "; ".join(filter(None, (out["hint"], scope.resolution_note(target, pinned))))
-        return out
+        base["root"] = str(target)
+        answers = []
+        for question in asked:
+            row = dict(base)
+            out = search.search(question, target, k=k, mode=mode, rerank=rerank,
+                                path_glob=path_glob, lang=lang, max_per_file=max_per_file,
+                                preview_lines=preview_lines, include_body=include_body)
+            # The stages are evidence, not an answer. A model that reads them spends
+            # context on pool sizes it cannot act on.
+            row |= out.pop("trace", {})
+            row["took_ms"] = out["took_ms"]
+            # One row per search, never per call, so a batched question stays countable.
+            searchledger.record(row)
+            answers.append(out)
+        note = scope.resolution_note(target, pinned)
+        if queries is None:
+            # `hint` is the reply's existing advisory slot, so this follows prior
+            # art rather than adding a key; both notes can be true at once.
+            answers[0]["hint"] = "; ".join(filter(None, (answers[0]["hint"], note)))
+            return answers[0]
+        return _batched(answers, note)
     except (search.SearchError, scope.ScopeError) as exc:
         # A failed search wrote nothing anywhere until now, so the one call a
         # reader most wants to find was the one call leaving no trace.
-        row["error"] = f"{type(exc).__name__}: {exc}"
-        searchledger.record(row)
+        base["error"] = f"{type(exc).__name__}: {exc}"
+        searchledger.record(base)
         log.warning("search %s failed: %s", trace, exc)
         # Returned rather than raised: an error that names what to call next is
         # actionable to an agent, where a transport-level failure is not.
