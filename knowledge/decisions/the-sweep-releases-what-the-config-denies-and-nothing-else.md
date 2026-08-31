@@ -2,7 +2,7 @@
 type: Decision
 resource: src/coderag/federation.py, src/coderag/server.py
 title: The sweep releases what the config denies, and nothing else
-description: The hourly sweep only ever added members, so 294 rows outlived the `federation.exclude` that would have refused them. It now releases the difference between two walks of the same tree -- config-driven, never filesystem-driven.
+description: The hourly sweep only ever added members, so a claim outlived the `federation.exclude` that would have refused it. It now releases the difference between two walks of the same tree -- config-driven, never filesystem-driven. The 294-row figure that motivated it was a misread pattern; re-measured, the release frees nothing on this fleet.
 tags: [federation, registry, config, fleet]
 status: stable
 generated: { by: claude/opus-5, at: 2026-09-01T00:00:00Z }
@@ -15,9 +15,15 @@ verb. So a member enrolled before an exclude was committed stayed enrolled forev
 read as though it had taken effect — new links were refused while the old claims went on being
 searched.
 
-Measured on this fleet: **294 of 352 worktree rows were reachable only through a link the committed
-`federation.exclude` denied.** Every engine ledger said so and none of them could act:
-`claimed=[]` on every sweep, hour after hour.
+The motivating figure was wrong, and the fix outlived it. The count that justified this — 294 of 352
+worktree rows said to be reachable only through a denied link — read `repositories/worktrees/*` as
+matching the *target*. It does not. Re-measured on 2026-09-01 with the release shipped:
+`excluded_members` returns **59** container links, **none** of them held by any row, so the sweep
+releases nothing here. The 292 links under `repositories/prod/<BU>/<svc>-<ref>` that resolve into
+`_worktrees/<svc>/<ref>` are admitted on purpose — the config comment says so, and says the earlier
+`*/_worktrees/*` was narrowed precisely to keep them.
+
+So this closes a real hole and reclaims nothing today. Both halves are the record.
 
 # Why this release is safe where the obvious one is not
 
