@@ -50,3 +50,4 @@
   indexing worker put 80.7% of self-time inside the ONNX forward pass, and 0.04% inside cool_down.
   So the cooldown stays, and the lever is batch size.
 * [Two MCP tools, and everything an operator needs is on the CLI](two-tools-and-the-operator-surface-is-the-cli.md) - The old engine exposed 4 tools, 16 HTTP routes and 20 CLI commands. The rebuild exposes two actions to the agent, and the refusals — no wait, no fleet fan-out, no auto-index — are the load-bearing part.
+* [A guard is placed by its coupling, not by its topic](a-guard-is-placed-by-its-coupling-not-by-its-topic.md) - A guard that needs this device, a private project or a local path lives in the private companion repo. Everything device-neutral stays in the public tree. The split is per assertion, so one feature's guards routinely land in both.

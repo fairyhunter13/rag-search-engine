@@ -62,3 +62,4 @@
   searches over a 135-member federation, p50 1.46 s, 91% of one core while working, 2.31 GiB anon.
   The cgroup sits at its 4 GiB MemoryHigh and has logged 404 high events. The total memory stall
   across the process's life is 27 ms, because the excess is page cache.
+* [The tracked tree is clean because the history was rewritten twice](the-public-history-was-rewritten-twice.md) - Two `filter-repo` rewrites made this public history publishable, on 2026-06-19 and 2026-08-28. `--replace-text` left every banned term in the commit messages. The tree looks clean because it was made clean, and none of that is derivable from the repo.
