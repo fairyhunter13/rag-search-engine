@@ -5,6 +5,9 @@ title: coderag knowledge history
 
 # Bundle history
 
+## 2026-09-01
+- **Refused**: no concept for the worktree reclaim, because there was nothing to reclaim. `git worktree prune --dry-run` finds no stale worktree, no registry row points at an absent path, and every one of the 360 rows `largest-enrolled-project` holds is a live link target today. The correction that mattered went into `decisions/the-sweep-releases-what-the-config-denies-and-nothing-else.md` instead: the 294 rows that motivated the release were a misread of `repositories/worktrees/*` against the link target, and the release frees nothing on this fleet.
+
 ## 2026-08-31
 
 - **Creation**: [the tracked tree is clean because the history was rewritten twice](constraints/the-public-history-was-rewritten-twice.md) and [a guard is placed by its coupling, not by its topic](decisions/a-guard-is-placed-by-its-coupling-not-by-its-topic.md), both migrated out of a session memory store that is now deleted. A memory file is charged on every session and survives no profile wipe, and a bundle entry is neither. Seventeen other memories were dropped rather than written: the rebuild deleted the code they described, the bundle already carried the finding, or the fact was about the machine and not about this repo.
