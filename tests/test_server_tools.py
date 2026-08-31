@@ -6,6 +6,7 @@ import json
 import os
 import queue
 import shutil
+import subprocess
 import threading
 import time
 
@@ -195,6 +196,75 @@ def test_a_search_error_is_returned_as_data_not_raised(tmp_path, pin):
 
 def test_an_unknown_mode_reaches_the_caller_as_an_error(tmp_path, pin):
     assert "error" in tools.search_code("q", pin(tmp_path), str(tmp_path), mode="fuzzy")
+
+
+# ----------------------------------------------------- many questions, one call
+
+
+def _indexed(path):
+    """A registered, enabled, indexed root, which is what `search` demands."""
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    registry.claim(path, direct=True)
+    registry.update(path, indexed_at=1_700_000_000.0, file_count=1, chunk_count=1)
+    return registry.resolve(path)
+
+
+def test_a_batch_returns_one_answer_per_question_in_order(tmp_path, pin):
+    """The reply has to say which answer belongs to which question. A bare list
+    of result sets makes the model guess."""
+    mine = _indexed(tmp_path / "mine")
+    asked = ["alpha", "beta", "gamma"]
+    out = tools.search_code(pinned=pin(mine), root=str(mine), mode="lexical", queries=asked)
+    assert [a["query"] for a in out["answers"]] == asked
+
+
+def test_a_batch_hoists_the_fields_that_do_not_vary(tmp_path, pin):
+    """`mode` and `searched` are the same for every question in one call, so
+    repeating them per answer is bytes the model cannot act on."""
+    mine = _indexed(tmp_path / "mine")
+    out = tools.search_code(pinned=pin(mine), root=str(mine), mode="lexical",
+                            queries=["alpha", "beta"])
+    assert out["mode"] == "lexical"
+    assert "projects" in out["searched"]
+    for answer in out["answers"]:
+        assert "mode" not in answer
+        assert "searched" not in answer
+
+
+def test_a_single_query_keeps_the_shape_it_always_had(tmp_path, pin):
+    """The batch is an addition. A caller that passes `query` must not have to
+    learn a second reply shape."""
+    mine = _indexed(tmp_path / "mine")
+    out = tools.search_code("alpha", pin(mine), root=str(mine), mode="lexical")
+    assert "answers" not in out
+    assert out["query"] == "alpha"
+
+
+def test_an_empty_batch_is_refused(tmp_path, pin):
+    mine = _indexed(tmp_path / "mine")
+    out = tools.search_code(pinned=pin(mine), root=str(mine), mode="lexical", queries=["  "])
+    assert "query is empty" in out["error"]
+
+
+def test_a_batch_over_the_cap_is_refused(tmp_path, pin):
+    """The cap keeps one call from becoming a fleet scan. Refuse the whole call,
+    because a silently truncated batch answers a question nobody asked."""
+    mine = _indexed(tmp_path / "mine")
+    over = [f"q{i}" for i in range(config.MAX_QUERIES + 1)]
+    out = tools.search_code(pinned=pin(mine), root=str(mine), mode="lexical", queries=over)
+    assert f"at most {config.MAX_QUERIES} queries" in out["error"]
+
+
+def test_a_batch_writes_one_ledger_row_per_question(tmp_path, pin):
+    """One row per search, never per call, so a batched question stays countable
+    beside a single one."""
+    from coderag import searchledger
+
+    mine = _indexed(tmp_path / "mine")
+    tools.search_code(pinned=pin(mine), root=str(mine), mode="lexical",
+                      queries=["alpha", "beta", "gamma"])
+    assert len(searchledger.read()) == 3
 
 
 # ------------------------------------------------------------------ the server

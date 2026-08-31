@@ -51,3 +51,32 @@ The `graph` tool and its ~4,200 lines of symbol extraction (it exists to serve t
 route, and the dashboard. Of 16 HTTP routes, `/healthz` and `/mcp` survive. Journald, `doctor` and a
 repeat `index` call answer what the other fourteen answered — and one of them, `/api/gpu/release`,
 answered 200 without doing anything.
+
+# `search` takes many questions, because a round trip is the unit of cost
+
+A fleet reading on 2026-08-31 measured output at 0.6% of spend. So the bill is the number of API
+round trips times the resident context each one carries, and the size of an answer is a rounding
+error beside it. That reading also measured tool calls per assistant message at exactly 1.00 over
+172,494 calls, which is the arithmetic floor. Every independent question paid a whole round trip.
+
+`search` now takes `queries`, a list of up to `config.MAX_QUERIES` questions, in place of `query`.
+Three questions in one call cost one round trip rather than three. The cap keeps one call from
+becoming a fleet scan.
+
+The shared work inside the call is real but partial. One `federation.unit` expansion, one
+`conns.session()` and one embedder load are paid once for the whole call. Retrieval and reranking
+stay per question, because `embed.get_reranker().score` takes one query. So the saving is the round
+trip, and not the search.
+
+Three rules hold the contract.
+
+* **The single-query reply shape does not move.** A caller that passes `query` gets exactly what it
+  got before. `queries` returns a second shape, with an `answers` list in question order.
+* **The batch envelope hoists what does not vary.** `mode` and `searched` are the same for every
+  question in one call, so they sit once at the top rather than once per answer.
+* **One ledger row per search, never per call.** A batched question stays countable beside a single
+  one, so [the search row](a-search-writes-one-row-and-the-log-level-stays.md) still answers the
+  same questions.
+
+An over-cap batch is refused whole. A silently truncated batch would answer a question nobody asked,
+and the caller could not tell which one went missing.
