@@ -95,6 +95,10 @@ def connect(project: Path | str, *, create: bool = True) -> sqlite3.Connection:
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
     conn.enable_load_extension(False)
+    # First, and before WAL: `auto_vacuum` is written into the file header, so
+    # it only takes on a database that has none yet. Set after `journal_mode` it
+    # reads back 0, with no error.
+    conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")

@@ -29,6 +29,10 @@ class ProjectEntry:
     last_error_at: float | None = None
     error_total: int = 0
     config_signature: str = ""
+    # The st_dev of the path at the moment it was enrolled. Zero means never
+    # recorded, and a reconciliation that cannot tell a deleted repo from an
+    # unmounted volume answers `unknown` -- the answer that leaves the row alone.
+    dev: int = 0
 
     @property
     def key(self) -> str:
@@ -52,6 +56,7 @@ class ProjectEntry:
             "last_error_at": self.last_error_at,
             "error_total": self.error_total,
             "config_signature": self.config_signature,
+            "dev": self.dev,
         }
 
     @classmethod
@@ -69,6 +74,7 @@ class ProjectEntry:
             last_error_at=row.get("last_error_at"),
             error_total=int(row.get("error_total", 0)),
             config_signature=str(row.get("config_signature", "")),
+            dev=int(row.get("dev", 0)),
         )
 
     def replace(self, **kw) -> ProjectEntry:

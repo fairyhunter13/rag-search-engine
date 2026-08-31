@@ -15,6 +15,7 @@ places; without the dedup every consumer does the work N times.
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -128,27 +129,47 @@ def register(root: Path | str) -> list[Path]:
     return members
 
 
-def sweep() -> list[Path]:
-    """Re-discover every direct root's members. Returns what was newly claimed.
+def excluded_members(root: Path | str) -> set[Path]:
+    """Members a live link still reaches but today's `federation_exclude` denies.
+
+    The difference between two walks of the same tree, one with the excludes
+    applied and one without. That is what makes releasing them safe where
+    releasing `held - reachable` is not: a link that is simply gone appears in
+    neither walk, so an unmounted target can never land in this set. The only
+    thing that puts a member here is the config saying so.
+    """
+    base = registry.resolve(root)
+    cfg = effective(base)
+    if not cfg.federation_exclude:
+        return set()
+    allowed = set(links(base, cfg).values())
+    return set(links(base, replace(cfg, federation_exclude=())).values()) - allowed
+
+
+def sweep() -> tuple[list[Path], list[Path]]:
+    """Re-discover every direct root's members. Returns (claimed, released).
 
     Discovery ran only inside an explicit `index` call, so a symlink added to a
     root afterwards was never seen -- on this fleet 135 of 149 enabled rows are
     members of one root, and every one of them arrived by someone remembering
     to re-run the tool.
 
-    It only ever adds, because a scan cannot tell a link that is gone from a
-    link whose target is briefly unmounted, and the pruning version of that rule
-    is what wiped the fleet once already. `release_gone` is the other half, and
-    it is not a scan: `prune.py` calls it on the delete event for the link
-    itself, behind a grace period.
+    It added and never released, so a claim outlived the config that made it:
+    294 rows on this fleet were reachable only through a link the committed
+    `federation_exclude` already denied. Releasing on *absence* is the rule that
+    wiped the fleet -- a scan cannot tell a gone link from an unmounted one --
+    so this releases on the config instead, which needs no filesystem to answer.
+    `release_gone` stays the other half, on the delete event for the link.
     """
     claimed: list[Path] = []
+    released: list[Path] = []
     for entry in registry.enabled_projects():
         if not entry.direct or not entry.path.is_dir():
             continue
         root_key = str(entry.path)
         try:
             members = discover(entry.path)
+            denied = excluded_members(entry.path)
         except ConfigError as exc:
             # The same broken file that drops it from the watch set. Recorded,
             # not raised: one unparseable repo must not stop the sweep.
@@ -160,7 +181,13 @@ def sweep() -> list[Path]:
                 continue
             registry.claim(member, root=entry.path)
             claimed.append(member)
-    return claimed
+        for member in sorted(denied):
+            row = registry.get(member)
+            if row is None or root_key not in row.roots:
+                continue
+            registry.release(member, root=entry.path)
+            released.append(member)
+    return claimed, released
 
 
 def release_gone(root: Path | str) -> list[Path]:

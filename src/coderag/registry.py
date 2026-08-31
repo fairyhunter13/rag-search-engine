@@ -28,7 +28,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import config
+from . import config, disk
 from .entry import ProjectEntry
 
 Rows = dict[str, ProjectEntry]
@@ -121,14 +121,8 @@ def fleet_digest(rows: Rows) -> str:
     return hashlib.sha256(json.dumps(material).encode()).hexdigest()[:16]
 
 
-def _unclaimed(rows: Rows) -> list[Path]:
-    claimed = {config.index_path(e.path).parent for e in rows.values()}
-    return sorted(p for p in config.INDEX_DIR.glob("*") if p.is_dir() and p not in claimed)
-
-
-def _idle_for(store_dir: Path, seconds: float) -> bool:
-    newest = max((f.stat().st_mtime for f in store_dir.rglob("*")), default=0.0)
-    return time.time() - newest >= seconds
+def _claimed(rows: Rows) -> set[Path]:
+    return {config.index_path(e.path).parent for e in rows.values()}
 
 
 def unclaimed_stores() -> list[Path]:
@@ -139,21 +133,25 @@ def unclaimed_stores() -> list[Path]:
     caller that acts on that answer deletes a store the daemon has open.
     """
     with _held(fcntl.LOCK_SH) as rows:
-        return _unclaimed(rows)
+        return disk.unclaimed(_claimed(rows))
 
 
 @contextmanager
-def prunable_stores() -> Generator[tuple[list[Path], list[Path]]]:
+def prunable_stores(*, force: bool = False) -> Generator[tuple[list[Path], list[Path]]]:
     """The same walk as (prunable, busy), with the registry held exclusively.
 
     Nothing can be claimed for as long as this is open, so the answer cannot go
     stale between the glob and the rmtree. Busy is the gap the lock cannot
     close: an unclaimed store still being written to is a row-less job
     finishing, not garbage.
+
+    The shape refusal fires before the split, so a caller that never looks at
+    `busy` still cannot act on a verdict covering the whole tree.
     """
     with _held(fcntl.LOCK_EX) as rows:
-        found = _unclaimed(rows)
-        idle = [p for p in found if _idle_for(p, config.PRUNE_MIN_IDLE_S)]
+        found = disk.unclaimed(_claimed(rows))
+        disk.refuse_on_shape(found, len(rows), force=force)
+        idle = [p for p in found if disk.idle_for(p, config.PRUNE_MIN_IDLE_S)]
         yield idle, [p for p in found if p not in idle]
 
 
@@ -202,6 +200,7 @@ def claim(
             if root_key != key and root_key not in entry.roots:
                 entry.roots.append(root_key)
         entry.enabled = True
+        entry.dev = disk.device(key) or entry.dev
         rows[key] = entry
         return entry
 

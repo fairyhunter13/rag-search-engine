@@ -33,7 +33,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import federation, projcfg, registry
+from . import config, federation, projcfg, quarantine, registry
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +49,79 @@ def looks_deleted(path: Path | str) -> bool:
         return False
     parent = target.parent
     return parent != target and parent.is_dir()
+
+
+def _is_idle(store: Path) -> bool:
+    """Nothing has written the store for `PRUNE_MIN_IDLE_S`.
+
+    The defect this holds is recorded: a prune raced a store the daemon was
+    mid-write on. `prunable_stores` applies the same floor to the orphan walk;
+    the event path never went through it, so it gets the floor here.
+    """
+    try:
+        age = time.time() - store.stat().st_mtime
+    except OSError:
+        return False
+    return age >= config.PRUNE_MIN_IDLE_S
+
+
+def _retire_stores(keys: list[str]) -> list[str]:
+    """Move each dead row's store into quarantine. Returns the ones that moved.
+
+    A row leaving used to free no bytes at all: the watcher removed the row and
+    the store stayed on disk until a human typed `doctor --prune`. This is that
+    half, and it moves rather than deletes -- see `quarantine`.
+    """
+    moved: list[str] = []
+    for key in keys:
+        store = config.index_path(key)
+        if not _is_idle(store):
+            log.info("leaving %s: written inside the idle floor", store.parent)
+            continue
+        if quarantine.take(store.parent) is not None:
+            moved.append(key)
+    return moved
+
+
+def verdict(entry) -> str:
+    """`present`, `deleted`, `unmounted` or `unknown`, for a row on a cold start.
+
+    inotify has no replay, so a repo removed while the daemon was down is
+    invisible to the event path forever. This is the one reconciliation that
+    looks at state rather than an event, which is exactly what `registry.py`
+    refuses to do by predicate -- so it answers four ways instead of two, and
+    only `deleted` is actionable.
+
+    `looks_deleted` alone is not enough here. A mount point left standing after
+    its volume goes away is an empty directory whose parent exists, and that is
+    the shape a deleted repo has. The recorded `st_dev` is what separates them:
+    a different filesystem answering the path today means the volume moved, not
+    that the repo went. A row with no recorded device answers `unknown`.
+    """
+    path = Path(entry.path)
+    if path.exists() or path.is_symlink():
+        return "present"
+    ancestor = next((p for p in path.parents if p.exists()), None)
+    if ancestor is None:
+        return "unmounted"
+    if not entry.dev:
+        return "unknown"
+    try:
+        if ancestor.stat().st_dev != entry.dev:
+            return "unmounted"
+    except OSError:
+        return "unknown"
+    return "deleted"
+
+
+def survey() -> dict[str, list[str]]:
+    """Every row, by verdict. Reports and never acts: the read-only half."""
+    out: dict[str, list[str]] = {"deleted": [], "unmounted": [], "unknown": []}
+    for key, entry in registry.load().items():
+        answer = verdict(entry)
+        if answer != "present":
+            out[answer].append(key)
+    return {k: sorted(v) for k, v in out.items()}
 
 
 @dataclass(slots=True)
@@ -106,16 +179,18 @@ class Pruner:
         if not gone and not unlinked:
             # The loop calls this on every tick, including the empty one that
             # `yield_on_timeout` produces. Nothing due must cost nothing.
-            return {"forgotten": [], "unclaimed": []}
+            return {"forgotten": [], "unclaimed": [], "quarantined": []}
         rows = registry.load()
         # Re-confirmed here, at the end of the grace period. A path that came
         # back inside the window reaches this line and fails the test.
         dead = [key for key in gone if key in rows and looks_deleted(key)]
         forgotten: list[str] = []
+        quarantined: list[str] = []
         if dead:
             dropped, released = registry.forget(dead)
             forgotten = sorted({*dropped, *released})
             log.info("forgot %d deleted project(s): %s", len(forgotten), ", ".join(forgotten))
+            quarantined = _retire_stores(forgotten)
 
         # `unclaimed` is the claim dropped, and `forgotten` is the row gone.
         # They differ whenever a second root still claims the member, which is
@@ -130,7 +205,12 @@ class Pruner:
                     forgotten.append(str(member))
         if unclaimed:
             log.info("released %d member(s) whose link is gone", len(unclaimed))
-        return {"forgotten": sorted(set(forgotten)), "unclaimed": sorted(set(unclaimed))}
+        quarantine.expire()
+        return {
+            "forgotten": sorted(set(forgotten)),
+            "unclaimed": sorted(set(unclaimed)),
+            "quarantined": sorted(set(quarantined)),
+        }
 
 
 PRUNER = Pruner()

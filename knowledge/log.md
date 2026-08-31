@@ -423,3 +423,20 @@ title: coderag knowledge history
   project is written.
 
 - **Update**: `.githooks/pre-push` loses its refusal probe and its index-mode arm. The operator ruled on 2026-08-29 that six rules keep a mechanism across the fleet and every other gate goes. Both arms are gates on the gate, which is the first machinery that ruling removes. `okfrules check -Werror` over `knowledge/` is what stays, and it is the one mechanism in the fleet that meets the operator's own criterion: it runs in ten repos, grades the same thing in each, and never reaches into another team's tree.
+
+- **Added**: [a dead row takes its store, and the delete is a move](decisions/a-dead-row-takes-its-store-and-the-delete-is-a-move.md),
+  [an absent directory is three answers, and only one is a deletion](decisions/an-absent-directory-is-three-answers-and-only-one-is-a-deletion.md),
+  and [the sweep releases what the config denies, and nothing else](decisions/the-sweep-releases-what-the-config-denies-and-nothing-else.md).
+  One measurement produced all three: 197 of 616 store directories had no registry row and 748 MB,
+  294 of 352 worktree rows were reachable only through a link the committed `federation.exclude`
+  denies, and 205 MB sat in one store's freelist because neither engine has ever run a `VACUUM`.
+  The common shape is that every removal path in this engine stopped at the row. `disk.py` is a new
+  module for the reason `conns.py` and `indexqueue.py` were: `registry.py` reached 338 lines and
+  `store.py` 314 against the 300 ceiling, and the filesystem half of both is one subject. Two
+  negative tests were run rather than assumed -- stubbing the quarantine out of `run_due` reds
+  `test_a_dead_row_takes_its_store_with_it`, and swapping the `auto_vacuum` and `journal_mode`
+  pragmas reds both arms in `test_disk.py`, which is the whole point of the pragma order.
+
+- **Refused**: a concept for `PRAGMA auto_vacuum=INCREMENTAL` preceding `PRAGMA journal_mode=WAL`.
+  It is four lines of code carrying its own three-line comment and a test named after the ordering.
+  A concept would restate them.
