@@ -555,7 +555,7 @@ def test_an_empty_batch_records_nothing_either(tmp_path):
 
 
 def test_a_dropped_event_says_which_of_the_five_answers_applies(tmp_path):
-    """"I edited a file and it is not searchable" had five answers, and each
+    """ "I edited a file and it is not searchable" had five answers, and each
     drop was a bare `continue`, so the daemon told none of them apart."""
     from coderag import runledger
 

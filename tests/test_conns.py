@@ -154,4 +154,3 @@ def test_a_reap_records_what_it_closed(tmp_path, monkeypatch):
 
     rows = runledger.read(kind="reap")
     assert [(r["closed"], r["open"]) for r in rows] == [(1, 0)]
-

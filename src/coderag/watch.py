@@ -27,7 +27,7 @@ from pathlib import Path
 
 from watchfiles import watch as _watch
 
-from . import config, discover, federation, index, projcfg, prune, registry, runledger
+from . import config, discover, index, projcfg, prune, registry, runledger
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +42,8 @@ _intent: tuple[tuple[Path, tuple[float, ...]], ...] = ()
 # project. Cleared by the first yield of the next pass, which is the recovery.
 _error: str | None = None
 _lock = threading.Lock()
+
+
 def _owner(path: Path, roots: list[Path]) -> Path | None:
     """Which watched project a changed path belongs to: the longest match.
 

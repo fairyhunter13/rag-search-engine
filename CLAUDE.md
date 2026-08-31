@@ -13,12 +13,13 @@ in git history at `365a235^` and are not a description of anything that exists.
 - Before you add a guard or a test: read
   `knowledge/decisions/a-guard-is-placed-by-its-coupling-not-by-its-topic.md`.
 - **No mocks.** A test either calls the real model on the real GPU or touches no model at all.
-- Every file in `src/coderag/` under 300 lines. The largest is 299, and
-  `tests/test_public_hygiene.py` enforces it. The package is 4,854 lines by `wc -l` and **2,691
-  executable**, with blanks, comments and docstrings excluded. The rest carries the whys this repo
-  keeps out of prose. The budget is the executable number, so a `wc` figure alone never reads as
-  over. Test files are not held to the ceiling. Four are over it, each because it covers one
-  subject end to end, and splitting a subject to satisfy a line count buys nothing.
+- Every module in `src/coderag/` under **220 executable lines** — blanks, comments and docstrings
+  excluded — enforced by `tests/test_public_hygiene.py`. The largest is 198. The excluded lines
+  carry the whys this repo keeps out of prose, so they are not budgeted, and a `wc` figure never
+  reads as over. Physical lines are `ruff format`'s to decide and cannot be a budget: the two
+  disagreed, and the formatter rewrote `tools.py` from 283 lines to 324 without adding a statement.
+  Test files are not held to the ceiling, because a file covering one subject end to end is worth
+  more whole than split to satisfy a count.
 
 ## Knowledge bundle
 

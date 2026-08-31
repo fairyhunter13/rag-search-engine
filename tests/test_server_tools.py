@@ -192,9 +192,7 @@ def test_the_status_counts_the_members_and_not_only_the_root(tmp_path, monkeypat
 
     assert out["indexed"] == {"files": 11, "chunks": 22, "projects": 2}, out
     assert out["root_indexed"] == {"files": 1, "chunks": 2}, out
-    assert out["member_errors"] == [
-        {"project": str(member), "error": "broken .coderag.yaml"}
-    ], out
+    assert out["member_errors"] == [{"project": str(member), "error": "broken .coderag.yaml"}], out
     # Whole-project walks for this unit, where `queue_depth` answers for the fleet.
     assert out["pending"] == 2, out
 
@@ -235,8 +233,9 @@ def test_a_batch_hoists_the_fields_that_do_not_vary(tmp_path, pin):
     """`mode` and `searched` are the same for every question in one call, so
     repeating them per answer is bytes the model cannot act on."""
     mine = _indexed(tmp_path / "mine")
-    out = tools.search_code(pinned=pin(mine), root=str(mine), mode="lexical",
-                            queries=["alpha", "beta"])
+    out = tools.search_code(
+        pinned=pin(mine), root=str(mine), mode="lexical", queries=["alpha", "beta"]
+    )
     assert out["mode"] == "lexical"
     assert "projects" in out["searched"]
     for answer in out["answers"]:
@@ -274,8 +273,9 @@ def test_a_batch_writes_one_ledger_row_per_question(tmp_path, pin):
     from coderag import searchledger
 
     mine = _indexed(tmp_path / "mine")
-    tools.search_code(pinned=pin(mine), root=str(mine), mode="lexical",
-                      queries=["alpha", "beta", "gamma"])
+    tools.search_code(
+        pinned=pin(mine), root=str(mine), mode="lexical", queries=["alpha", "beta", "gamma"]
+    )
     assert len(searchledger.read()) == 3
 
 
@@ -650,7 +650,7 @@ def test_the_cli_searches_locally_where_no_daemon_answers(tmp_path, monkeypatch,
         raise cli.daemon.Unreachable("connection refused")
 
     monkeypatch.setattr(cli.daemon, "call", refuse)
-    monkeypatch.setattr(cli.search, "search", lambda *a, **k: {"results": [], "local": True})
+    monkeypatch.setattr(cli.search, "search", lambda *_a, **_k: {"results": [], "local": True})
 
     assert cli.main(["search", "a question", str(tmp_path)]) == 0
     assert json.loads(capsys.readouterr().out)["local"] is True

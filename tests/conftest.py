@@ -21,7 +21,6 @@ from mcp_types import ListRootsResult, Root
 
 from coderag import config
 
-
 _LIVE_RAN = False
 
 

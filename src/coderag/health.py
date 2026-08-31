@@ -100,7 +100,11 @@ def check(url: str = "", state_path: Path | None = None, timeout: float = 10.0) 
     state_path.write_text(json.dumps({"failing": failing, "queue_depth": depth}, indent=1))
 
     if stuck:
-        return False, f"{len(stuck)} of {body.get('projects', '?')} failing since the last check: " + ", ".join(stuck)
+        return (
+            False,
+            f"{len(stuck)} of {body.get('projects', '?')} failing since the last check: "
+            + ", ".join(stuck),
+        )
     if failing:
         return True, f"{len(failing)} failing for the first time, watching: " + ", ".join(failing)
     return True, f"{body.get('projects', '?')} projects, none failing"

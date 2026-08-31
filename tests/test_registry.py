@@ -199,8 +199,7 @@ def test_record_error_is_the_only_thing_that_flags_a_failure():
                 if isinstance(node.value, ast.Constant) and node.value.value is None:
                     continue  # clearing on success stays every caller's to do
                 if any(
-                    isinstance(t, ast.Attribute) and t.attr == "last_error"
-                    for t in node.targets
+                    isinstance(t, ast.Attribute) and t.attr == "last_error" for t in node.targets
                 ):
                     writers.add(f"{path.name}::{func.name}")
 
