@@ -59,8 +59,18 @@ def test_a_row_carries_both_sides_of_the_cut(tmp_path, pin):
     mine = _project(tmp_path / "mine")
     tools.search_code("x", pin(mine), root=str(mine), mode="lexical")
     row = searchledger.read()[0]
-    for field in ("unit", "pool", "pool_projects", "filtered", "cut", "cut_projects",
-                  "returned", "retrieve_ms", "rerank_ms", "took_ms"):
+    for field in (
+        "unit",
+        "pool",
+        "pool_projects",
+        "filtered",
+        "cut",
+        "cut_projects",
+        "returned",
+        "retrieve_ms",
+        "rerank_ms",
+        "took_ms",
+    ):
         assert field in row, f"{field} missing from {row}"
 
 

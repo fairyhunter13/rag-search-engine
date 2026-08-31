@@ -12,6 +12,7 @@ be reachable by accident. A clean clone declares itself with `NAME_BAN=none`.
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 from pathlib import Path
@@ -22,6 +23,7 @@ from _pytest.outcomes import Failed
 from coderag import config
 
 REPO = Path(__file__).resolve().parents[1]
+MODULES = sorted((REPO / "src" / "coderag").glob("*.py"))
 
 # `/home/<user>/` is how this tree is *supposed* to write a host path, so the
 # pattern has to exclude the placeholder or the archive that documents the rule
@@ -140,18 +142,55 @@ def test_no_tracked_line_leaks_a_home_directory_path():
     assert found == [], found
 
 
+def _executable_lines(source: str) -> int:
+    """Lines that are neither blank, comment, nor docstring.
+
+    The number CLAUDE.md calls the budget. A physical count cannot be one: it is
+    what `ruff format` decides, and the two disagreed -- the formatter rewrote
+    `tools.py` from 283 lines to 324 without touching a statement.
+    """
+    tree = ast.parse(source)
+    docs: set[int] = set()
+    for node in ast.walk(tree):
+        holder = isinstance(
+            node, ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
+        )
+        if holder and ast.get_docstring(node, clean=False) is not None:
+            first = node.body[0]
+            docs.update(range(first.lineno, (first.end_lineno or first.lineno) + 1))
+    return sum(
+        1
+        for number, line in enumerate(source.splitlines(), 1)
+        if line.strip() and not line.lstrip().startswith("#") and number not in docs
+    )
+
+
 def test_no_module_is_over_the_line_ceiling():
     """CLAUDE.md states the rule and nothing enforced it, so `search.py` reached 332.
+
+    Counted in executable lines, which the formatter cannot move. The comments
+    and docstrings it excludes are where this package keeps the whys it keeps
+    out of prose, so budgeting them is a tax on the reason for a line.
 
     Modules only, because a test file covering one subject end to end is worth
     more whole than split to satisfy a count.
     """
-    over = {
-        path.name: len(path.read_text().splitlines())
-        for path in (REPO / "src" / "coderag").glob("*.py")
-        if len(path.read_text().splitlines()) > 300
-    }
-    assert over == {}, over
+    counted = {path.name: _executable_lines(path.read_text()) for path in MODULES}
+    # Zero is not absent: an empty glob and a compliant package read the same.
+    assert len(counted) > 20, counted
+    assert {name: n for name, n in counted.items() if n > 220} == {}, counted
+
+
+def test_the_ceiling_counts_statements_and_not_prose():
+    """A counter that reads the whole file green is the ceiling standing down.
+
+    The one it replaces did exactly that in the other direction -- it counted
+    prose, so a docstring took budget from the code it explains.
+    """
+    source = '"""Doc.\n\nmore\n"""\n\n# a comment\ndef f():\n    """Why."""\n    return 1\n'
+
+    assert _executable_lines(source) == 2
+    assert max(_executable_lines(p.read_text()) for p in MODULES) > 100
 
 
 def test_the_registry_is_not_tracked():

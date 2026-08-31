@@ -54,8 +54,9 @@ HOOK = ".githooks/pre-push"
 
 
 def _git(*args: str) -> str:
-    return subprocess.run(["git", "-C", str(REPO), *args], capture_output=True, text=True,
-                          check=False).stdout.strip()
+    return subprocess.run(
+        ["git", "-C", str(REPO), *args], capture_output=True, text=True, check=False
+    ).stdout.strip()
 
 
 def test_the_hook_is_executable_in_the_index_not_only_on_disk():
@@ -83,7 +84,8 @@ def test_something_on_this_checkout_actually_invokes_the_hook():
     # init.templateDir plants a dispatcher that execs .githooks/pre-push.
     assert (REPO / ".git" / "hooks" / "pre-push").exists(), (
         "core.hooksPath is unset and .git/hooks/pre-push is absent: this checkout pushes "
-        f"ungated.\n  git -C {REPO} config core.hooksPath .githooks")
+        f"ungated.\n  git -C {REPO} config core.hooksPath .githooks"
+    )
 
 
 def test_the_gate_is_wired_where_this_repo_says_it_is():

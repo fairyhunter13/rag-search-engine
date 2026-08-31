@@ -22,7 +22,16 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from . import (
-    config, federation, index, projcfg, quiet, registry, scope, search, searchledger, watch,
+    config,
+    federation,
+    index,
+    projcfg,
+    quiet,
+    registry,
+    scope,
+    search,
+    searchledger,
+    watch,
 )
 
 log = logging.getLogger(__name__)
@@ -154,7 +163,7 @@ def _pending(unit: set[Path]) -> int:
     held half counts: a watch job waits out the quiet window off the queue, and
     reporting 0 there is "I saved a file and nothing happened".
     """
-    with index._queue.mutex:  # noqa: SLF001
+    with index._queue.mutex:
         queued = {j.project for j in index._queue.queue if j is not None and j.project in unit}
     return len(queued | (quiet.projects() & unit))
 
@@ -248,9 +257,15 @@ def search_code(
     # `queries` replaces `query` when given, and the reply keeps the question order.
     asked = [q for q in (queries if queries is not None else [query]) if q.strip()]
     base = {
-        "trace": trace, "client": (verdict or scope.DIRECT).client,
-        "peer": (verdict or scope.DIRECT).peer, "asked": root, "pinned": len(seen),
-        "mode": mode, "k": k, "glob": path_glob or "", "lang": lang or "",
+        "trace": trace,
+        "client": (verdict or scope.DIRECT).client,
+        "peer": (verdict or scope.DIRECT).peer,
+        "asked": root,
+        "pinned": len(seen),
+        "mode": mode,
+        "k": k,
+        "glob": path_glob or "",
+        "lang": lang or "",
     }
     try:
         # No `enforce`. The registry is the boundary: `search` refuses a row that
@@ -265,15 +280,25 @@ def search_code(
             raise search.SearchError("query is empty")
         if len(asked) > config.MAX_QUERIES:
             raise search.SearchError(
-                f"at most {config.MAX_QUERIES} queries in one call, not {len(asked)}")
+                f"at most {config.MAX_QUERIES} queries in one call, not {len(asked)}"
+            )
         target = registry.resolve(root or scope.default_root(pinned))
         base["root"] = str(target)
         answers = []
         for question in asked:
             row = dict(base)
-            out = search.search(question, target, k=k, mode=mode, rerank=rerank,
-                                path_glob=path_glob, lang=lang, max_per_file=max_per_file,
-                                preview_lines=preview_lines, include_body=include_body)
+            out = search.search(
+                question,
+                target,
+                k=k,
+                mode=mode,
+                rerank=rerank,
+                path_glob=path_glob,
+                lang=lang,
+                max_per_file=max_per_file,
+                preview_lines=preview_lines,
+                include_body=include_body,
+            )
             # The stages are evidence, not an answer. A model that reads them spends
             # context on pool sizes it cannot act on.
             row |= out.pop("trace", {})

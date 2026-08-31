@@ -20,6 +20,7 @@
   limit is now measured to cost zero on the live tree, and a declarative member list stays
   refused. Re-discovery moved off the explicit index call onto an hourly sweep.
 * [One chunker ships, it is third-party, and the part we wrote is the header](one-chunker-and-it-is-third-party.md) - Six splitter libraries and four boundary strategies were compared on August 2026 evidence. Semantic-text-splitter wins on zero dependencies and offsets, and the measured gain is in the scope header, not the boundary.
+* [The module ceiling is counted in statements, not lines](the-module-ceiling-is-counted-in-statements-not-lines.md) - A 300-line physical cap and `ruff format` owned the same number, so CI stayed red with no green available: the formatter rewrote `tools.py` from 283 lines to 324 without adding a statement. The cap now counts executable lines, which the formatter cannot move.
 * [Per-type knowledge enters through the header, not through a second splitter](the-header-dispatches-on-type-the-splitter-does-not.md) - A quarter of the corpus is prose and structured data that the code-only evidence never covered. The fix is four arms inside scope_header, because that is reversible and a second chunker costs a full re-index to compare.
 * [Progress is a file, not a protocol
   notification](progress-is-a-file-not-a-protocol-notification.md) - MCP has two mechanisms for
