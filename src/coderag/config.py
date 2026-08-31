@@ -41,10 +41,10 @@ REGISTRY_PATH = STATE_DIR / "projects.json"
 REGISTRY_LOCK = STATE_DIR / "projects.lock"
 BACKUP_DIR = STATE_DIR / "backups"
 INDEX_DIR = STATE_DIR / "indexes"
-# A store nothing has written to for this long is not being indexed right now.
-# The registry lock cannot answer that question: a job queued before its row was
-# dropped still creates its directory and indexes into it, with no row to hold.
+# The registry lock cannot tell whether a store is being written: a job queued
+# before its row was dropped still indexes into its directory, with no row.
 PRUNE_MIN_IDLE_S = _env_int("PRUNE_MIN_IDLE_S", 60)
+QUARANTINE_DAYS = _env_int("QUARANTINE_DAYS", 7)
 PROJECT_CONFIG_NAME = ".coderag.yaml"
 # One spelling, not two: `.yml` would be a second name to get right in every
 # repo and a second branch in every test that writes one.

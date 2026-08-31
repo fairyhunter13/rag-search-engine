@@ -229,7 +229,7 @@ def test_the_sweep_claims_a_link_added_after_the_last_index_call(tmp_path):
     (root / "links" / "late").symlink_to(late)
 
     assert registry.get(late) is None, "not a member before the sweep"
-    claimed = federation.sweep()
+    claimed, _released = federation.sweep()
 
     assert claimed == [registry.resolve(late)]
     assert registry.get(late).roots == [str(root)]
@@ -242,7 +242,40 @@ def test_the_sweep_is_idempotent(tmp_path):
     root, _ = _tree(tmp_path, n=2)
     federation.register(root)
 
-    assert federation.sweep() == []
+    assert federation.sweep() == ([], [])
+
+
+def test_the_sweep_releases_a_member_the_config_now_excludes(tmp_path):
+    """A claim outliving the config that made it. 294 rows on this fleet were
+    reachable only through a link the committed `federation_exclude` denied,
+    because the sweep added and never released.
+
+    Safe where releasing `held - reachable` is not: the answer is the difference
+    between two walks of the same tree, so a link that is merely gone appears in
+    neither and can never land in the released set.
+    """
+    root, members = _tree(tmp_path, n=2)
+    federation.register(root)
+    assert registry.get(members[0]).roots == [str(root)]
+
+    (root / config.PROJECT_CONFIG_NAME).write_text("federation:\n  exclude: [links/m0]\n")
+    claimed, released = federation.sweep()
+
+    assert claimed == []
+    assert released == [members[0]]
+    assert registry.get(members[0]) is None, "nothing else claimed it, so the row goes"
+    assert registry.get(members[1]) is not None
+
+
+def test_a_sweep_with_no_excludes_releases_nothing(tmp_path):
+    """The guard on the guard: an unreadable or empty config must answer 'no
+    member is denied', never 'every member is'."""
+    root, members = _tree(tmp_path, n=2)
+    federation.register(root)
+
+    assert federation.excluded_members(root) == set()
+    assert federation.sweep() == ([], [])
+    assert all(registry.get(m) is not None for m in members)
 
 
 def test_the_sweep_never_releases_a_member_whose_link_vanished(tmp_path):
@@ -270,7 +303,7 @@ def test_one_unparseable_config_does_not_stop_the_sweep(tmp_path):
     late = _repo(tmp_path / "other" / "elsewhere" / "late")
     (healthy / "links" / "late").symlink_to(late)
 
-    claimed = federation.sweep()
+    claimed, _released = federation.sweep()
 
     assert registry.resolve(late) in claimed, "a broken sibling blocked the sweep"
     assert registry.get(broken).last_error
@@ -285,5 +318,5 @@ def test_the_sweep_skips_a_member_it_would_otherwise_treat_as_a_root(tmp_path):
     deeper = _repo(tmp_path / "elsewhere" / "deeper")
     (members[0] / "links" / "deeper").symlink_to(deeper)
 
-    assert federation.sweep() == []
+    assert federation.sweep() == ([], [])
     assert registry.get(deeper) is None

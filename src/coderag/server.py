@@ -62,20 +62,24 @@ def _sweep() -> None:
     unconditional re-arm here would blind the watcher for seconds every hour.
     """
     started = time.perf_counter()
-    claimed = federation.sweep()
-    if claimed:
-        log.info("sweep claimed %d new members", len(claimed))
-        for member in claimed:
-            index.submit(member, reason="sweep")
+    claimed, released = federation.sweep()
+    if claimed or released:
+        log.info("sweep claimed %d, released %d member(s)", len(claimed), len(released))
+    for member in claimed:
+        index.submit(member, reason="sweep")
     reconciled = index.reconcile_all()
     watch.rearm_if_changed()
     # A sweep that claims nothing logs nothing, and nearly every sweep claims
     # nothing. So the hourly job that enqueues the fleet left no evidence it ran.
-    runledger.record("sweep", {
-        "claimed": [str(m) for m in claimed],
-        "reconciled": reconciled,
-        "took_ms": round((time.perf_counter() - started) * 1000, 2),
-    })
+    runledger.record(
+        "sweep",
+        {
+            "claimed": [str(m) for m in claimed],
+            "released": [str(m) for m in released],
+            "reconciled": reconciled,
+            "took_ms": round((time.perf_counter() - started) * 1000, 2),
+        },
+    )
 
 
 def _guarded(name: str, job) -> None:

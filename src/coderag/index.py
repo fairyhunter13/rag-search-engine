@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config, conns, discover, progress, projcfg, quiet, registry, runledger, store
+from . import config, conns, discover, disk, progress, projcfg, quiet, registry, runledger, store
 from .indexwrite import _relang, _wipe, _write_files
 
 log = logging.getLogger(__name__)
@@ -241,6 +241,11 @@ def _index_project(project: Path | str, paths: list[str] | None) -> dict:
     store.stamp(conn)
     store.set_meta(conn, config_signature=signature, indexed_at=time.time())
     conn.commit()
+
+    if deleted or stage.get("rebuilt") or stage.get("widened"):
+        # Only where the pass actually freed pages. A truncating checkpoint on
+        # every pass would cost a hot store its whole WAL for nothing.
+        disk.reclaim(conn)
 
     files, chunks = store.counts(conn)
     registry.update(

@@ -339,7 +339,7 @@ def test_the_sweep_reconciles_what_it_claimed(monkeypatch):
     from coderag import server
 
     calls: list[str] = []
-    monkeypatch.setattr(server.federation, "sweep", lambda: calls.append("sweep") or [])
+    monkeypatch.setattr(server.federation, "sweep", lambda: (calls.append("sweep"), ([], []))[1])
     monkeypatch.setattr(server.index, "reconcile_all", lambda: calls.append("reconcile"))
     monkeypatch.setattr(server.watch, "rearm_if_changed", lambda: calls.append("rearm"))
 

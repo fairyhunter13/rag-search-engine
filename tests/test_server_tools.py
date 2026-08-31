@@ -12,7 +12,19 @@ import time
 
 import pytest
 
-from coderag import cli, config, index, registry, server, store, systemd, tools, watch, watchdog
+from coderag import (
+    cli,
+    config,
+    index,
+    quarantine,
+    registry,
+    server,
+    store,
+    systemd,
+    tools,
+    watch,
+    watchdog,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -706,16 +718,16 @@ def test_prune_forgets_a_row_whose_directory_is_gone(tmp_path, monkeypatch, caps
     assert f"MISSING {key}" in out
     assert registry.get(key) is not None, "report-only has to keep the row"
 
-    # The freed store leaves through the same idle-gated walk as any other, so
-    # a row-driven rmtree is never added beside it.
-    os.utime(store_dir / "index.db", (0, 0))
-    os.utime(store_dir, (0, 0))
+    # The store goes with the row, and the removal is a move: a wrong verdict
+    # costs a week of quarantine rather than a re-index.
     assert cli.main(["doctor", "--prune"]) == 0
     out = capsys.readouterr().out
-    assert f"forgot {key}" in out
-    assert f"pruned {store_dir.name}" in out
+    assert f"forgot {key} (store quarantined)" in out
     assert registry.get(key) is None
     assert not store_dir.exists()
+    held = list(quarantine.trash_dir().glob(f"*-{store_dir.name}"))
+    assert len(held) == 1, "the store must be restorable, not gone"
+    assert (held[0] / "index.db").read_bytes() == b"x" * 2048
 
 
 def test_prune_keeps_a_missing_member_a_live_root_still_claims(tmp_path, monkeypatch, capsys):
@@ -751,6 +763,14 @@ def test_prune_keeps_an_unclaimed_store_something_is_still_writing_to(
     was dropped still creates its directory and indexes into it."""
     monkeypatch.setattr(cli.gpu, "providers", lambda: ["CUDAExecutionProvider"])
     monkeypatch.setattr(cli.gpu, "free_vram_bytes", lambda: 0)
+    # A live row beside it: an orphan store against an *empty* registry is the
+    # shape both fleet wipes had, and `refuse_on_shape` stops that case before
+    # the idle floor is ever consulted.
+    live = tmp_path / "live"
+    live.mkdir()
+    registry.claim(live, direct=True)
+    config.index_path(live).parent.mkdir(parents=True)
+
     busy = config.INDEX_DIR / "rowless-0123456789abcdef"
     busy.mkdir(parents=True)
     (busy / "index.db").write_bytes(b"x" * 2048)

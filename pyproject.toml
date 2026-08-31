@@ -62,6 +62,7 @@ ignore = ["E501"]
 "tests/*" = ["ARG001", "T20"]
 "scripts/*" = ["T20"]
 "src/coderag/cli.py" = ["T20"]
+"src/coderag/doctor.py" = ["T20"]
 "src/coderag/trace.py" = ["T20"]
 "src/coderag/systemd.py" = ["T20"]
 # The bridge's only channel to a human is stderr: stdout carries framed

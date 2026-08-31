@@ -15,18 +15,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 from pathlib import Path
 
 from . import (
     config,
     daemon,
+    doctor,
     embed,
     federation,
     gpu,
     health,
     index,
+    quarantine,
     registry,
     search,
     store,
@@ -91,79 +92,13 @@ def _forget(args) -> int:
     """
     dropped, released = registry.forget(args.roots)
     for key in dropped + released:
-        print(f"forgot {key}")
+        # The row leaving used to free nothing: the store stayed until someone
+        # ran `doctor --prune`. It goes to quarantine, not to an rmtree.
+        moved = quarantine.take(config.index_path(key).parent)
+        print(f"forgot {key}" + (" (store quarantined)" if moved else ""))
     for key in sorted({str(registry.resolve(r)) for r in args.roots} - set(dropped)):
         print(f"not registered {key}")
     return 0
-
-
-def _doctor(args) -> int:
-    problems = 0
-    missing: list[str] = []
-    print(f"gpu: {gpu.providers()[0]}, {gpu.free_vram_bytes() // 2**20} MiB free")
-    for entry in registry.enabled_projects():
-        if not entry.path.is_dir():
-            missing.append(entry.key)
-            continue
-        try:
-            counts = store.orphans(store.connect(entry.path, create=False))
-        except FileNotFoundError:
-            print(f"unindexed {entry.key}")
-            continue
-        if any(counts.values()):
-            print(f"ORPHANS {entry.key}: {counts}")
-            problems += 1
-
-    if getattr(args, "prune", False) and missing:
-        rows = registry.load()
-        # A vanished path whose root still exists is that root's configuration,
-        # not garbage. The gate is the claim rather than last_error, which the
-        # hourly sweep clears -- gating on it would make --prune depend on where
-        # in the hour it ran.
-        gone = [key for key in missing if not _root_alive(rows, key)]
-        missing = [key for key in missing if key not in set(gone)]
-        if gone:
-            dropped, released = registry.forget(gone)
-            for key in dropped + released:
-                print(f"forgot {key}")
-    for key in missing:
-        print(f"MISSING {key}")
-        problems += 1
-
-    # The other direction, and against every row rather than the enabled ones:
-    # unflagging keeps the store, so a disabled row's directory is claimed. What
-    # is left over is a store whose row is gone -- 143 of them, 0.46 GiB, that a
-    # row-driven walk could not see because there was no row to start from.
-    if not getattr(args, "prune", False):
-        for found in registry.unclaimed_stores():
-            print(f"UNCLAIMED {found.name}: {_size_mib(found)} MiB")
-            problems += 1
-        print(f"{problems} problem(s)")
-        return 1 if problems else 0
-
-    pruned = freed = 0
-    with registry.prunable_stores() as (candidates, busy):
-        # Deleting inside the lock is the point: no row can appear for one of
-        # these between the walk that named them and the rmtree that removes it.
-        for found in candidates:
-            freed += _size_mib(found)
-            shutil.rmtree(found)
-            pruned += 1
-            print(f"pruned {found.name}")
-        for found in busy:
-            print(f"BUSY {found.name}: written to within {config.PRUNE_MIN_IDLE_S}s, kept")
-            problems += 1
-    print(f"{problems} problem(s), pruned {pruned} store(s), {freed} MiB")
-    return 1 if problems else 0
-
-
-def _root_alive(rows: dict, key: str) -> bool:
-    entry = rows.get(key)
-    return bool(entry) and any(Path(root).is_dir() for root in entry.roots)
-
-
-def _size_mib(store_dir: Path) -> int:
-    return sum(f.stat().st_size for f in store_dir.rglob("*") if f.is_file()) // 2**20
 
 
 def _bridge(args) -> int:
@@ -224,16 +159,26 @@ def build_parser() -> argparse.ArgumentParser:
     drop.add_argument("roots", nargs="+")
     drop.set_defaults(fn=_forget)
 
-    doctor = sub.add_parser("doctor", help="GPU, missing projects, orphan rows and stores")
-    doctor.add_argument("--prune", action="store_true", help="delete stores no row claims")
-    doctor.set_defaults(fn=_doctor)
+    doc = sub.add_parser("doctor", help="GPU, missing projects, orphan rows and stores")
+    doc.add_argument("--prune", action="store_true", help="delete stores no row claims")
+    doc.add_argument("--force", action="store_true", help="prune past the half-the-tree refusal")
+    doc.add_argument(
+        "--compact", action="store_true", help="VACUUM every store, and nothing else"
+    )
+    doc.set_defaults(fn=doctor.run)
     sub.add_parser("release", help="unload the models now").set_defaults(fn=_release)
 
-    trace = sub.add_parser("trace", help="the ledgers: what a search, an index pass or the watcher did")
+    trace = sub.add_parser(
+        "trace", help="the ledgers: what a search, an index pass or the watcher did"
+    )
     # `search` is the default, so the invocation that existed before the other
     # three ledgers did still means what it meant.
-    trace.add_argument("kind", nargs="?", default="search",
-                       choices=["search", "index", "watch", "sweep", "arm", "sched", "reap"])
+    trace.add_argument(
+        "kind",
+        nargs="?",
+        default="search",
+        choices=["search", "index", "watch", "sweep", "arm", "sched", "reap"],
+    )
     trace.add_argument("-n", type=int, default=20)
     trace.add_argument("--errors", action="store_true", help="only the calls that failed")
     trace.set_defaults(fn=_trace)

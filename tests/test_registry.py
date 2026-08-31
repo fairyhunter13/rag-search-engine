@@ -8,7 +8,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from coderag import config, registry
+import pytest
+
+from coderag import config, quarantine, registry
 
 
 def test_claim_then_join_a_root_keeps_one_row(tmp_path):
@@ -259,3 +261,56 @@ def test_forget_leaves_one_backup_holding_every_row_it_removed(tmp_path):
     newest = max(config.BACKUP_DIR.glob("projects.*.json"))
     assert set(json.loads(newest.read_text())) == set(keys)
     assert registry.load() == {}
+
+
+def _plant(tmp_path: Path, name: str) -> Path:
+    """A registered project and the store directory that answers for it."""
+    (tmp_path / name).mkdir()
+    registry.claim(tmp_path / name, direct=True)
+    store = config.index_path(tmp_path / name)
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_bytes(b"x")
+    return store.parent
+
+
+def test_quarantine_is_not_counted_as_an_orphan(tmp_path):
+    """`.trash/` lives under INDEX_DIR and no row names it.
+
+    Counting it would have the reaper delete its own undo on the next pass, and
+    report the deletion as reclaimed waste.
+    """
+    _plant(tmp_path, "live")
+    quarantine.take(_plant(tmp_path, "dead"))
+    registry.forget([str((tmp_path / "dead").resolve())])
+
+    assert registry.unclaimed_stores() == []
+
+
+def test_a_prune_against_an_empty_registry_refuses(tmp_path):
+    """The shape both fleet wipes had. `force` deliberately does not lift it:
+    a registry that failed to load looks exactly like a fleet with nothing
+    enrolled, and a human forcing a prune is answering "delete these"."""
+    _plant(tmp_path, "orphan")
+    registry.forget([str((tmp_path / "orphan").resolve())])
+
+    for force in (False, True):
+        with (
+            pytest.raises(RuntimeError, match="empty registry"),
+            registry.prunable_stores(force=force),
+        ):
+            pass
+
+
+def test_a_prune_over_half_the_tree_needs_force(tmp_path):
+    """A verdict covering most of the tree is a claim about the input, not the
+    disk. It is answerable -- with `--force` -- because a fleet really can be
+    mostly stale; it is not answerable silently."""
+    _plant(tmp_path, "keeper")
+    for name in ("a", "b"):
+        _plant(tmp_path, name)
+        registry.forget([str((tmp_path / name).resolve())])
+
+    with pytest.raises(RuntimeError, match="without --force"), registry.prunable_stores():
+        pass
+    with registry.prunable_stores(force=True) as (idle, busy):
+        assert len(idle) + len(busy) == 2
