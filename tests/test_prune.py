@@ -281,4 +281,68 @@ def test_an_unmounted_volume_is_never_read_as_a_deletion(make, monkeypatch):
     moved = registry.load()[str(project)]
 
     assert prune.verdict(moved) == "unmounted"
-    assert prune.survey()["deleted"] == []
+    after = prune.survey()
+    assert after["deleted"] == []
+    # The population, not a total of the three lists: an empty `deleted` and a
+    # registry that read nothing are otherwise the same answer.
+    assert after["read"] == len(registry.load()) == 1
+
+
+def test_a_delete_event_reaches_the_queue(make, monkeypatch):
+    """The wiring between the watcher and the reaper, which had no test at all.
+
+    Every arm above drives `note_gone` by hand. That covers the reaper and
+    proves nothing about the half that decides *which* of a 4,000-path batch is
+    a deletion -- the half that makes the whole feature dead code if it is wrong.
+    """
+    doomed = make("doomed")
+    survivor = make("survivor")
+    registry.claim(doomed, direct=True)
+    registry.claim(survivor, direct=True)
+    monkeypatch.setattr(prune, "PRUNER", prune.Pruner(grace=30.0, clock=Clock()))
+    prune.register_paths([doomed, survivor])
+    shutil.rmtree(doomed)
+
+    # watchfiles yields `(Change, str)`, and the path is a plain string.
+    noted = prune.note_deletions({(3, str(doomed)), (3, str(survivor))})
+
+    assert noted == 1, "the surviving project was queued, or the dead one was not"
+    assert prune.PRUNER.depth == 1
+
+
+def test_an_unregistered_path_is_not_a_deletion(make, monkeypatch):
+    """A batch is every write under every watched root, not a list of projects.
+
+    `_keys` is the registry, so a file removed inside a live project reaches
+    this on every `git checkout` and must not queue its project for removal.
+    """
+    project = make("live")
+    registry.claim(project, direct=True)
+    monkeypatch.setattr(prune, "PRUNER", prune.Pruner(grace=30.0, clock=Clock()))
+    prune.register_paths([project])
+    (project / "a.py").unlink()
+
+    assert prune.note_deletions({(3, str(project / "a.py"))}) == 0
+    assert prune.PRUNER.depth == 0
+
+
+def test_a_deleted_member_link_queues_the_root_that_held_it(make, monkeypatch):
+    """The other arm: a link is gone, its target may be entirely alive.
+
+    So the root is queued, never the member -- `note_unlinked`, which releases
+    one claim, and not `note_gone`, which retires a store.
+    """
+    root = make("workspace")
+    member = make("member")
+    (root / "repositories").mkdir()
+    link = root / "repositories" / "member"
+    link.symlink_to(member)
+    registry.claim(root, direct=True)
+    federation.register(root)
+    monkeypatch.setattr(prune, "PRUNER", prune.Pruner(grace=30.0, clock=Clock()))
+    prune.register_paths([root])
+    link.unlink()
+
+    assert prune.note_deletions({(3, str(link))}) == 1
+    assert prune.PRUNER.depth == 1
+    assert registry.get(member) is not None, "the member's own row must survive its link"

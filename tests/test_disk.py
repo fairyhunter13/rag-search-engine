@@ -7,6 +7,7 @@ stranded in the largest store on this fleet when it was measured.
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from coderag import conns, disk, store
@@ -69,3 +70,36 @@ def test_reclaim_never_raises_at_a_caller_that_cannot_answer(tmp_path):
     conn.close()
 
     disk.reclaim(conn)  # no raise
+
+
+def test_a_store_written_before_4_4_needs_the_vacuum_reclaim_cannot_do(tmp_path):
+    """Why `doctor --compact` exists beside `reclaim`, and why it is hand-typed.
+
+    Every store on the fleet predates the pragma, and `auto_vacuum` lives in a
+    header that is already written. So `reclaim` is a silent no-op on all of
+    them and only a full VACUUM converts one -- at the cost of rewriting the
+    file, which is the number a human is meant to see before typing it.
+    """
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(path)
+    # The order a pre-4.4 store was built in: the journal mode writes a header,
+    # and `auto_vacuum` reads back NONE ever after.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT)")
+    assert conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 0
+    _fill(conn)
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    grown = path.stat().st_size
+
+    with conn:
+        conn.execute("DELETE FROM meta WHERE key LIKE 'k1%'")
+    kept = conn.execute("SELECT count(*) FROM meta").fetchone()[0]
+    disk.reclaim(conn)
+
+    assert path.stat().st_size == grown, "reclaim shrank a store with no INCREMENTAL header"
+
+    disk.compact(conn)
+
+    assert path.stat().st_size < grown
+    assert conn.execute("SELECT count(*) FROM meta").fetchone()[0] == kept
+    assert conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2

@@ -11,9 +11,11 @@ watch list to fail to traverse. A test that touches a root directly passes with
 this feature entirely broken; the one that matters writes through a symlink.
 
 `watchfiles` coalesces storms inside Rust, so a `git checkout` across 4,000
-files crosses into Python as one batch. `watch_filter` drops ignored paths using
-the same `projcfg` resolver the indexer uses, so churn in an excluded directory
-never reaches the queue at all.
+files crosses into Python as one batch. No `watch_filter` is passed, and that is
+deliberate: the filter runs before `note_deletions` sees the batch, and it drops
+the two events that mean a project is gone. `_dispatch` applies the same
+`projcfg` resolver the indexer uses, one hop later, where a deletion has already
+been recorded.
 """
 
 from __future__ import annotations
