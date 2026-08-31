@@ -6,6 +6,12 @@ in git history at `365a235^` and are not a description of anything that exists.
 
 ## Standing rules
 
+- **Commit to `main`.** No feature branch and no PR. Fold a stray branch in by fast-forward, then
+  delete it.
+- Before you commit, or touch history: read
+  `knowledge/constraints/the-public-history-was-rewritten-twice.md`. `user.email` is pinned here.
+- Before you add a guard or a test: read
+  `knowledge/decisions/a-guard-is-placed-by-its-coupling-not-by-its-topic.md`.
 - **No mocks.** A test either calls the real model on the real GPU or touches no model at all.
 - Every file in `src/coderag/` under 300 lines. The largest is 299, and
   `tests/test_public_hygiene.py` enforces it. The package is 4,854 lines by `wc -l` and **2,691
