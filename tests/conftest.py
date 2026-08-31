@@ -22,6 +22,42 @@ from mcp_types import ListRootsResult, Root
 from coderag import config
 
 
+_LIVE_RAN = False
+
+
+@pytest.fixture(scope="session", autouse=True)
+def live_indexes_untouched():
+    """The census `isolated_state` is supposed to make impossible, measured anyway.
+
+    197 of 616 directories in the real index dir were suite residue -- `wroot0-*`,
+    `stranger-*`, `billing-core-*` -- and every one arrived while a redirect that
+    reads as airtight was in place. A redirect nothing counts is a claim; this is
+    the count. `config.INDEX_DIR` is read here before any test's monkeypatch and
+    again after they are all undone, so both reads see the real path.
+
+    A `live` module talks to the daemon, which holds the real state, and leaving a
+    store there is the documented disable-never-prune behaviour -- so a session
+    that ran one warns where a pure in-process session fails.
+    """
+    real = config.INDEX_DIR
+
+    def census() -> int:
+        return len([p for p in real.iterdir() if p.is_dir()]) if real.is_dir() else 0
+
+    before = census()
+    yield
+    grew = census() - before
+    if grew <= 0:
+        return
+    if _LIVE_RAN:
+        warnings.warn(
+            f"the suite left {grew} index dir(s) in {real}; run `coderag doctor --prune`",
+            stacklevel=1,
+        )
+        return
+    pytest.fail(f"the in-process suite wrote {grew} index dir(s) into the live {real}")
+
+
 @pytest.fixture(autouse=True)
 def isolated_state(tmp_path, monkeypatch):
     """Point every state path at a tmp dir, for every test in the suite."""
@@ -51,6 +87,8 @@ def fleet_unchanged(request):
         return
     from live import fleet_state
 
+    global _LIVE_RAN
+    _LIVE_RAN = True
     before = fleet_state()
     yield
     after = fleet_state()
