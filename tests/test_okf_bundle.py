@@ -8,6 +8,7 @@ this file at all.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -77,6 +78,12 @@ def test_the_hook_runs_the_checker_at_the_pin_this_repo_names():
         assert want in body, f"{HOOK} does not mention {want!r}"
 
 
+@pytest.mark.skipif(
+    os.environ.get("GITHUB_ACTIONS") == "true",
+    reason="grades a developer clone's push wiring, which a runner has no reason to carry "
+    "and never pushes through; CI's own copy of the gate is graded by "
+    "test_the_gate_is_wired_where_this_repo_says_it_is",
+)
 def test_something_on_this_checkout_actually_invokes_the_hook():
     if _git("config", "--get", "core.hooksPath"):
         return

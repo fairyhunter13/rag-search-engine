@@ -55,6 +55,11 @@
   fell back to `Path.cwd()` when the client sent no roots. The daemon's cwd is the operator's home
   directory. So a real Claude Code session's rootless `search` came back as "$HOME is not indexed
   -- call index(root=$HOME) first". Taken, that advice indexes everything on the machine. It now refuses and names the fix.
+* [A gate that grades the developer's clone ran on every CI run, and reddened all
+  36](a-local-only-gate-ran-where-it-cannot-hold.md) - `test_something_on_this_checkout_actually_invokes_the_hook` asserts that the checkout has
+  `core.hooksPath` set or a planted `.git/hooks/pre-push`. A GitHub runner has neither and pushes
+  nothing, so the arm failed by construction the day it was written. Every CI run since 2026-08-21
+  was red on it, and the six arms that grade the bundle and the pin passed in all of them.
 * [An unflagged project stayed fully searchable, because the gate asked whether the row existed](an-unflagged-project-stayed-fully-searchable.md) - `registry.get` returns disabled rows and unflagging deliberately deletes no store, so a project the user explicitly turned off answered searches by name. The error string had been claiming three conditions the code never checked.
 * [doctor --prune globbed fresh directories against a stale row
   snapshot](prune-raced-a-store-the-daemon-was-writing.md) - `registry.load()` releases its lock
