@@ -20,8 +20,16 @@ runs followed, and the pin bump to `v0.6.1` failed with a signature byte-identic
 # What a red that never moves costs
 
 Nothing in eleven days of CI could report a new failure, because the job was already failing. The
-`Knowledge bundle warnings` step runs after this one and never executed at all. That is the whole
-cost: not the false red, but the twelve steps behind it that never got to speak.
+`Knowledge bundle warnings` step runs after this one and never executed at all, and the whole `Unit
+tests` job is `needs:` this one, so it was reported **skipped** on all 36.
+
+The first green run after the fix found what that had been hiding.
+`test_runledger.py::test_a_pass_carries_its_phase_timings` calls `index.index_project`, which is a
+full pass against the real embedder, and carried no `gpu` marker — so the no-GPU lane selected it
+and it died on `CPU inference is forbidden`. The marker was the fix; the test itself is sound and
+passes on a GPU box. It is the only `index.index_project` caller in the suite that lacked the
+marker, and `test_index.py`'s own docstring already states the rule it broke: split on the GPU
+marker, not on mocks.
 
 # The skip is scoped to the runner and to nothing else
 

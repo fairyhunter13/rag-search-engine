@@ -10,6 +10,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from coderag import index, registry, runledger
 
 
@@ -21,6 +23,7 @@ def _project(path: Path) -> Path:
     return registry.resolve(path)
 
 
+@pytest.mark.gpu
 def test_a_pass_carries_its_phase_timings(tmp_path):
     """`index_project` computed these and returned them to a caller that
     discarded the whole dict."""
