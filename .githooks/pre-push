@@ -15,7 +15,7 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 if [[ -d "$REPO_ROOT/knowledge" ]]; then
   if ! command -v okfrules >/dev/null 2>&1; then
     echo "[pre-push] ✗ okfrules not installed — knowledge/ cannot be checked, and this hook is its only local gate"
-    echo "[pre-push]   go install github.com/fairyhunter13/okf/cmd/okfrules@v0.6.0"
+    echo "[pre-push]   go install github.com/fairyhunter13/okf/cmd/okfrules@v0.6.1"
     exit 1
   fi
   # -Werror, matching the CI step: a broken link is a *warning*, which plain check prints and
