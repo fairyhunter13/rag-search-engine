@@ -196,7 +196,7 @@ def search(
     answered a question about one repo with a member's vendored JavaScript.
 
     `federation.unit` is what widens a member, and it is not free. Measured
-    from `gen3-app-c` on 2026-08-25: 0.65 s for the member alone against
+    from one federated member on 2026-08-25: 0.65 s for the member alone against
     17.6 s for the 143 projects its root federates. The one-project answer was
     the cheaper of the two and it was the wrong one.
     """
