@@ -125,3 +125,26 @@ that dies with the daemon left down is worse than the bloat it was written to re
 Each pass writes one `runledger` row — `walked`, `skipped`, `blocks_before`, `blocks_after`, `mib`.
 The weekly interval is a guess until two of those rows exist. The difference between them is how
 many blocks the fleet regrows in a week, and that is the number that sets the real interval.
+
+# The first timed run failed, and only under the timer
+
+`coderag-compact.service` was started by hand the minute it was installed. It died on the 340th
+store with `sqlite3.OperationalError: unable to open database file`, and the same walk run from a
+shell one minute earlier opened all 423 without a complaint.
+
+The walk opened every store and closed none. A WAL store costs three descriptors, so 423 of them
+is 1269. An interactive shell here allows **1048576** open files. A systemd service gets a soft
+`LimitNOFILE` of **1024**, and nothing announces the difference — SQLite reports the exhausted
+table as a file it cannot open, which reads as a corrupt or missing store.
+
+`_compact` now closes each handle before the next store opens. The arm is
+`tests/test_doctor.py::test_the_walk_holds_one_store_open_at_a_time`, and it asserts the count is
+exactly 0 rather than under a bound: the old code left 3 open over 3 stores, and any bound loose
+enough to be a fleet figure would have passed.
+
+Raising `LimitNOFILE` in the unit was the other available fix and is the wrong one. 423 handles at
+rest is about 114 MiB of SQLite page cache the walk has no use for, and the limit would have to
+move again at the next fleet size.
+
+**The failure did prove the unit's shape.** `ExecStopPost` ran, the daemon came back up, and
+`OnFailure` paged. A compaction that dies is a compaction that dies with the daemon running.
