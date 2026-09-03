@@ -468,3 +468,10 @@ title: coderag knowledge history
 - **Refused**: a concept for `ThreadPoolExecutor.map` yielding in input order. It is one property
   of the stdlib, and the reason it matters here is `pool_cut`'s dependence on pool order, which the
   constraint card above already carries beside the code comment and the test named after it.
+
+- **Update**: [a vector table kept every block it ever allocated](defects/a-vector-table-kept-every-block-it-ever-allocated.md),
+  amended with the live result rather than the projection it was written from. 423 stores, daemon
+  stopped: 5.38 GB to 4.16 GB, 940 to 674 blocks, and the largest store 1094 to 408 MiB and 251 to
+  40 blocks against a predicted 1095 to 406 and 249 to 40. `retrieve_ms` from that root went from a
+  p50 of 16.8 s over 454 searches to 3.30, 3.55 and 2.98 s. Both changes shipped together, so
+  neither number separates them, and the card says so.

@@ -66,3 +66,26 @@ whole fixture: `tests/test_disk.py::_churned` deletes 3 of every 4 rows across 3
 The negative arm is `test_a_vacuum_leaves_every_vector_block_where_it_was`. It runs `disk.compact`
 against the same fixture and asserts the block count does not move. That is what makes the new
 code necessary rather than merely green.
+
+# What the fleet-wide repack actually returned
+
+The table above is from a copy of one store. The whole fleet was repacked on 2026-09-03, with the
+daemon stopped so no `DROP TABLE` could race an index write. 423 stores:
+
+| | before | after |
+|---|---|---|
+| indexes directory | 5.38 GB | 4.16 GB |
+| summed store size | 4821 MiB | 3686 MiB |
+| summed vector blocks | 940 | 674 |
+| the largest store | 1094 MiB, 251 blocks | **408 MiB, 40 blocks** |
+
+Most stores are one block and gave back nothing, which is the point of printing per store rather
+than as a total. Nearly the whole 1.14 GB came from the handful the watcher rewrites.
+
+Against the same root, `retrieve_ms` over its previous 454 searches has a p50 of **16.8 s**. The
+three searches after the repack and the threaded fan-out read **3.30 s, 3.55 s and 2.98 s**. A
+three-query MCP call over the same 361-project unit, 93,200 files and 298,031 chunks, returned in
+**22.8 s** — one round trip, no abort, against a client timeout of 300 s.
+
+Both changes landed together, so neither number separates them. The bar was the abort, and the
+abort is gone.
