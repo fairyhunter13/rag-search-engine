@@ -24,6 +24,8 @@ HEALTH_NAME = f"{config.APP}-health.service"
 HEALTH_TIMER = f"{config.APP}-health.timer"
 DOCTOR_NAME = f"{config.APP}-doctor.service"
 DOCTOR_TIMER = f"{config.APP}-doctor.timer"
+COMPACT_NAME = f"{config.APP}-compact.service"
+COMPACT_TIMER = f"{config.APP}-compact.timer"
 UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
 
 
@@ -158,6 +160,58 @@ WantedBy=timers.target
 """
 
 
+def compact_text(executable: str = "") -> str:
+    """The repack the daemon must be stopped for, and the restart that outlives it.
+
+    `ExecStopPost` rather than a second `ExecStart`: it runs whether the pass
+    succeeded, failed or timed out, and a compaction that dies with the daemon
+    left down is the one outcome worse than the bloat.
+
+    `OnFailure` here where `doctor` refuses one, and the difference is the exit
+    code. `doctor` exits 1 on any finding, so an alert on it fires daily until a
+    human acts, which is how an alert gets muted. `--compact` returns 0, so this
+    one fires only when the pass broke or the daemon did not come back.
+    """
+    python = executable or sys.executable
+    return f"""\
+[Unit]
+Description=coderag store compaction
+OnFailure={config.APP}-alert@%n.service
+
+[Service]
+Type=oneshot
+# A pass that skips the packed stores is seconds. This is the backstop for the
+# first one after a long gap, which rewrites every file it touches.
+TimeoutStartSec=45min
+ExecStartPre=-/usr/bin/systemctl --user stop {UNIT_NAME}
+ExecStart={python} -m coderag.cli doctor --compact
+ExecStopPost=/usr/bin/systemctl --user start {UNIT_NAME}
+Nice=10
+IOWeight=20
+"""
+
+
+def compact_timer_text() -> str:
+    """Weekly, and `Persistent=true` because this laptop is asleep at 04:00.
+
+    A missed run then lands at the next boot, in the working day. That is only
+    acceptable because the pass skips the stores with nothing to give: the first
+    fleet pass took 8m58s over 423 stores, and 362 of them gave back nothing.
+    """
+    return """\
+[Unit]
+Description=weekly coderag store compaction
+
+[Timer]
+OnCalendar=Sun 04:00
+Persistent=true
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target
+"""
+
+
 def install(enable: bool = True) -> Path:
     UNIT_DIR.mkdir(parents=True, exist_ok=True)
     unit = UNIT_DIR / UNIT_NAME
@@ -167,6 +221,8 @@ def install(enable: bool = True) -> Path:
     (UNIT_DIR / HEALTH_TIMER).write_text(health_timer_text())
     (UNIT_DIR / DOCTOR_NAME).write_text(doctor_text())
     (UNIT_DIR / DOCTOR_TIMER).write_text(doctor_timer_text())
+    (UNIT_DIR / COMPACT_NAME).write_text(compact_text())
+    (UNIT_DIR / COMPACT_TIMER).write_text(compact_timer_text())
 
     _systemctl("daemon-reload")
     if enable:
@@ -175,6 +231,7 @@ def install(enable: bool = True) -> Path:
         # at every boot and never again.
         _systemctl("enable", "--now", HEALTH_TIMER)
         _systemctl("enable", "--now", DOCTOR_TIMER)
+        _systemctl("enable", "--now", COMPACT_TIMER)
     return unit
 
 

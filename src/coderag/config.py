@@ -88,6 +88,14 @@ THREAD_LIMIT = _env_int("THREAD_LIMIT", 8)
 # 0.27 MiB is about 390 MiB, reused across searches. Set to 1 to go sequential.
 FANOUT_WORKERS = _env_int("FANOUT_WORKERS", 4)
 
+# What `doctor --compact` walks past. A full pass took 8m58s over 423 stores and
+# 362 of them gave back nothing, so a weekly timer would spend nine minutes of
+# daemon outage rewriting files that were already tight. A surplus of one block
+# is one block a KNN reads for nothing, so the floor is the smallest number that
+# is not zero.
+COMPACT_WASTE_BLOCKS = _env_int("COMPACT_WASTE_BLOCKS", 1)
+COMPACT_FREELIST_MIB = _env_int("COMPACT_FREELIST_MIB", 8)
+
 # How long a project must stop changing before a watch job runs. A batch carries
 # one event, and each pass is a whole content-hash walk, so an editor saving
 # through a build cost 303 passes in 15 minutes. This is not the Rust debounce

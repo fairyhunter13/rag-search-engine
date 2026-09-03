@@ -91,6 +91,17 @@ def reclaim(conn: sqlite3.Connection) -> None:
         log.warning("could not reclaim pages: %s", exc)
 
 
+def freelist_bytes(conn: sqlite3.Connection) -> int:
+    """Pages the file holds and no table uses.
+
+    The other half of what a compaction gives back, and `reclaim` cannot reach
+    it on a store whose header says `auto_vacuum=0` -- which is every store
+    written before 4.4.
+    """
+    page = conn.execute("PRAGMA page_size").fetchone()[0]
+    return conn.execute("PRAGMA freelist_count").fetchone()[0] * page
+
+
 def compact(conn: sqlite3.Connection) -> None:
     """The one-time full VACUUM that converts an old store by rewriting it.
 

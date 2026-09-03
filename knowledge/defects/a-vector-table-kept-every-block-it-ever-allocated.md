@@ -89,3 +89,39 @@ three-query MCP call over the same 361-project unit, 93,200 files and 298,031 ch
 
 Both changes landed together, so neither number separates them. The bar was the abort, and the
 abort is gone.
+
+# Why the weekly timer skips most of the fleet
+
+The first pass took **8 minutes 58 seconds** and the daemon was down for all of it. Almost none of
+that time bought anything. Of the 423 stores:
+
+- **362 gave back 0 MiB.** They were already tight, and the `VACUUM` rewrote each one anyway.
+- **339 were already at one block**, which is the floor and not a saving.
+- **14 moved a block at all.**
+- The **top 8** stores were **91%** of the 1135 MiB freed. The largest alone was 686 MiB and 211
+  blocks.
+
+So `_compact` now tests each store before it touches it, and a store that passes the test is
+skipped whole. The test is `store.vector_waste`: the blocks the table holds, minus the blocks its
+live rows need. A store with a surplus of 0 has nothing a repack can give back.
+
+**The surplus is a count of blocks and not a ratio, and the first version of it was a ratio.** A
+ratio cannot tell a bloated store from a small one. 39 live rows sit in one block, which is 26x
+allocated over live, and a repack of that store returns nothing because one block is the floor.
+Most stores here are small, so a ratio would have rewritten the whole fleet every week and called
+it maintenance. `tests/test_disk.py::test_a_thin_store_is_not_read_as_a_bloated_one` is that
+mistake, kept as an arm.
+
+The second half of the test is `disk.freelist_bytes`. A store can be packed in vec0 terms and still
+hold pages that no table uses, and `disk.reclaim` cannot reach them where the header says
+`auto_vacuum=0` — which is every store written before 4.4. Over 8 MiB of freelist and the store is
+walked anyway.
+
+`coderag-compact.timer` fires it weekly, `OnCalendar=Sun 04:00` with `Persistent=true`. The service
+stops the daemon in `ExecStartPre` and starts it again in **`ExecStopPost`**, not in a second
+`ExecStart`: `ExecStopPost` runs whether the pass succeeded, failed or timed out, and a compaction
+that dies with the daemon left down is worse than the bloat it was written to remove.
+
+Each pass writes one `runledger` row — `walked`, `skipped`, `blocks_before`, `blocks_after`, `mib`.
+The weekly interval is a guess until two of those rows exist. The difference between them is how
+many blocks the fleet regrows in a week, and that is the number that sets the real interval.
