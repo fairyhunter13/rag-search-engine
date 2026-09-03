@@ -16,6 +16,12 @@ from coderag import config, conns, runledger, server, store
 
 def _reset() -> None:
     conns.close_all()
+    # The pool's workers hold their own caches, and `close_all` only reaches
+    # the calling thread's. A pool left running carries them into the next test
+    # as caches no list holds, which is invisible to `open_count`.
+    if conns._pool is not None:
+        conns._pool.shutdown(wait=True)
+        conns._pool = None
     with conns._caches_lock:
         conns._caches.clear()
     conns._local.__dict__.pop("cache", None)
@@ -154,3 +160,52 @@ def test_a_reap_records_what_it_closed(tmp_path, monkeypatch):
 
     rows = runledger.read(kind="reap")
     assert [(r["closed"], r["open"]) for r in rows] == [(1, 0)]
+
+
+def _projects(tmp_path, count: int) -> list:
+    made = []
+    for number in range(count):
+        project = tmp_path / f"p{number}"
+        project.mkdir()
+        made.append(project)
+    return made
+
+
+def test_the_fanout_pool_is_built_once_and_reused(tmp_path, monkeypatch):
+    """`_caches` only ever grows, so a pool per search leaves a `_Cache` per
+    worker per search behind and `FANOUT_WORKERS` stops bounding the handle
+    set. Counted exactly, because a bound would pass on an unbounded leak."""
+    _reset()
+    monkeypatch.setattr(config, "FANOUT_WORKERS", 2)
+    projects = _projects(tmp_path, 6)
+
+    conns.fanout(store.connect, projects)
+    first = conns.pool()
+    after_one = len(conns._caches)
+    conns.fanout(store.connect, projects)
+
+    assert conns.pool() is first
+    assert len(conns._caches) == after_one
+
+
+def test_the_fanout_holds_its_handles_on_the_worker(tmp_path, monkeypatch):
+    """The session guards the thread that opens the store, and under a pool the
+    caller opens none. Held on the caller instead, `reap_idle` is free to close
+    a store under a live cursor."""
+    _reset()
+    monkeypatch.setattr(config, "FANOUT_WORKERS", 2)
+
+    conns.fanout(store.connect, _projects(tmp_path, 4))
+
+    assert conns.cache().conns == {}
+    assert conns.open_count() == 4
+
+
+def test_the_fanout_answers_in_the_order_it_was_asked(tmp_path, monkeypatch):
+    """`pool_cut` walks the members in pool order, so a fan-out that returned
+    them as they finished would reorder the answer by disk timing."""
+    _reset()
+    monkeypatch.setattr(config, "FANOUT_WORKERS", 4)
+    projects = _projects(tmp_path, 12)
+
+    assert conns.fanout(str, projects) == [str(project) for project in projects]

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from coderag import config, federation, filters, index, registry, search
+from coderag import config, conns, federation, filters, index, registry, search
 from coderag.search import Hit, SearchError
 
 
@@ -265,3 +265,36 @@ def test_search_from_a_member_reaches_its_sibling(tmp_path, repo):
 
     assert out["searched"]["projects"] == 3
     assert any(r["project"] == str(sibling) for r in out["results"])
+
+
+@pytest.mark.gpu
+def test_threading_the_fanout_changes_no_answer(tmp_path, repo, monkeypatch):
+    """The retrieval loop is threaded to survive a 361-project unit, and the
+    only thing that may change is how long it takes.
+
+    `pool_cut` hands out slots in the order the pool lists the members, so a
+    fan-out that returned results as they finished would reorder the answer by
+    disk timing. `Executor.map` yields in the order it was asked, and this is
+    what holds it there.
+    """
+    sibling = tmp_path / "sibling"
+    (sibling / "src").mkdir(parents=True)
+    (sibling / "src" / "ledger.py").write_text("def postJournalEntry(rows):\n    return rows\n")
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "member").symlink_to(repo)
+    (root / "other").symlink_to(sibling)
+    registry.claim(root, direct=True)
+    federation.register(root)
+    for project in federation.expand(root):
+        index.index_project(project)
+
+    def answer(workers: int) -> list:
+        conns.close_all()
+        if conns._pool is not None:
+            conns._pool.shutdown(wait=True)
+            conns._pool = None
+        monkeypatch.setattr(config, "FANOUT_WORKERS", workers)
+        return search.search("postJournalEntry", root, mode="hybrid", k=20)["results"]
+
+    assert answer(4) == answer(1)

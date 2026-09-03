@@ -55,6 +55,13 @@
   fell back to `Path.cwd()` when the client sent no roots. The daemon's cwd is the operator's home
   directory. So a real Claude Code session's rootless `search` came back as "$HOME is not indexed
   -- call index(root=$HOME) first". Taken, that advice indexes everything on the machine. It now refuses and names the fix.
+* [A vector table kept every block it ever allocated, and the compactor could not see
+  it](a-vector-table-kept-every-block-it-ever-allocated.md) - sqlite-vec frees a block of 1024
+  slots only when every slot in it is free, and a watched project rewrites a few chunks anywhere,
+  all day. So the dead slots land scattered, every block keeps a live row, and every KNN reads all
+  of them whole: 2.97 GB allocated against 1.23 GB live fleet-wide, 6.3x on the busiest store. A
+  VACUUM cannot reach slots that sit inside blob rows -- it gave back 59 MiB of 689 MiB and moved
+  no block. A repack cut that store 1095 -> 406 MiB, 249 -> 40 blocks, warm KNN 300 -> 69 ms.
 * [A gate that grades the developer's clone ran on every CI run, and reddened all
   36](a-local-only-gate-ran-where-it-cannot-hold.md) - `test_something_on_this_checkout_actually_invokes_the_hook` asserts that the checkout has
   `core.hooksPath` set or a planted `.git/hooks/pre-push`. A GitHub runner has neither and pushes

@@ -450,3 +450,21 @@ title: coderag knowledge history
 - **Refused**: a concept for `PRAGMA auto_vacuum=INCREMENTAL` preceding `PRAGMA journal_mode=WAL`.
   It is four lines of code carrying its own three-line comment and a test named after the ordering.
   A concept would restate them.
+
+- **Added**: [a vector table kept every block it ever allocated](defects/a-vector-table-kept-every-block-it-ever-allocated.md).
+  **Updated**: [sqlite-vec survives only because search is scoped](decisions/sqlite-vec-survives-only-because-search-is-scoped.md)
+  and [what a root and 135 members cost](constraints/what-a-root-and-135-members-cost.md). One
+  abort produced all three: a client gave up on a search after 329 s against its 300 s idle
+  timeout, and nothing had errored. Two independent causes, both measured before either was
+  written. The fan-out at `search.py:242` walked 361 stores one at a time, p50 24.6 s against
+  179 ms for a single project, and two parallel searches finished 6 ms apart at 407 s. And
+  `chunks_vec` had never given a block back, 2.4x fleet-wide and 6.3x on the busiest store, which
+  `doctor --compact` could not see because a `VACUUM` does not reach inside a blob row. The
+  decision card is amended rather than reversed: its criterion is a *scoped* p95, the per-project
+  scan is still under 10 ms, and an ANN index would have left 361 sequential round trips exactly
+  where they were. The first repack fixture deleted a contiguous tail and passed against code that
+  does nothing -- vec0 frees a block a delete empties whole, so scattered had to be the fixture.
+
+- **Refused**: a concept for `ThreadPoolExecutor.map` yielding in input order. It is one property
+  of the stdlib, and the reason it matters here is `pool_cut`'s dependence on pool order, which the
+  constraint card above already carries beside the code comment and the test named after it.

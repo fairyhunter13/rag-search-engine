@@ -237,10 +237,16 @@ def search(
         vector = embed.get_embedder().embed([query], side=embed.QUERY)[0]
     stage["embed_ms"] = since()
 
+    # Threaded because the cost is disk and sqlite3 releases the GIL for a read:
+    # 361 stores one at a time measured a p50 of 24.6 s, and one client abort at
+    # 329 s. `map` yields in the order of `projects`, so the pool is the same
+    # list the sequential loop built and `pool_cut` sees the same member order.
     pool: list[Hit] = []
-    with conns.session():
-        for project in projects:
-            pool.extend(_project_candidates(project, query, vector, mode, config.CANDIDATES))
+    for hits in conns.fanout(
+        lambda project: _project_candidates(project, query, vector, mode, config.CANDIDATES),
+        projects,
+    ):
+        pool.extend(hits)
     stage["pool"] = len(pool)
     stage["pool_projects"] = len({h.project for h in pool})
     stage["retrieve_ms"] = since()

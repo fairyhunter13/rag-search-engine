@@ -13,6 +13,7 @@ import contextlib
 import sqlite3
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import config
@@ -59,6 +60,46 @@ def session():
             yield
         finally:
             live.last_used = time.monotonic()
+
+
+_pool: ThreadPoolExecutor | None = None
+_pool_lock = threading.Lock()
+
+
+def pool() -> ThreadPoolExecutor:
+    """One executor for the process, built once and never replaced.
+
+    `_caches` only ever grows, so a pool built per search would register a
+    `_Cache` per worker per search and leave every one of them behind. Reusing
+    the threads is also what bounds the handle set: `FANOUT_WORKERS` times the
+    unit, and not `THREAD_LIMIT` times it.
+    """
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            _pool = ThreadPoolExecutor(
+                max_workers=max(1, config.FANOUT_WORKERS), thread_name_prefix="coderag-fanout"
+            )
+        return _pool
+
+
+def fanout(fn, items):
+    """`fn` over each item, on the shared pool, results in no fixed order.
+
+    The session is entered on the worker and never on the caller. The lock
+    `reap_idle` skips is per thread, so a session held by the thread that
+    dispatches guards nothing: under a pool that thread opens no store at all.
+    """
+    items = list(items)
+    if len(items) < 2 or config.FANOUT_WORKERS < 2:
+        with session():
+            return [fn(item) for item in items]
+
+    def guarded(item):
+        with session():
+            return fn(item)
+
+    return list(pool().map(guarded, items))
 
 
 def reap_idle(seconds: float | None = None) -> int:
