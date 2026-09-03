@@ -162,7 +162,9 @@ def build_parser() -> argparse.ArgumentParser:
     doc = sub.add_parser("doctor", help="GPU, missing projects, orphan rows and stores")
     doc.add_argument("--prune", action="store_true", help="delete stores no row claims")
     doc.add_argument("--force", action="store_true", help="prune past the half-the-tree refusal")
-    doc.add_argument("--compact", action="store_true", help="VACUUM every store, and nothing else")
+    doc.add_argument(
+        "--compact", action="store_true", help="repack the vectors and VACUUM every store"
+    )
     doc.set_defaults(fn=doctor.run)
     sub.add_parser("release", help="unload the models now").set_defaults(fn=_release)
 

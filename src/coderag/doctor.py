@@ -86,19 +86,29 @@ def run(args) -> int:
 
 
 def _compact() -> int:
-    """The one-time full VACUUM, over every store. Hand-typed and never timed.
+    """The vector repack and the full VACUUM, over every store. Hand-typed.
 
     Reported per store rather than as a total: a store that gave nothing back
     was already compact, and a total hides which ones those were.
+
+    The repack runs first and the VACUUM second, because the repack is what
+    frees the pages and the VACUUM is what returns them. The blocks are printed
+    beside the MiB: they are the number a search actually reads, and a store
+    whose file barely moved can still have shed most of what a KNN scans.
     """
     for entry in registry.enabled_projects():
         path = config.index_path(entry.path)
         if not path.exists():
             continue
         before = path.stat().st_size
-        disk.compact(store.connect(entry.path, create=False))
+        conn = store.connect(entry.path, create=False)
+        blocks_before, blocks_after = store.repack_vectors(conn)
+        disk.compact(conn)
         after = path.stat().st_size
-        print(f"compacted {entry.key}: {before // 2**20} -> {after // 2**20} MiB")
+        print(
+            f"compacted {entry.key}: {before // 2**20} -> {after // 2**20} MiB, "
+            f"{blocks_before} -> {blocks_after} vector blocks"
+        )
     return 0
 
 

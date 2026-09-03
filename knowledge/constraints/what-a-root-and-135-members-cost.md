@@ -43,3 +43,46 @@ fails on `high` fails on the kernel working.
 wins. This is the *serving* side, characterised so nobody measures it a third time, and it is not
 evidence for an optimisation. The latency figure is from this host and inherits
 `this-host-cannot-produce-an-admissible-latency-number`.
+
+# 2026-09-03: the same root at 361 members, and where the 1.46 s went
+
+The measurement above is kept as it was taken. That root now holds **361 projects in its search
+unit** — its `repositories/` directory carries 451 symlinks, and `federation.unit` resolves them
+to 360 enabled members plus the root. Same host, same daemon, from `searches.jsonl`:
+
+| search unit | n | p50 |
+|---|---|---|
+| 1 to 5 projects | 6,526 | 179 ms |
+| over 100 projects | 559 | 24,631 ms |
+
+For that root alone: 451 searches, **162 of them over 30 s**, slowest 478.7 s. One client gave up
+and logged `no response or progress notification for 329s (idle timeout 300s)`. Nothing errored.
+The server was still working.
+
+**A second concurrent search did not divide the work.** Two traces sent in parallel by the same
+client finished 6 ms apart, at 407,231 ms and 407,238 ms. Each one was walking its own 361 stores
+in its own sequential loop.
+
+Two causes, and this card is the fan-out half. The other half is
+[a vector table kept every block it ever allocated](../defects/a-vector-table-kept-every-block-it-ever-allocated.md),
+which made every one of those 361 KNN reads about six times larger than the live data.
+
+`search.py:242` now calls `conns.fanout`, which maps the per-project retrieval over a
+process-wide `ThreadPoolExecutor` of `config.FANOUT_WORKERS` threads, 4 by default. Three
+properties decide the shape:
+
+- **The pool is module-level and built once.** `conns._caches` is a list that only grows, so a
+  pool per search would register a `_Cache` per worker per search and leave every one behind.
+  Reused, the handle set is bounded by `FANOUT_WORKERS x unit` and not by `THREAD_LIMIT x unit`:
+  4 x 361 handles at 0.27 MiB is about 390 MiB, on the arithmetic in
+  [a SQLite handle is not free at rest](a-sqlite-handle-is-not-free-at-rest.md).
+- **The session is entered on the worker, never on the caller.** The lock `reap_idle` skips is per
+  thread. Under a pool the dispatching thread opens no store, so a session held there guards
+  nothing and the reap is free to close a store under a live cursor.
+- **`Executor.map` yields in the order it was asked.** That is load-bearing, not incidental:
+  `pool_cut` hands out its slots in the order the pool lists the members, so a fan-out returning
+  results as they finished would reorder the answer by disk timing. The threaded pool is the same
+  list the sequential loop built.
+
+Four workers rather than eight because the cost is disk and handles, not CPU. `FANOUT_WORKERS=1`
+restores the sequential loop.

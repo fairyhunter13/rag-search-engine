@@ -282,3 +282,49 @@ def counts(conn: sqlite3.Connection) -> tuple[int, int]:
     files = conn.execute("SELECT COUNT(*) AS n FROM files").fetchone()["n"]
     chunks = conn.execute("SELECT COUNT(*) AS n FROM chunks").fetchone()["n"]
     return files, chunks
+
+
+def vector_blocks(conn: sqlite3.Connection) -> tuple[int, int]:
+    """Blocks the vec0 table holds, and the bytes in them.
+
+    A KNN reads every block whole, so this is what a search pays and the live
+    row count is not. On the largest store here: 249 blocks holding 747 MiB,
+    for 120 MiB of live vectors.
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(vectors)), 0) AS b "
+        "FROM chunks_vec_vector_chunks00"
+    ).fetchone()
+    return row["n"], row["b"]
+
+
+def repack_vectors(conn: sqlite3.Connection) -> tuple[int, int]:
+    """Rewrite `chunks_vec` so its blocks hold live rows only. Blocks before, after.
+
+    vec0 keeps its vectors in blocks of 1024 slots and gives a block back only
+    when every slot in it is free. A watched project rewrites a few chunks
+    anywhere, all day, so the dead slots land scattered: every block keeps a
+    live row, every block stays, and every KNN reads all of them whole. The
+    table grows while the row count does not -- 6.3x on the store re-indexed
+    most, 2.4x across the fleet, 40745 live rows in 249 blocks of 1024.
+    `VACUUM` cannot reach it, because those slots sit inside blob rows and not
+    in the freelist: it gave back 59 MiB of 689 MiB and moved no block.
+
+    These rows are the only copy of the vectors, so the read has to agree with
+    the table before the DROP. A short read that reached it would delete
+    vectors nothing but a full re-index could put back.
+    """
+    before, _ = vector_blocks(conn)
+    rows = conn.execute("SELECT chunk_id, embedding FROM chunks_vec").fetchall()
+    expected = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
+    if len(rows) != expected:
+        raise RuntimeError(f"read {len(rows)} of {expected} vectors, refusing to repack")
+    with conn:
+        conn.execute("DROP TABLE chunks_vec")
+        conn.execute(_vec_ddl())
+        conn.executemany(
+            "INSERT INTO chunks_vec(chunk_id, embedding) VALUES(?, ?)",
+            [(row["chunk_id"], row["embedding"]) for row in rows],
+        )
+    after, _ = vector_blocks(conn)
+    return before, after

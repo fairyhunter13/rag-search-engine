@@ -81,6 +81,13 @@ STORE_IDLE_S = _env_int("STORE_IDLE_S", 600)
 # 40 is the page-cache figure multiplied by 40.
 THREAD_LIMIT = _env_int("THREAD_LIMIT", 8)
 
+# Threads one federated search spreads its stores over. The cost is disk, not
+# CPU: 361 stores read one at a time measured a p50 of 24.6 s against 179 ms
+# for a single project, and sqlite3 releases the GIL for the read. Four rather
+# than eight because each worker keeps its own handle set -- 4 x 361 handles at
+# 0.27 MiB is about 390 MiB, reused across searches. Set to 1 to go sequential.
+FANOUT_WORKERS = _env_int("FANOUT_WORKERS", 4)
+
 # How long a project must stop changing before a watch job runs. A batch carries
 # one event, and each pass is a whole content-hash walk, so an editor saving
 # through a build cost 303 passes in 15 minutes. This is not the Rust debounce
