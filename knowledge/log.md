@@ -484,3 +484,11 @@ title: coderag knowledge history
   in their one unavoidable block read as 26x, and a repack returns nothing. That mistake is kept
   as an arm rather than described. Each pass writes a `runledger` row, because the weekly interval
   is a guess until two rows exist and their difference is the fleet's regrowth.
+
+- **Update**: [a vector table kept every block it ever allocated](defects/a-vector-table-kept-every-block-it-ever-allocated.md),
+  amended with the descriptor exhaustion the first timed run found. The fleet walk held every
+  handle it opened -- 423 WAL stores at three descriptors is 1269, against a shell limit of
+  1048576 and a systemd service limit of 1024. It passed in every shell and failed on the first
+  run under the timer, reported as `unable to open database file`. The environment was the whole
+  difference and nothing named it, which is the general shape worth keeping. The failure also
+  confirmed `ExecStopPost`: the pass died and the daemon came back.

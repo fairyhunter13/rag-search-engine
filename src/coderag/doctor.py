@@ -10,7 +10,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from . import config, disk, gpu, prune, quarantine, registry, runledger, store
+from . import config, conns, disk, gpu, prune, quarantine, registry, runledger, store
 
 
 def run(args) -> int:
@@ -99,6 +99,11 @@ def _compact() -> int:
     A store already tight is skipped whole, and that is what makes this cheap
     enough for a timer. The first fleet pass rewrote 423 stores in 8m58s to
     reclaim what 14 of them held.
+
+    Every handle is closed before the next store opens. A WAL store costs three
+    descriptors, and systemd's default soft NOFILE is 1024 -- so holding 423 of
+    them raised `unable to open database file` under the timer and nowhere else,
+    because an interactive shell here allows 1048576.
     """
     stats = {"walked": 0, "skipped": 0, "blocks_before": 0, "blocks_after": 0, "mib": 0}
     for entry in registry.enabled_projects():
@@ -107,13 +112,16 @@ def _compact() -> int:
             continue
         stats["walked"] += 1
         before = path.stat().st_size
-        conn = store.connect(entry.path, create=False)
-        packed = store.vector_waste(conn) < config.COMPACT_WASTE_BLOCKS
-        if packed and disk.freelist_bytes(conn) <= config.COMPACT_FREELIST_MIB * 2**20:
-            stats["skipped"] += 1
-            continue
-        blocks_before, blocks_after = store.repack_vectors(conn)
-        disk.compact(conn)
+        try:
+            conn = store.connect(entry.path, create=False)
+            packed = store.vector_waste(conn) < config.COMPACT_WASTE_BLOCKS
+            if packed and disk.freelist_bytes(conn) <= config.COMPACT_FREELIST_MIB * 2**20:
+                stats["skipped"] += 1
+                continue
+            blocks_before, blocks_after = store.repack_vectors(conn)
+            disk.compact(conn)
+        finally:
+            conns.close_all()
         after = path.stat().st_size
         stats["blocks_before"] += blocks_before
         stats["blocks_after"] += blocks_after
