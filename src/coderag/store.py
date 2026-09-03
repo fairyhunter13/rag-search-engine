@@ -298,6 +298,23 @@ def vector_blocks(conn: sqlite3.Connection) -> tuple[int, int]:
     return row["n"], row["b"]
 
 
+VEC_BLOCK = 1024
+
+
+def vector_waste(conn: sqlite3.Connection) -> int:
+    """Blocks the vec0 table holds over the blocks its live rows need.
+
+    The test that decides whether a store is worth repacking, and it is a count
+    of blocks rather than a ratio on purpose. A ratio cannot tell a bloated
+    store from a small one: 40 live rows in their one unavoidable block read as
+    25x wasteful and there is nothing there to give back. 211 on the busiest
+    store here, and 0 on 339 of 423.
+    """
+    blocks, _ = vector_blocks(conn)
+    live = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
+    return blocks - -(-live // VEC_BLOCK)
+
+
 def repack_vectors(conn: sqlite3.Connection) -> tuple[int, int]:
     """Rewrite `chunks_vec` so its blocks hold live rows only. Blocks before, after.
 

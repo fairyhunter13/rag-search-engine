@@ -475,3 +475,12 @@ title: coderag knowledge history
   40 blocks against a predicted 1095 to 406 and 249 to 40. `retrieve_ms` from that root went from a
   p50 of 16.8 s over 454 searches to 3.30, 3.55 and 2.98 s. Both changes shipped together, so
   neither number separates them, and the card says so.
+
+- **Update**: [a vector table kept every block it ever allocated](defects/a-vector-table-kept-every-block-it-ever-allocated.md),
+  amended with why the weekly timer skips. The first pass was 8m58s of daemon outage to reclaim
+  what 14 of 423 stores held: 362 gave back 0 MiB, 339 were already at one block, and the top 8
+  were 91% of the 1135 MiB. `_compact` now tests each store first. The test is a count of surplus
+  blocks and not a ratio, because a ratio cannot tell a bloated store from a small one -- 39 rows
+  in their one unavoidable block read as 26x, and a repack returns nothing. That mistake is kept
+  as an arm rather than described. Each pass writes a `runledger` row, because the weekly interval
+  is a guess until two rows exist and their difference is the fleet's regrowth.

@@ -130,3 +130,54 @@ def test_the_doctor_report_pages_nobody_and_deletes_nothing(doctor_units):
     assert "OnFailure=" not in text
     assert "--prune" not in text
     assert "SuccessExitStatus=0 1" in text, "a finding would be recorded as a unit failure"
+
+
+@pytest.fixture
+def compact_units(tmp_path):
+    service = tmp_path / systemd.COMPACT_NAME
+    service.write_text(systemd.compact_text("/usr/bin/true"))
+    timer = tmp_path / systemd.COMPACT_TIMER
+    timer.write_text(systemd.compact_timer_text())
+    return service, timer
+
+
+@pytest.mark.skipif(not shutil.which("systemd-analyze"), reason="no systemd-analyze")
+def test_systemd_accepts_the_compact_units(compact_units):
+    for path in compact_units:
+        out = subprocess.run(
+            ["systemd-analyze", "--user", "verify", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert "Unknown key name" not in out.stderr, out.stderr
+        assert out.returncode == 0, out.stderr
+
+
+def test_the_daemon_comes_back_even_when_the_compaction_fails(compact_units):
+    """`ExecStopPost` and not a second `ExecStart`. A pass that dies partway
+    leaves any later `ExecStart` line unrun, so the daemon stays stopped until a
+    human notices -- a worse outcome than the bloat the pass was written to
+    remove."""
+    text = compact_units[0].read_text()
+    assert f"ExecStopPost=/usr/bin/systemctl --user start {systemd.UNIT_NAME}" in text
+    starts = [line for line in text.splitlines() if line.startswith("ExecStart=")]
+    assert len(starts) == 1 and "systemctl" not in starts[0]
+
+
+def test_the_compaction_pages_where_the_daily_check_may_not(compact_units):
+    """`doctor` exits 1 on any finding, so an alert on it fires every day until
+    a human acts. `--compact` returns 0 whatever it finds, so an alert here can
+    only mean the pass broke or the daemon did not come back."""
+    head, _, service = compact_units[0].read_text().partition("\n[Service]\n")
+    assert "OnFailure=" in head
+    assert "OnFailure=" not in service
+    assert "SuccessExitStatus" not in service
+
+
+def test_a_missed_compaction_still_runs(compact_units):
+    """This host is asleep at 04:00 on a Sunday. Without `Persistent` the pass
+    is skipped for that week, and the fleet regrows for a fortnight instead."""
+    text = compact_units[1].read_text()
+    assert "Persistent=true" in text
+    assert re.search(r"OnCalendar=\S", text)

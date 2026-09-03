@@ -171,3 +171,62 @@ def test_a_repack_keeps_every_vector_it_read(tmp_path):
     store.repack_vectors(conn)
 
     assert {r["chunk_id"]: r["embedding"] for r in conn.execute("SELECT * FROM chunks_vec")} == was
+
+
+def test_a_freshly_written_store_reads_as_packed(tmp_path):
+    """The test the weekly timer walks past, on a store with nothing to give.
+
+    362 of 423 stores on this fleet look like this one, and rewriting them is
+    where 8 of the first pass's 9 minutes went.
+    """
+    _reset()
+    project = tmp_path / "packed"
+    project.mkdir()
+    conn = store.connect(project)
+    assert store.vector_waste(conn) == 0
+
+    one = [0.01] * config.EMBED_DIMS
+    with conn:
+        conn.executemany(
+            "INSERT INTO chunks_vec(chunk_id, embedding) VALUES(?, ?)",
+            [(i, struct.pack(f"{config.EMBED_DIMS}f", *one)) for i in range(1, 40)],
+        )
+    assert store.vector_waste(conn) == 0
+    assert disk.freelist_bytes(conn) < config.COMPACT_FREELIST_MIB * 2**20
+
+
+def test_a_thin_store_is_not_read_as_a_bloated_one(tmp_path):
+    """The arm a ratio fails. 39 rows occupy one block whole, so allocated over
+    live reads as 26x -- and a repack of it gives back nothing, because the one
+    block is the floor. A timer on a ratio rewrites every small store here every
+    week, which is most of them."""
+    _reset()
+    project = tmp_path / "thin"
+    project.mkdir()
+    conn = store.connect(project)
+    one = [0.01] * config.EMBED_DIMS
+    with conn:
+        conn.executemany(
+            "INSERT INTO chunks_vec(chunk_id, embedding) VALUES(?, ?)",
+            [(i, struct.pack(f"{config.EMBED_DIMS}f", *one)) for i in range(1, 40)],
+        )
+    blocks, allocated = store.vector_blocks(conn)
+    live = 39 * config.EMBED_DIMS * 4
+
+    assert blocks == 1
+    assert allocated / live > 25
+    assert store.vector_waste(conn) < config.COMPACT_WASTE_BLOCKS
+
+
+def test_the_waste_a_repack_removes_is_the_waste_it_reported(tmp_path):
+    """The surplus is what the weekly timer reads, so it has to move on the same
+    fixture the repack moves on, and it has to reach zero after."""
+    _reset()
+    conn = _churned(tmp_path, "waste")
+
+    assert store.vector_waste(conn) == 2
+    assert store.vector_waste(conn) >= config.COMPACT_WASTE_BLOCKS
+
+    store.repack_vectors(conn)
+
+    assert store.vector_waste(conn) == 0
