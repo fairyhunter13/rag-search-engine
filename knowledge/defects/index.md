@@ -11,7 +11,8 @@
   ~/private/notes.md` indexed that content and attributed it to the containing project. The walk
   lane refuses it, the git lane accepts it, and the git lane is the default.
 * [A dead row paged hourly, and no command could remove
-  it](a-dead-row-paged-hourly-and-nothing-could-remove-it.md) - Twenty rows pointing at deleted
+  it](a-dead-row-paged-hourly-and-nothing-could-remove-it.md) - Reopened 2026-09-04: `--prune`
+  cannot reach a row with no recorded device, and 136 of 503 rows have none. Twenty rows pointing at deleted
   temp directories re-failed on every sweep, so the two-sample rule pages forever. `doctor` named
   them, `--prune` reached only stores, and the recorded fix was editing projects.json by hand.
   `HEALTH_FAILING_CAP` is 20, so the alert was saturated with junk and could not have shown a real

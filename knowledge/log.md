@@ -492,3 +492,18 @@ title: coderag knowledge history
   run under the timer, reported as `unable to open database file`. The environment was the whole
   difference and nothing named it, which is the general shape worth keeping. The failure also
   confirmed `ExecStopPost`: the pass died and the daemon came back.
+
+- **Update**: [a live test skipped the disable-teardown](defects/a-live-test-skipped-the-disable-teardown.md)
+  and [a dead row paged hourly](defects/a-dead-row-paged-hourly-and-nothing-could-remove-it.md),
+  both reopened by one symptom: `notify-send -u critical` every hour for twelve hours while the
+  daemon was fine -- 0 restarts, 423 projects, both providers on CUDA. Four
+  `/tmp/pytest-of-<user>/...` rows from `test_live_results.py`'s `tree` fixture, whose disable was a
+  trailing line and not a `finally`. The second concept is the one that matters: `doctor --prune`
+  ran and kept all four, because `prune.verdict` answers `unknown` for a row with no recorded
+  device and `doctor` acts only on `deleted`. 136 of 503 live rows are in that state, so the
+  population that can page forever is a quarter of the fleet. Recorded, not repaired.
+
+- **Refused**: a concept for the alert path itself -- health check exits 1, `OnFailure` fires
+  `coderag-alert@`, that unit runs `notify-send`. Three units and no reasoning; `systemd.py` reads
+  the same in less space.
+

@@ -48,30 +48,35 @@ def tree(tmp_path_factory, rpc):
     root = _repo(tmp_path_factory.mktemp("wroot"), {"main.py": "import keep\n"})
     (root / "link").symlink_to(member, target_is_directory=True)
     rpc.tool("index", root=str(root))
-    until(
-        lambda: rpc.tool("index", root=str(root))["indexed"]["chunks"] > 0,
-        timeout=180,
-        what="the first pass to finish",
-    )
-    # The member's own pass, not just the root's. Every test below writes into
-    # the member, and a member whose first walk has not run yet sweeps the new
-    # file in on its own -- which passes the watcher tests with the watcher
-    # never firing.
-    until(
-        lambda: rpc.tool("index", root=str(member))["indexed"]["chunks"] > 0,
-        timeout=180,
-        what="the member's own first pass to finish",
-    )
-    # And the member's watches in place. Registration only sets a flag; the
-    # rebuild lands seconds later, and a write before it is lost for good.
-    until(
-        lambda: rpc.tool("index", root=str(member))["watching"],
-        timeout=60,
-        what="the member's watches to be armed",
-    )
-    yield root, member
-    rpc.tool("index", root=str(root), enabled=False)
-    rpc.tool("index", root=str(member), enabled=False)
+    # The `try` opens at the registration and not at the `yield`: the three
+    # waits below can time out, and that path left both rows enabled on a
+    # directory pytest deletes -- four of them paged hourly for twelve hours.
+    try:
+        until(
+            lambda: rpc.tool("index", root=str(root))["indexed"]["chunks"] > 0,
+            timeout=180,
+            what="the first pass to finish",
+        )
+        # The member's own pass, not just the root's. Every test below writes into
+        # the member, and a member whose first walk has not run yet sweeps the new
+        # file in on its own -- which passes the watcher tests with the watcher
+        # never firing.
+        until(
+            lambda: rpc.tool("index", root=str(member))["indexed"]["chunks"] > 0,
+            timeout=180,
+            what="the member's own first pass to finish",
+        )
+        # And the member's watches in place. Registration only sets a flag; the
+        # rebuild lands seconds later, and a write before it is lost for good.
+        until(
+            lambda: rpc.tool("index", root=str(member))["watching"],
+            timeout=60,
+            what="the member's watches to be armed",
+        )
+        yield root, member
+    finally:
+        rpc.tool("index", root=str(root), enabled=False)
+        rpc.tool("index", root=str(member), enabled=False)
 
 
 def _paths(rpc, query, root, **kw):
