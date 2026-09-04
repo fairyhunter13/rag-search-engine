@@ -56,6 +56,10 @@ days later. Three rules hold it:
 `coderag forget` quarantines too. It removed the row and left the whole store standing, which is the
 same gap on the hand-typed surface.
 
+**This covers a store a row named, and not every removal.** `doctor --prune` deletes an *unclaimed*
+store with `shutil.rmtree` and no undo, in the same function that quarantines 29 lines above. See
+[three of the four store removals are reversible](../constraints/three-of-the-four-store-removals-are-reversible.md).
+
 # What this still does not clear
 
 inotify has no replay, so a repository deleted while the daemon was down reaches no event. That is

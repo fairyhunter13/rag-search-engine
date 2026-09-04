@@ -62,6 +62,12 @@
   throttles](this-host-cannot-produce-an-admissible-latency-number.md) - The laptop's GPU runs at
   a sixth of rated clock. So every timing figure measured here measures the host rather than the
   engine. The cause is a power cap, not the heat the first reading blamed.
+* [Three of the four store removals are reversible, and the unclaimed one is
+  not](three-of-the-four-store-removals-are-reversible.md) - `doctor --prune` runs both paths 29
+  lines apart: a MISSING row's store is moved into `.trash`, an unclaimed store is `rmtree`'d. The
+  discriminator is whether a row ever named the store, not whether a human typed the command.
+  Measured: 69 unclaimed stores deleted with no undo, 207 MiB, while 10 stores carrying the same
+  fixture names sat recoverable in `.trash` from that morning's reaper.
 * [What a root and 135 federated members cost, and why MemoryHigh fires 404 times without
   hurting](what-a-root-and-135-members-cost.md) - Measured 2026-08-20 against the live daemon: 12
   searches over a 135-member federation, p50 1.46 s, 91% of one core while working, 2.31 GiB anon.
