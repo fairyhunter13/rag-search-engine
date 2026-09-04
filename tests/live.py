@@ -61,17 +61,13 @@ def other_gpu_runs(exclude_daemon: bool = True) -> list[str]:
     return found
 
 
-def daemon_held_mib() -> int:
-    """What the daemon under test is already holding.
+def held_mib(pids: list[str]) -> int:
+    """VRAM these pids hold, off nvidia-smi's per-process table.
 
-    The process half of this check excludes the daemon on purpose, and the VRAM
-    half has to agree with it or the two contradict: the first live search loads
-    12 GB of models, after which every later module reads the suite's own
-    working set as somebody else's. Held-by-us is headroom, not contention.
+    Split out so a harness can ask about its own worker. `tests/cpu.py` runs
+    each arm as a subprocess that loads its own models, and the daemon's pid
+    says nothing about that arena.
     """
-    pids = subprocess.run(
-        ["pgrep", "-f", "coderag.cli serve"], capture_output=True, text=True, check=False
-    ).stdout.split()
     if not pids:
         return 0
     out = subprocess.run(
@@ -86,6 +82,21 @@ def daemon_held_mib() -> int:
         if pid.strip() in pids:
             held += int(used.strip())
     return held
+
+
+def daemon_held_mib() -> int:
+    """What the daemon under test is already holding.
+
+    The process half of this check excludes the daemon on purpose, and the VRAM
+    half has to agree with it or the two contradict: the first live search loads
+    12 GB of models, after which every later module reads the suite's own
+    working set as somebody else's. Held-by-us is headroom, not contention.
+    """
+    return held_mib(
+        subprocess.run(
+            ["pgrep", "-f", "coderag.cli serve"], capture_output=True, text=True, check=False
+        ).stdout.split()
+    )
 
 
 def require_clear_gpu() -> None:
