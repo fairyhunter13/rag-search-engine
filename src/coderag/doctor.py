@@ -55,6 +55,12 @@ def run(args) -> int:
     for key in missing:
         print(f"MISSING {key} ({verdict.get(key, 'unknown')})")
         problems += 1
+    # `unknown` is the one verdict --prune will never act on, so a row that
+    # reaches it outlives its directory and pages every hour. Name the way out.
+    blind = sorted(key for key in missing if verdict.get(key, "unknown") == "unknown")
+    if blind:
+        print("no device recorded, so --prune cannot judge these; remove by hand:")
+        print(f"  coderag forget {' '.join(blind)}")
 
     # The other direction, and against every row rather than the enabled ones:
     # unflagging keeps the store, so a disabled row's directory is claimed. What

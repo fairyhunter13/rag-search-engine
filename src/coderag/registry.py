@@ -253,6 +253,46 @@ def forget(keys: list[str]) -> tuple[list[str], list[str]]:
         return dropped, sorted(released)
 
 
+def _occupied(path: Path) -> bool:
+    """A directory with something in it. An empty one may be a bare mount point."""
+    try:
+        return any(path.iterdir())
+    except OSError:
+        return False
+
+
+def record_devices() -> list[str]:
+    """Fill in the `dev` that a row enrolled before the field existed never got.
+
+    `prune.verdict` answers `unknown` for a row with no device, and `unknown` is
+    the verdict nothing acts on. So such a row survives its own directory, and
+    the fleet check pages for it every hour until a person types `forget`.
+
+    Only an *occupied* directory is filled. An unmounted volume leaves its mount
+    point standing as an empty directory, and writing the underlay's device onto
+    that row would have a later verdict call an intact repository `deleted` --
+    the fleet-wiping predicate, reached by backfill instead of by scan.
+
+    The read comes first so an hourly call with nothing to do takes no exclusive
+    lock and rotates no backup.
+    """
+    candidates = [key for key, entry in load().items() if not entry.dev and _occupied(entry.path)]
+    if not candidates:
+        return []
+    filled: list[str] = []
+    with _mutate() as rows:
+        for key in candidates:
+            entry = rows.get(key)
+            if entry is None or entry.dev:
+                continue
+            dev = disk.device(key)
+            if not dev:
+                continue
+            entry.dev = dev
+            filled.append(key)
+    return filled
+
+
 def set_enabled(path: Path | str, enabled: bool) -> None:
     key = str(resolve(path))
     with _mutate() as rows:

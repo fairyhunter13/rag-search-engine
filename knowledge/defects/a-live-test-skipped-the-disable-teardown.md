@@ -79,3 +79,23 @@ exactly this. Not confirmed -- no transcript was kept -- so it stays a question 
 Both rows carry a real `st_dev`, so they are prunable once their directory goes. That is the
 difference between this and the four that paged: same leak, working exit.
 
+
+# A `finally` cannot disable a row through a daemon that is dead
+
+The next full-suite run leaked `wroot0` and `wmember0` again, out of the fixture that had just been
+given the `try` opening at the registration. The `finally` ran. Both `index(enabled=False)` calls
+inside it raised `ConnectError: [Errno 111] Connection refused`, because systemd had SIGABRT'd the
+daemon on a watchdog timeout 90 s earlier, mid-suite. The teardown is an RPC, so a dead daemon
+defeats it wherever the `finally` sits.
+
+There is no placement that fixes this. The row can only be disabled by the process that owns the
+registry, and that process is the one that died. So the leak is not fully closable from the test
+side, and what makes it survivable is the other half:
+[a dead row paged hourly](a-dead-row-paged-hourly-and-nothing-could-remove-it.md). Both rows carried
+a real `st_dev` -- the backfill had run -- so once pytest deleted the directories they answered
+`deleted` rather than `unknown`, and `doctor --prune` removed them with no `forget` typed by hand.
+That is the first time this leak cleaned itself up.
+
+The watchdog kills are their own defect and are not this one: three at 09:11, 09:13 and 09:42 on
+2026-09-04, each `Watchdog timeout (limit 1min 30s)` under a full-suite load, all in processes that
+predate the backfill.

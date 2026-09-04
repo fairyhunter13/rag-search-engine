@@ -1,8 +1,8 @@
 ---
 type: Decision
-resource: src/coderag/prune.py, src/coderag/entry.py, src/coderag/doctor.py, src/coderag/registry.py
+resource: src/coderag/prune.py, src/coderag/entry.py, src/coderag/doctor.py, src/coderag/registry.py, src/coderag/server.py
 title: An absent directory is three answers, and only one is a deletion
-description: A row whose root is missing is a deletion, an unmounted volume, or unreadable -- and the reconciliation reports which. Only `deleted` is actionable, and only behind an explicit flag.
+description: A row whose root is missing is a deletion, an unmounted volume, or unreadable -- and the reconciliation reports which. Only `deleted` is actionable, and only behind an explicit flag. The hourly sweep backfills the recorded device for a present, occupied path, and refuses an empty directory because that is the shape of a bare mount point.
 tags: [registry, pruning, mounts, fleet]
 status: stable
 generated: { by: claude/opus-5, at: 2026-09-01T00:00:00Z }
@@ -56,3 +56,24 @@ verdict is a week to notice, not a re-index.
 `prune.survey()` is the same verdict over the whole registry, for callers that want the census
 rather than the action. It states the population it read: a filter that selected nothing is not the
 same fact as a fleet with nothing wrong.
+
+# The blind population, and why a backfill is not the scan
+
+`dev` is written by `claim`, so a row enrolled before the field existed never had one and answers
+`unknown` forever. That was **136 of 503 rows** on the first fleet this ran against: each one
+unprunable by construction, and each one a page an hour away from a `rm -rf` it could not act on.
+
+`registry.record_devices()` fills the field, and `server._sweep` calls it hourly. It reads first
+and takes the exclusive lock only when there is something to write, so a complete fleet rotates no
+backup.
+
+It fills a row only when the path is a directory **with something in it**. That single test is
+what keeps this a backfill rather than the wiping predicate arriving by another door: an unmounted
+volume leaves its mount point standing as an empty directory, and to record the underlay's device
+there would have a later verdict call an intact repository `deleted`. An empty directory is left
+blind on purpose.
+
+So `unknown` does not go away, and it is not meant to. A row already missing when the backfill runs
+has taken its device with it. `doctor` prints `coderag forget <keys>` for every missing row it
+cannot judge, because a verdict nothing acts on is a dead end unless the way out is written beside
+it.

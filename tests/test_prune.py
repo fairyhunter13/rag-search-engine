@@ -326,6 +326,80 @@ def test_an_unregistered_path_is_not_a_deletion(make, monkeypatch):
     assert prune.PRUNER.depth == 0
 
 
+def test_a_row_that_never_recorded_a_device_gets_one_back(make):
+    """The backfill, and the verdict it unblocks.
+
+    A row enrolled before `dev` existed answers `unknown` forever, and `unknown`
+    is the verdict `--prune` never acts on. 136 of 503 rows on the fleet this
+    was written against were in that state, and each one was one deletion away
+    from paging every hour with no command able to remove it.
+
+    The two halves are asserted apart on purpose: the field getting a value is
+    not the fix, and the verdict moving off `unknown` is. The control for the
+    second half is `test_an_empty_directory_is_left_blind`, where the same
+    removal against an unfilled row still answers `unknown`.
+    """
+    project = make("enrolled-before-the-field")
+    registry.claim(project, direct=True)
+    registry.update(project, dev=0)
+    key = str(project)
+    assert registry.load()[key].dev == 0
+
+    assert registry.record_devices() == [key]
+    assert registry.load()[key].dev == project.stat().st_dev
+
+    shutil.rmtree(project)
+    assert prune.verdict(registry.load()[key]) == "deleted"
+    assert prune.survey()["deleted"] == [key]
+
+
+def test_an_empty_directory_is_left_blind(make, tmp_path):
+    """A bare mount point must not be given the underlay's device.
+
+    An unmounted volume leaves its mount point standing as an *empty*
+    directory. To record the device that answers it would have a later verdict
+    call an intact repository `deleted` -- the predicate that wiped the fleet,
+    reached by backfill rather than by scan.
+
+    One occupied row stands beside the empty one, because a backfill that
+    filled nothing at all passes the second assertion for the wrong reason.
+    """
+    live = make("occupied")
+    registry.claim(live, direct=True)
+    registry.update(live, dev=0)
+
+    mount_point = tmp_path / "projects" / "the-volume-is-away"
+    mount_point.mkdir(parents=True)
+    registry.claim(mount_point, direct=True)
+    registry.update(mount_point, dev=0)
+
+    filled = registry.record_devices()
+
+    assert filled == [str(live)]
+    assert registry.load()[str(mount_point)].dev == 0
+
+    # The row stays blind, so the removal below reads `unknown` and not
+    # `deleted`. That is the price of the guard, and `doctor` prints the
+    # `forget` command rather than leaving the row with no way out.
+    mount_point.rmdir()
+    assert prune.verdict(registry.load()[str(mount_point)]) == "unknown"
+
+
+def test_a_sweep_with_nothing_to_fill_writes_nothing(make):
+    """What the hourly call costs on a fleet that is already complete.
+
+    `_mutate` rotates a backup on every exit, so an unconditional write here
+    spends the whole `BACKUP_KEEP` window on no-ops and drops the backups that
+    exist to restore the registry.
+    """
+    registry.claim(make("already-recorded"), direct=True)
+    assert registry.record_devices() == []
+
+    before = sorted(p.name for p in config.BACKUP_DIR.glob("projects.*.json"))
+    assert registry.record_devices() == []
+    assert sorted(p.name for p in config.BACKUP_DIR.glob("projects.*.json")) == before
+
+
 def test_a_deleted_member_link_queues_the_root_that_held_it(make, monkeypatch):
     """The other arm: a link is gone, its target may be entirely alive.
 

@@ -9,7 +9,7 @@
   `rank.py` hold zero log calls and the reply carries only `took_ms` and a project count. A louder
   journal was already refused on a measurement, so the record is a JSONL row per search rather
   than prose at INFO.
-* [An absent directory is three answers, and only one is a deletion](an-absent-directory-is-three-answers-and-only-one-is-a-deletion.md) - inotify has no replay, so a repo deleted while the daemon was down reaches no event. The reconciliation that closes that hole answers `deleted`, `unmounted` or `unknown` from the `st_dev` recorded at enrolment, reports by default, and acts on `deleted` alone.
+* [An absent directory is three answers, and only one is a deletion](an-absent-directory-is-three-answers-and-only-one-is-a-deletion.md) - inotify has no replay, so a repo deleted while the daemon was down reaches no event. The reconciliation that closes that hole answers `deleted`, `unmounted` or `unknown` from the `st_dev` recorded at enrolment, reports by default, and acts on `deleted` alone. The hourly sweep backfills the device for any present, occupied path, and leaves an empty directory blind because that is what a bare mount point looks like.
 * [CI runs no GPU and no live job, and the self-hosted runner is
   deregistered](ci-does-not-touch-the-gpu.md) - A self-hosted runner on a public personal-account
   repo cannot be scoped by a runner group. The GPU suites contend for the one card everything else
