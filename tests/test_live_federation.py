@@ -65,25 +65,33 @@ def rpc():
 
 
 @pytest.fixture(scope="module")
-def member(tmp_path_factory):
+def member(tmp_path_factory, rpc):
     """A repo with one first-party file and one vendored blob, so both
     directions of an exclude assertion have something to land on."""
-    return _repo(
+    path = _repo(
         tmp_path_factory.mktemp("member"),
         {
             FIRST_PARTY: f"{NEEDLE}(store):\n    return store.rotate()\n",
             VENDORED: "function ck(){return 'vendored editor bundle'}\n",
         },
     )
+    yield path
+    rpc.tool("index", root=str(path), enabled=False)
 
 
 @pytest.fixture(scope="module")
-def root(tmp_path_factory, member):
-    """A root that reaches the member only through a directory symlink."""
+def root(tmp_path_factory, member, rpc):
+    """A root that reaches the member only through a directory symlink.
+
+    The disable is here and not only in `test_8`: a test is not a teardown. A
+    red anywhere above it, an interrupt, or a `-k` subset skips that test and
+    leaves both rows enabled on a directory pytest later deletes.
+    """
     path = _repo(tmp_path_factory.mktemp("root"), {"app.py": "import member\n"})
     (path / config.PROJECT_CONFIG_NAME).write_text('index:\n  exclude: ["thirdparty/*"]\n')
     (path / "linked-member").symlink_to(member, target_is_directory=True)
-    return path
+    yield path
+    rpc.tool("index", root=str(path), enabled=False)
 
 
 def _hits(rpc, query, root, **kw):

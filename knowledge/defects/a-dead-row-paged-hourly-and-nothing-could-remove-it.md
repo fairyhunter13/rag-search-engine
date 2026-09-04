@@ -1,10 +1,11 @@
 ---
 type: Defect
-resource: src/coderag/registry.py, src/coderag/cli.py
+resource: src/coderag/registry.py, src/coderag/cli.py, src/coderag/prune.py
 title: A dead row paged hourly, and no command could remove it
 description: Twenty rows pointing at deleted temp directories re-failed on every sweep, so the two-sample rule pages forever. `doctor` named them, `--prune` reached only stores, and the recorded fix was editing projects.json by hand. `HEALTH_FAILING_CAP` is 20, so the alert was saturated with junk and could not have shown a real failure.
-tags: [registry, alerting, pruning, resolved]
+tags: [registry, alerting, pruning, open]
 status: stable
+reopened: 2026-09-04
 generated: { by: claude/opus-5, at: 2026-08-24T00:00:00Z }
 ---
 
@@ -83,3 +84,32 @@ The forget runs before the store walk, so a row's directory becomes unclaimed an
 one, and [prune racing the daemon](prune-raced-a-store-the-daemon-was-writing.md) is the same
 lesson from the other direction. The idle-gate arm of `test_prune_forgets_a_row_whose_directory_is_gone` is what
 reds if anyone adds one back.
+
+# `--prune` still cannot reach a row that has no recorded device
+
+2026-09-04, measured on the live registry. Four dead rows paged hourly for twelve hours.
+`doctor --prune` ran, freed 49 unclaimed stores and 147 MiB, and kept all four. `doctor` printed
+them as `MISSING ... (unknown)`.
+
+`prune.verdict` answers `unknown` when `entry.dev` is falsy (`src/coderag/prune.py:107`), and
+`doctor.run` forgets only a row whose verdict is `deleted` (`src/coderag/doctor.py:47`). So a row
+with no recorded device is unprunable, permanently, whatever the filesystem says.
+
+That gate is right. The recorded device is what separates a deleted repo from a mount point left
+standing after its volume went away, and without it there is no evidence to decide on. The defect
+is not the gate. It is that the population it excludes is large and nothing reports it:
+
+**136 of 503 rows carry `dev: 0`.** `registry.claim` writes `disk.device(key) or entry.dev`, so a
+row gets a device only from a claim whose `stat` succeeded after `disk.device` existed. Every one
+of those 136 becomes a permanent hourly page the moment its directory is removed.
+
+`coderag forget <paths>` is the only exit, and it is the one that cleared these four. That is the
+same manual step this concept opened by calling *"not a procedure -- the absence of one"*.
+
+Two candidate repairs, neither taken here, and neither measured:
+
+1. Backfill `dev` on the sweep for a row whose path is present. It empties the population without
+   weakening the verdict, because a device read on a live path is exactly the evidence the gate
+   wants.
+2. Have `doctor` count `unknown` rows out loud, so an unprunable population is visible before one
+   of them dies rather than after it pages.
