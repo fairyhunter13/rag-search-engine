@@ -63,3 +63,54 @@ def test_the_walk_records_what_it_saw(three_stores):
     assert row["walked"] == 3
     assert row["skipped"] == 3
     assert row["blocks_before"] == 0
+
+
+def _one_file_two_chunks(tmp_path, name: str):
+    """A store whose three tables agree, built by hand so a row can be removed."""
+    project = tmp_path / name
+    project.mkdir()
+    conn = store.connect(project)
+    blob = struct.pack(f"{config.EMBED_DIMS}f", *([0.01] * config.EMBED_DIMS))
+    with conn:
+        conn.execute(
+            "INSERT INTO files(path, mtime, size, sha256, lang, n_lines) "
+            "VALUES('a.py', 0, 0, 'x', 'python', 4)"
+        )
+        file_id = conn.execute("SELECT id FROM files").fetchone()["id"]
+        for ordinal in (0, 1):
+            conn.execute(
+                "INSERT INTO chunks(file_id, ord, start_line, end_line, n_chars, "
+                "sha256, text, tokens) VALUES(?, ?, 1, 2, 11, 'y', 'hello world', 2)",
+                (file_id, ordinal),
+            )
+        ids = [r["id"] for r in conn.execute("SELECT id FROM chunks")]
+        conn.executemany(
+            "INSERT INTO chunks_fts(rowid, text, tokens, header) VALUES(?, 'hello world', 2, '')",
+            [(i,) for i in ids],
+        )
+        conn.executemany(
+            "INSERT INTO chunks_vec(chunk_id, embedding) VALUES(?, ?)",
+            [(i, blob) for i in ids],
+        )
+    return conn, ids
+
+
+def test_the_orphan_check_sees_an_fts_row_whose_chunk_is_gone(tmp_path):
+    """The arm the old code fails, and the reason it failed quietly.
+
+    `chunks_fts` is content='chunks', so a SELECT against it reads `chunks`.
+    The old query compared that table with itself and could only ever answer 0
+    -- against the 1 below, on a store where a MATCH still returns the dead
+    rowid. The vec half was right throughout, which is what made the pair read
+    as working.
+    """
+    _reset()
+    conn, ids = _one_file_two_chunks(tmp_path, "orphaned")
+    assert store.orphans(conn) == {"fts": 0, "vec": 0}
+
+    with conn:
+        conn.execute("DELETE FROM chunks WHERE id = ?", (ids[0],))
+
+    assert store.orphans(conn) == {"fts": 1, "vec": 1}
+    hits = conn.execute("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'hello'").fetchall()
+    assert ids[0] in [r["rowid"] for r in hits]

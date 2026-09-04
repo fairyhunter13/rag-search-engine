@@ -71,3 +71,28 @@ rather than that accumulation. The daemon-side number has to be re-read after th
 `memory.enable_memory_arena_shrinkage` under ORT 1.29.0 is untested here and is the other half of
 the question. microsoft/onnxruntime#23339 reports it inert in Python against ORT 1.20.1, and that
 report is stale enough to be worth one run.
+
+# 2026-09-04: the daemon-side re-read, and it is a 58% cut
+
+The section above says the daemon number "has to be re-read after this ships". `fcbaf1f8` shipped
+at 13:17 and the daemon did not restart, so it kept running `ceiling=128`. It was restarted at
+13:47:50 as pid 50722, on glibc and on `ceiling=32` together. Sampled every 15 s for 20 minutes.
+
+| pid | ceiling | peak VRAM | peak `RssAnon` | index passes |
+|---|---|---|---|---|
+| the old one | 128 | 13,956 MiB | — | 364 in its last 60 min |
+| **50722** | **32** | **5,876 MiB** | 1,949 MB | **499 in 20 min** |
+
+**−57.9% VRAM, and the new pid did more work.** 499 index passes against 364. The pass count is
+what drives the batch shapes the BFC arena keeps, so the comparison is not a shorter window that
+simply had less to accumulate.
+
+The clock is the half that does not match: 20 minutes against 63. The arena never shrinks, so a
+longer run can only find shapes this one has not, and this reading cannot rule out that pid 50722
+climbs later. What closes that gap is one reading of the same pid at the age the old one reached.
+It is worth taking, and it can only move the figure up from 5,876 — the direction the ceiling
+change was meant to prevent.
+
+The 4,440 MiB sweep baseline is still not this population, and 5,876 above it is the expected
+direction: a live daemon holds two models and the arena of every shape it has served, and the sweep
+subprocess held one shape.

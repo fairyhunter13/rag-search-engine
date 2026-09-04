@@ -72,3 +72,56 @@ The criterion is not withdrawn, and it is not met either. It is **still unmeasur
 number here isolates the per-project scan: the two figures above are unit totals over a throttled
 card, and the 200 ms it names is a scan. What reverses this decision is a single-project p95 over
 200 ms, measured after the repack, on a host that is not three degrees past its throttle point.
+
+# 2026-09-04: the single-project scan was measured, and three ways to shrink it were refused
+
+The paragraph above rejected quantization on arithmetic. It is now rejected on measurement, and the
+arithmetic it used was wrong: the fleet holds **465 stores, 400,600 vectors, 1.23 GB** of float32
+payload, not the 1.8 GB stated at the top of this card.
+
+Measured warm on the largest store on the fleet, 41,636 vectors and 154 MB of vec0 blocks after the
+repack, 30 queries per arm. Warm and not cold, because swap was full at a load average of 18.91 and
+a cold-cache read on this host measures the host —
+[this host cannot produce an admissible latency number](../constraints/this-host-cannot-produce-an-admissible-latency-number.md).
+
+| arm | p50 | p95 | blocks |
+|---|---|---|---|
+| float32, `k=60` | 76.7 ms | 79.4 ms | 154 MB |
+| int8 + float32 rescore, `k=240` | 77.1 ms | 77.9 ms | 32 MB |
+
+**One fifth of the bytes and the same latency.** At 125 MB the working set is far past L3, so the
+scan is bound by memory bandwidth and float32 already saturates it. Narrower elements only pay
+where the arithmetic dominates, which is the opposite of this shape.
+
+Accuracy would have passed: the rescored top-10 matched float32 on **30 of 30** queries at
+oversample 1. So this is refused on cost, not on correctness. The cost is a second table that must
+stay coherent with the first, `+0.31 GB` over the fleet, and a rewrite of `vector_blocks`,
+`vector_waste` and `repack_vectors`, each of which names one table today. `store.py` sits at 215
+executable lines against the 220 ceiling, so the vector plane would have to move to its own module
+before any of that could be written.
+
+Two nearby levers were measured rather than argued, so neither has to be re-derived.
+
+**Binary quantization is fast and wrong here.** 12.6 ms p50 against 72.5 ms, and 4.0 MB of blocks
+against 154 MB. It is the only variant that moved the warm number, because popcount replaces the
+per-dimension arithmetic. Rescored recall@10 was **0.14 at oversample 4 and 0.41 at oversample 8**.
+
+**Dimension truncation fails on this model.** `EMBED_TRUNCATE_DIMS` already exists, so the arm cost
+nothing:
+
+| dims | blocks | p50 | recall@10 |
+|---|---|---|---|
+| 768 | 129 MB | 73.3 ms | 1.000 |
+| 512 | 86 MB | 47.4 ms | 0.747 |
+| 384 | 64 MB | 38.0 ms | 0.500 |
+| 256 | 43 MB | 24.9 ms | 0.267 |
+
+Truncation is a summary only for a Matryoshka-trained model, whose dimensions are ordered by
+importance. `gte-modernbert-base` is not one, so cutting its tail cuts signal at random.
+
+An ANN index stays refused for the reason above it: 400,600 vectors over 465 scopes is two orders
+of magnitude below where DiskANN or IVF starts to pay, whatever `sqlite-vec` 0.1.10 adds.
+
+The reversal condition is unchanged and is now **partly measured**: the warm single-project p95 is
+79.4 ms against the 200 ms it names. What is still missing is the same figure on a host that is not
+throttled and not swapping.

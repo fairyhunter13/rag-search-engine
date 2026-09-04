@@ -80,6 +80,13 @@
   Every plan in the chain verified with `coderag doctor reports no orphans`. It could not see 144
   index directories, 436 MiB, whose rows were gone. A row-driven walk starts from a row, and these
   had none.
+* [Half of doctor's only structural check compared a table with itself and could only answer
+  0](the-orphan-check-compared-a-table-with-itself.md) - `chunks_fts` is `content='chunks'`, so a
+  SELECT against it reads `chunks` and the orphan query asked which of that table's ids are absent
+  from it. Delete a chunk row and the count stays 0 while a MATCH returns the dead rowid — the
+  exact symptom the docstring names. The vec half was right throughout. Census: 476 stores read, 0
+  real orphans, so the blindness is latent. The fix reads `chunks_fts_docsize` and the new arm
+  fails the old code 0 against 1.
 * [One live test skipped the disable-don't-prune teardown, and it was the whole of doctor's
   red](a-live-test-skipped-the-disable-teardown.md) - The suite's rule is that a live test
   disables what it registers and never prunes. Ten tests in the module did. One did not. Its two
