@@ -2,7 +2,7 @@
 type: Constraint
 resource: src/coderag/gpu.py, src/coderag/embed.py, tests/cpu.py
 title: The embed batch ceiling read as adaptive and was a constant, and 32 is where the VRAM stops falling
-description: "`adaptive_batch` scales to free VRAM and its adaptive branch never bound on a 16 GB card, so the live batch was always its ceiling of 128. Swept 2026-09-04 over 128/64/32/16: 128 and 64 both hold 4,440 MiB, 32 holds 2,392 and 16 holds 2,398. The floor is the model weights, so the -50% threshold written before the sweep was never reachable and 32 takes the whole win at +2.6% wall."
+description: "`adaptive_batch` scales to free VRAM and its adaptive branch never bound on a 16 GB card, so the live batch was always its ceiling of 128. Swept 2026-09-04 over 128/64/32/16: 128 and 64 both hold 4,440 MiB, 32 holds 2,392 and 16 holds 2,398. The floor is the model weights, so the -50% threshold written before the sweep was never reachable and 32 takes the whole win at +2.6% wall. Verified on the live daemon at matched age: 5,746 MiB at 63 minutes against the ceiling=128 pid's 13,956, while serving 857 index passes against 364."
 tags: [vram, gpu, batching, measurement]
 status: stable
 generated: { by: claude/opus-5, at: 2026-09-04T00:00:00Z }
@@ -87,12 +87,33 @@ at 13:17 and the daemon did not restart, so it kept running `ceiling=128`. It wa
 what drives the batch shapes the BFC arena keeps, so the comparison is not a shorter window that
 simply had less to accumulate.
 
-The clock is the half that does not match: 20 minutes against 63. The arena never shrinks, so a
-longer run can only find shapes this one has not, and this reading cannot rule out that pid 50722
-climbs later. What closes that gap is one reading of the same pid at the age the old one reached.
-It is worth taking, and it can only move the figure up from 5,876 — the direction the ceiling
-change was meant to prevent.
+The clock was the half that did not match: 20 minutes against 63. That gap is now closed, on the
+next pid — see below.
 
 The 4,440 MiB sweep baseline is still not this population, and 5,876 above it is the expected
 direction: a live daemon holds two models and the arena of every shape it has served, and the sweep
 subprocess held one shape.
+
+# The age-matched reading, and the ceiling holds
+
+The 20-minute figure above belonged to pid 50722, which the deploy of `f45c61b2` replaced. So the
+reading was retaken from zero on pid 420856, started 14:13:58, sampled every 30 s to the same
+**63-minute** age the `ceiling=128` pid reached.
+
+| pid | ceiling | age | peak VRAM | peak `RssAnon` | index passes |
+|---|---|---|---|---|---|
+| the old one | 128 | 63 min | 13,956 MiB | — | 364 in its last 60 min |
+| 50722 | 32 | 20 min | 5,876 MiB | 1,949 MB | 499 |
+| **420856** | **32** | **63 min** | **5,746 MiB** | 2,054 MB | **857** |
+
+**−58.8% VRAM at matched age, against 2.35× the index work.** The arena never shrinks, so the only
+way the figure stays down is that `ceiling=32` never asks for the shapes 128 did.
+
+The curve is the part a single number hides. VRAM reached 5,746 MiB inside the first 18 minutes and
+did not move again over the remaining 45 — 119 samples, one value. `RssAnon` drifted 2,037 → 2,054
+MB and flattened by minute 42. There is no slow climb here, which is what the 20-minute reading
+could not rule out and this one can.
+
+What is still not claimed: this is one pid on one day's fleet traffic. A workload holding a batch
+shape neither pid has served would grow the arena again, and no reading of a past pid forecloses
+that.
