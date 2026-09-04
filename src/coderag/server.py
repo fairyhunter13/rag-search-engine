@@ -48,6 +48,10 @@ log = logging.getLogger(__name__)
 
 _ticker: threading.Thread | None = None
 _stop = threading.Event()
+# Read by the shutdown deadline below. `lifespan` also runs in-process under
+# TestClient, where the timer bounds no uvicorn and kills the pytest process
+# instead -- at exit 0, which reads as a green suite.
+_serving = False
 # Keyed by job name so a recovery clears only its own entry.
 _tick_errors: dict[str, str] = {}
 
@@ -165,9 +169,10 @@ async def lifespan(_app) -> AsyncIterator[None]:
         # group waits on children, and a plain-`def` tool runs under anyio's
         # shielded thread, so the cancel cannot reach it and the wait has no
         # bound. Everything below is advisory; this is the one that ends.
-        deadline = threading.Timer(config.SHUTDOWN_DEADLINE_S, _shutdown_exit, [True])
-        deadline.daemon = True
-        deadline.start()
+        if _serving:
+            deadline = threading.Timer(config.SHUTDOWN_DEADLINE_S, _shutdown_exit, [True])
+            deadline.daemon = True
+            deadline.start()
         _stop.set()
         watchdog.disarm()
         watch.stop()
@@ -271,6 +276,8 @@ def serve(host: str = "", port: int = 0) -> None:
         # 3,800 of one day's 5,912 journal lines, each announcing a change count
         # and naming no project. The watch ledger row names one.
         logging.getLogger("watchfiles").setLevel(logging.WARNING)
+    global _serving
+    _serving = True
     # uvicorn restores the handler it replaced and then re-raises the signal it
     # caught, so the exit below never ran on a stop: the process died -15 under
     # the default disposition. Installing this first makes ours the handler it
