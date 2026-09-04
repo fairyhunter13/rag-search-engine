@@ -14,6 +14,12 @@
   deregistered](ci-does-not-touch-the-gpu.md) - A self-hosted runner on a public personal-account
   repo cannot be scoped by a runner group. The GPU suites contend for the one card everything else
   is serialized on. Both reasons point the same way.
+* [jemalloc is refused, because three arms lost and the last one was worse than
+  glibc](jemalloc-lost-the-number-it-was-chosen-for.md) - Gate −25% `RssAnon`, written first. The
+  subprocess arm gave −5.3%, the live daemon −12% at 40 minutes and **+3.7% at 55**, rising the
+  whole way against a 2,586 MB glibc baseline. The mechanism is workload shape, not maintenance:
+  Meta un-archived jemalloc in March 2026, and `malloc_trim` under it is inert, which would have
+  silently cost `release_models` its 2,082 MiB reclaim.
 * [Membership is a directory symlink at depth four or less, and the sweep is what makes that
   automatic](membership-is-a-symlink-and-the-depth-limit-is-measured.md) - Both halves of the
   membership predicate were inherited from the deleted v1 engine and argued nowhere. The depth

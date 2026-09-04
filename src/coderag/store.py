@@ -269,8 +269,11 @@ def orphans(conn: sqlite3.Connection) -> dict[str, int]:
     delete path that forgot a table -- the failure whose symptom is a plausible
     search result pointing at nothing.
     """
+    # chunks_fts is content='chunks', so selecting from it reads `chunks` and the
+    # obvious query compares that table with itself -- always 0. The docsize
+    # shadow table is the index's own row set, which is what has to be compared.
     fts = conn.execute(
-        "SELECT COUNT(*) AS n FROM chunks_fts WHERE rowid NOT IN (SELECT id FROM chunks)"
+        "SELECT COUNT(*) AS n FROM chunks_fts_docsize WHERE id NOT IN (SELECT id FROM chunks)"
     ).fetchone()["n"]
     vec = conn.execute(
         "SELECT COUNT(*) AS n FROM chunks_vec WHERE chunk_id NOT IN (SELECT id FROM chunks)"
