@@ -52,6 +52,11 @@
   arm on a quiet machine, an indexing pass costs ~1.1 mean cores. None of MALLOC_ARENA_MAX,
   RAYON_NUM_THREADS, intra/inter-op thread caps, spin-wait or the CPU arena cleared its
   pre-committed threshold. MALLOC_ARENA_MAX=2 made it 27% worse.
+* [The embed batch ceiling read as adaptive and was a constant, and 32 is where the VRAM stops
+  falling](the-embed-batch-ceiling-read-as-adaptive-and-was-a-constant.md) - `adaptive_batch` never
+  bound below its ceiling on a 16 GB card, so the live batch was always 128. Swept over 128/64/32/16:
+  128 and 64 both hold 4,440 MiB, 32 holds 2,392 and 16 holds 2,398. The floor is the weights, so the
+  −50% gate was unreachable by construction and is recorded as failed rather than moved.
 * [The search unit is the caller's own workspace plus what it federates, and that is containment rather than authorization](the-search-unit-is-the-callers-own-workspace.md) - The root was a string the model wrote, so any of ~159 registered projects was reachable from any session by naming it. The boundary now comes from the client's own roots, through a parameter the model cannot see — and the honest claim for it is narrow.
 * [This host cannot produce an admissible latency number while it
   throttles](this-host-cannot-produce-an-admissible-latency-number.md) - The laptop's GPU runs at

@@ -199,12 +199,17 @@ def free_vram_bytes() -> int:
     return int(first[0].strip()) * 1024 * 1024 if first else 0
 
 
-def adaptive_batch(per_item_bytes: int, floor: int = 8, ceiling: int = 128) -> int:
+def adaptive_batch(per_item_bytes: int, floor: int = 8, ceiling: int = 32) -> int:
     """Batch size scaled to free VRAM, honouring an explicit override.
 
     A fixed batch either wastes a 16 GB card or OOMs it, depending only on what
     else is resident at the time -- and what else is resident is another
     session's model, which this process cannot see.
+
+    The ceiling was 128 and the adaptive branch never bound below it on this
+    card, so 128 was the live batch. Swept 2026-09-04: 128 and 64 both hold
+    4,440 MiB, 32 holds 2,392 MiB and 16 holds 2,398. The floor is the weights,
+    so 32 buys the whole win and 16 buys nothing more for a smaller batch.
     """
     if config.EMBED_BATCH > 0:
         return config.EMBED_BATCH
