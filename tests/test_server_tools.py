@@ -447,6 +447,38 @@ async def test_the_startup_sweep_is_the_difference_between_serving_and_indexing(
     assert len(called) == expected
 
 
+@pytest.mark.parametrize("serving,armed", [(False, 0), (True, 1)])
+async def test_the_shutdown_deadline_arms_only_in_a_serving_process(monkeypatch, serving, armed):
+    """The deadline ends the process with `os._exit(0)`, and under TestClient
+    that process is pytest. A run died mid-suite at exit 0 with the summary
+    unwritten, which reads as a pass -- the failure a green tick cannot show.
+
+    Both arms, because deleting the timer also passes the `serving=False` half.
+    """
+    armings = []
+
+    class _Spy:
+        def __init__(self, *args):
+            armings.append(args)
+            self.daemon = False
+
+        def start(self) -> None:
+            pass
+
+    monkeypatch.setattr(server.threading, "Timer", _Spy)
+    # `raising=False` so the predecessor fails this on the arming count rather
+    # than on a missing attribute -- a red for the wrong reason proves nothing.
+    monkeypatch.setattr(server, "_serving", serving, raising=False)
+    monkeypatch.setattr(config, "RECONCILE_ON_START", False)
+    monkeypatch.setattr(index, "start_worker", lambda: None)
+    monkeypatch.setattr(watch, "start", lambda: None)
+    monkeypatch.setattr(watchdog, "notify", lambda _msg: None)
+
+    async with server.lifespan(None):
+        pass
+    assert len(armings) == armed, armings
+
+
 def test_the_notifier_is_silent_without_a_socket(monkeypatch):
     monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
     watchdog.notify("READY=1")  # must not raise outside systemd

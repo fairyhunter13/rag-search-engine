@@ -124,6 +124,12 @@
   was indexed with 287 value-bearing KEY=value lines, `env-template` with 197 and `.env-example`
   with 9. `*.template` does not match `env-template` either, so the two templates were missed
   rather than exempted. Indexed by accident, which is the same outcome as the one that is not.
+* [The shutdown deadline killed the pytest process at exit 0, so a failing suite reported
+  success](the-shutdown-deadline-killed-the-test-process-at-exit-0.md) - `lifespan`'s finally arms
+  a 15 s `threading.Timer` on `_shutdown_exit`, which ends in `os._exit(0)`, and nothing cancels
+  it. Four in-process lifespan runs in `tests/test_server_tools.py` put that timer inside pytest.
+  Three full runs died at 619, 639 and 74,747 bytes with no summary and exit 0. Named by
+  `strace -k`; the timer now arms only in a process `serve` started.
 * [The stop hung again, because a canceled task group waits for a thread it cannot
   cancel](a-cancelled-task-group-cannot-reach-a-shielded-thread.md) - timeout_graceful_shutdown
   bounds the connection wait and nothing else. The 90 s was spent in the lifespan shutdown,
