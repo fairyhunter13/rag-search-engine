@@ -1,11 +1,12 @@
 ---
 type: Defect
-resource: src/coderag/registry.py, src/coderag/cli.py, src/coderag/prune.py
+resource: src/coderag/registry.py, src/coderag/cli.py, src/coderag/prune.py, src/coderag/server.py, src/coderag/doctor.py
 title: A dead row paged hourly, and no command could remove it
 description: Twenty rows pointing at deleted temp directories re-failed on every sweep, so the two-sample rule pages forever. `doctor` named them, `--prune` reached only stores, and the recorded fix was editing projects.json by hand. `HEALTH_FAILING_CAP` is 20, so the alert was saturated with junk and could not have shown a real failure.
-tags: [registry, alerting, pruning, open]
+tags: [registry, alerting, pruning]
 status: stable
 reopened: 2026-09-04
+resolved: 2026-09-04
 generated: { by: claude/opus-5, at: 2026-08-24T00:00:00Z }
 ---
 
@@ -106,10 +107,19 @@ of those 136 becomes a permanent hourly page the moment its directory is removed
 `coderag forget <paths>` is the only exit, and it is the one that cleared these four. That is the
 same manual step this concept opened by calling *"not a procedure -- the absence of one"*.
 
-Two candidate repairs, neither taken here, and neither measured:
+Both candidate repairs were taken, on the same day.
 
-1. Backfill `dev` on the sweep for a row whose path is present. It empties the population without
-   weakening the verdict, because a device read on a live path is exactly the evidence the gate
-   wants.
-2. Have `doctor` count `unknown` rows out loud, so an unprunable population is visible before one
-   of them dies rather than after it pages.
+`registry.record_devices()` fills the field for a row whose path is present, and `server._sweep`
+calls it hourly. It empties the population without weakening the verdict, because a device read on
+a live path is exactly the evidence the gate wants. All 136 rows on this fleet were present and
+occupied, so one pass cleared every one of them and the count is now 0 of 499.
+
+The guard is the *occupied* test, and it is the whole reason this is a backfill and not the wiping
+predicate again. An unmounted volume leaves its mount point standing as an empty directory. To
+write the underlay's device onto that row would have a later verdict call an intact repository
+`deleted`. So an empty directory is left blind, and stays blind, and `doctor` now prints the
+`coderag forget` line for every missing row the verdict cannot judge.
+
+A row already missing when the backfill runs cannot be filled: its device is gone with it. Those
+stay `unknown` forever, and the printed command is their only exit. That is the residue this
+concept keeps.

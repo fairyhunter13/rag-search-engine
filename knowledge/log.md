@@ -507,3 +507,29 @@ title: coderag knowledge history
   `coderag-alert@`, that unit runs `notify-send`. Three units and no reasoning; `systemd.py` reads
   the same in less space.
 
+
+- **Update**: the "nothing could remove it" half of [a dead row paged
+  hourly](defects/a-dead-row-paged-hourly-and-nothing-could-remove-it.md) is closed, and [an absent
+  directory is three answers](decisions/an-absent-directory-is-three-answers-and-only-one-is-a-deletion.md)
+  gains the section that says why the repair is not the scan it forbids. `registry.record_devices()`
+  fills `dev` for a row whose path is a directory with something in it, and `server._sweep` calls it
+  hourly. All **136 of 499** blind rows on this fleet were present and occupied, so one pass cleared
+  every one and the count is now 0. The occupied test is the whole guard: an unmounted volume leaves
+  its mount point standing as an *empty* directory, and to write the underlay's device onto that row
+  would have a later verdict call an intact repository `deleted` -- the predicate that wiped 236 rows,
+  reached by backfill instead of by scan. Measured on the live fleet before the change: of the 136,
+  **0** were missing and **0** were empty, so the guard cost nothing here and is written for the two
+  `fuse.rclone` mounts that are not indexed yet. A row already missing when the backfill runs cannot
+  be filled -- its device went with it -- so `doctor` now prints the `coderag forget <keys>` line for
+  every missing row the verdict cannot judge, rather than leaving `unknown` as a dead end.
+
+- **Update**: [a live test skipped the disable-teardown](defects/a-live-test-skipped-the-disable-teardown.md)
+  gains the case no placement of a `finally` can fix. The verification run for the backfill leaked
+  `wroot0` and `wmember0` out of the fixture that had just been guarded: the `finally` ran, and both
+  `index(enabled=False)` calls raised `ConnectError: [Errno 111] Connection refused`, because systemd
+  SIGABRT'd the daemon on a watchdog timeout mid-suite. A teardown that is an RPC cannot reach a dead
+  daemon. The rows survived it anyway, and that is the point of the entry: both carried a real
+  `st_dev` from the backfill, so once pytest deleted the directories they answered `deleted` and
+  `doctor --prune` forgot both with no `forget` typed by hand. Separately noted and not repaired:
+  three `Watchdog timeout (limit 1min 30s)` kills at 09:11, 09:13 and 09:42 under a full-suite load,
+  all in processes that predate the backfill.

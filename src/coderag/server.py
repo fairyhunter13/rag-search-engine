@@ -68,6 +68,12 @@ def _sweep() -> None:
     for member in claimed:
         index.submit(member, reason="sweep")
     reconciled = index.reconcile_all()
+    # A row with no recorded device can never be pruned, so it outlives its own
+    # directory and pages hourly. The sweep is where a present path is cheapest
+    # to ask about.
+    devices = registry.record_devices()
+    if devices:
+        log.info("recorded a device for %d row(s) that had none", len(devices))
     watch.rearm_if_changed()
     # A sweep that claims nothing logs nothing, and nearly every sweep claims
     # nothing. So the hourly job that enqueues the fleet left no evidence it ran.
@@ -77,6 +83,7 @@ def _sweep() -> None:
             "claimed": [str(m) for m in claimed],
             "released": [str(m) for m in released],
             "reconciled": reconciled,
+            "devices": len(devices),
             "took_ms": round((time.perf_counter() - started) * 1000, 2),
         },
     )
