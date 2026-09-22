@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-push gate for the knowledge/ bundle.
+# Pre-push gate. Two blocks: public hygiene, then the knowledge/ bundle.
 #
 # CI runs tests/test_okf_bundle.py, but only on push to the remote -- by which point the
 # change is already published. This is the same check at the moment it is made.
@@ -11,6 +11,24 @@
 set -uo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# This repository is public, and a name reaches the world on push and not on commit. CI
+# runs this file with CODERAG_NAME_BAN=none, which is correct and is also why CI cannot be
+# the gate for it: a public runner holds no private list. The list lives in the environment
+# and never in the tree, and unset is the failing state.
+#
+# graphrag's hook has carried this arm since the six-rule ruling of 2026-08-29, and the two
+# repositories now run the same two blocks in the same order.
+PY="$REPO_ROOT/.venv/bin/python"
+[[ -x "$PY" ]] || PY="python3"
+if ! "$PY" -m pytest -q "$REPO_ROOT/tests/test_public_hygiene.py" >/tmp/coderag-hygiene.$$ 2>&1; then
+  cat /tmp/coderag-hygiene.$$
+  rm -f /tmp/coderag-hygiene.$$
+  echo "[pre-push] ✗ public hygiene failed — push blocked"
+  echo "[pre-push]   set CODERAG_NAME_BAN to the private-name list, or to 'none' for a clean clone"
+  exit 1
+fi
+rm -f /tmp/coderag-hygiene.$$
 
 if [[ -d "$REPO_ROOT/knowledge" ]]; then
   if ! command -v okfrules >/dev/null 2>&1; then
