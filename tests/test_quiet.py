@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from coderag import index, quiet, tools
+from coderag import index, projstatus, quiet
 
 
 @pytest.fixture(autouse=True)
@@ -103,8 +103,8 @@ def test_a_held_project_counts_as_pending_for_its_unit(tmp_path):
     """Otherwise `index` answers 0 to "I saved a file and nothing happened"."""
     index.submit(tmp_path, ["a.py"], reason="watch", delay=60)
 
-    assert tools._pending({tmp_path.resolve()}) == 1
-    assert tools._pending({tmp_path.resolve() / "elsewhere"}) == 0
+    assert projstatus.pending({tmp_path.resolve()}) == 1
+    assert projstatus.pending({tmp_path.resolve() / "elsewhere"}) == 0
 
 
 def test_the_worker_promotes_a_job_once_its_countdown_expires(tmp_path):

@@ -26,7 +26,7 @@ from . import (
     federation,
     index,
     projcfg,
-    quiet,
+    projstatus,
     registry,
     scope,
     search,
@@ -106,7 +106,7 @@ def index_project(
         # one index.submit per member, a watcher re-arm. A caller asking how far
         # the build had got paid a fleet write for the answer.
         try:
-            return _status(target, federation.members_of(target))
+            return projstatus.of(target, federation.members_of(target))
         except projcfg.ConfigError as exc:
             # _status reads .coderag.yaml for suppressed_by_inherited_excludes,
             # so a broken config raises on the way out. enroll already answers
@@ -174,60 +174,7 @@ def enroll(target: Path) -> dict[str, Any]:
     watch.start()
     index.start_worker()
 
-    return _status(target, members)
-
-
-def _pending(unit: set[Path]) -> int:
-    """Walks queued or held for this unit, where `queue_depth` is the fleet's.
-
-    Here rather than in `index`, which owns the queue and does not read it. The
-    held half counts: a watch job waits out the quiet window off the queue, and
-    reporting 0 there is "I saved a file and nothing happened".
-    """
-    with index._queue.mutex:
-        queued = {j.project for j in index._queue.queue if j is not None and j.project in unit}
-    return len(queued | (quiet.projects() & unit))
-
-
-def _status(target: Path, members: list[Path]) -> dict[str, Any]:
-    entry = registry.get(target)
-    roots = list(entry.roots) if entry else []
-    # The unit is the root together with its members, so the counts are too. The
-    # root's own row is 33,053 chunks of the 185,453 this project answers from,
-    # and reporting it alone told a caller its project was 17.8% built.
-    rows = registry.load()
-    unit = [row for p in (target, *members) if (row := rows.get(str(p))) and row.enabled]
-    out = {
-        "root": str(target),
-        "members": len(members),
-        "roots": roots,
-        "indexed": {
-            "files": sum(row.file_count for row in unit),
-            "chunks": sum(row.chunk_count for row in unit),
-            "projects": len(unit),
-        },
-        # Per project, because that is the grain the store, the watcher and the
-        # queue all work at, and one stuck member is invisible in any total.
-        "root_indexed": {
-            "files": entry.file_count if entry else 0,
-            "chunks": entry.chunk_count if entry else 0,
-        },
-        "pending": _pending({row.path for row in unit}),
-        "members_watching": sum(1 for row in unit if row.path != target and watch.armed(row.path)),
-        "member_errors": [
-            {"project": str(row.path), "error": row.last_error}
-            for row in unit
-            if row.path != target and row.last_error
-        ],
-        "suppressed_by_inherited_excludes": index.suppressed_by_excludes(target, tuple(roots)),
-        "last_error": entry.last_error if entry else None,
-        # Durable: last_error is cleared by the next success, so on an hourly reconcile
-        # these are the only trace a failure that resolved itself ever leaves.
-        "last_error_at": entry.last_error_at if entry else None,
-        "error_total": entry.error_total if entry else 0,
-        "watching": watch.armed(target),
-    }
-    return out | index.status()
+    return projstatus.of(target, members)
 
 
 def _batched(answers: list[dict[str, Any]], note: str) -> dict[str, Any]:
