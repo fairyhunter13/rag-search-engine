@@ -15,6 +15,7 @@ import pytest
 from coderag import (
     cli,
     config,
+    federation,
     index,
     quarantine,
     registry,
@@ -195,6 +196,68 @@ def test_the_status_counts_the_members_and_not_only_the_root(tmp_path, monkeypat
     assert out["member_errors"] == [{"project": str(member), "error": "broken .coderag.yaml"}], out
     # Whole-project walks for this unit, where `queue_depth` answers for the fleet.
     assert out["pending"] == 2, out
+
+
+def test_status_reads_the_same_counts_the_enrolment_reply_carries(tmp_path, monkeypatch, pin):
+    """The description has promised "call again for status" since the first
+    release, and the second call re-enrolled the whole federation."""
+    monkeypatch.setattr(watch, "start", lambda: None)
+    monkeypatch.setattr(index, "start_worker", lambda: None)
+    member, root = tmp_path / "m", tmp_path / "r"
+    (member / "src").mkdir(parents=True)
+    root.mkdir()
+    (root / "linked").symlink_to(member, target_is_directory=True)
+    tools.index_project(pin(root), str(root))
+    registry.update(root, file_count=1, chunk_count=2)
+    registry.update(member, file_count=10, chunk_count=20)
+
+    out = tools.index_project(pin(root), str(root), status=True)
+
+    assert out["indexed"] == {"files": 11, "chunks": 22, "projects": 2}, out
+    assert out["members"] == 1 and out["root_indexed"] == {"files": 1, "chunks": 2}, out
+
+
+def test_status_writes_nothing_at_all(tmp_path, monkeypatch, pin):
+    """The assertion that matters, and the one a key comparison cannot make:
+    reading the counts must not register the federation, queue a walk, arm a
+    watcher or start the worker. Every write path raises, so a status call that
+    touches one fails here."""
+    monkeypatch.setattr(watch, "start", lambda: None)
+    monkeypatch.setattr(index, "start_worker", lambda: None)
+    root = tmp_path / "r"
+    root.mkdir()
+    tools.index_project(pin(root), str(root))
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a status read must write nothing")
+
+    for module, name in (
+        (federation, "register"),
+        (index, "submit"),
+        (index, "start_worker"),
+        (watch, "start"),
+        (watch, "rearm_if_changed"),
+    ):
+        monkeypatch.setattr(module, name, refuse)
+
+    out = tools.index_project(pin(root), str(root), status=True)
+
+    assert out["root"] == str(root), out
+
+
+def test_status_wins_over_a_contradictory_unflag(tmp_path, monkeypatch, pin):
+    """`status=True, enabled=False` is a caller mistake, and the read is the
+    safe answer to it: unflagging is what `enabled=False` alone already does."""
+    monkeypatch.setattr(watch, "start", lambda: None)
+    monkeypatch.setattr(index, "start_worker", lambda: None)
+    root = tmp_path / "r"
+    root.mkdir()
+    tools.index_project(pin(root), str(root))
+
+    out = tools.index_project(pin(root), str(root), enabled=False, status=True)
+
+    assert "enabled" not in out, out
+    assert root in [e.path for e in registry.enabled_projects()]
 
 
 def test_a_search_error_is_returned_as_data_not_raised(tmp_path, pin):

@@ -30,6 +30,14 @@ build is a session that stalls for an hour. `index` returns the current state �
 project in flight, counts, `last_error` — so calling it again *is* the status check. That is why
 there is no third action.
 
+**The read-only status is a parameter, not a third tool.** Until 2026-09-22 the second call was an
+enrolment: `federation.register`, one `index.submit` per member, a watcher re-arm and a worker
+start, all to read a number. `index(status=True)` returns the same `_status` payload and writes
+nothing. It stays a parameter because the surface is the decision — a `status` tool is exactly the
+kind of operator concern this decision keeps on the CLI, where `doctor` and `list` already live.
+`status=True` wins over a contradictory `enabled=False`: the read is the safe answer, and
+unflagging is what `enabled=False` alone already does.
+
 **`search` names one root, never a list, and never widens**. Fleet-wide fan-out across 148
 projects measured **164.78 s against 7.01 s** scoped. It answered a question about one repo with a
 member's vendored JavaScript. If the cwd is not a flagged root, `search` returns an error naming what to

@@ -45,8 +45,9 @@ Code retrieval over the current project and the repos it federates.
   see one working tree, this sees all of them. Fall back to them when a call
   errors or hangs, and quote the error -- the two have different causes.
 - `index` flags the current root as indexed and returns immediately; the work
-  runs in the background. Call it again to read status -- there is no third
-  action and no wait parameter.
+  runs in the background. `index(status=True)` reads the counts and writes
+  nothing -- use it to watch a build. A bare `index` call is an enrolment, so
+  it re-registers the federation and re-queues every member.
 - `search` returns ranked LOCATIONS: path, line range and a short preview. Read
   the ranges you want. Pass include_body=True only when you need bodies inline.
 - Use mode="lexical" for an exact identifier, signature or error string, and
@@ -72,7 +73,8 @@ mcp = MCPServer(
 @mcp.tool(
     name="index",
     description="Flag the current root and its federated projects as indexed. "
-    "Returns immediately; indexing runs in the background. Call again for status.",
+    "Returns immediately; indexing runs in the background. "
+    "Call index(status=True) to read counts without writing anything.",
     # Without this the reply carries the payload only as a JSON string inside a
     # text block, which every caller re-parses and no schema covers. It needs
     # the concrete `dict[str, Any]`: a bare `dict` is refused at import.
@@ -82,8 +84,15 @@ def index_project(
     pinned: scope.Pinned,
     root: str = "",
     enabled: bool = True,
+    status: bool = False,
     verdict: scope.Verdicted = None,
 ) -> dict[str, Any]:
+    """Enrol a root, unflag it, or -- with `status=True` -- only read it.
+
+    `status=True` wins over `enabled=False`. The read is the safe answer to a
+    contradictory call, and unflagging is what `enabled=False` alone already
+    does.
+    """
     # Pinned, and `search` is not. Enrolling a root is fleet work -- an hourly
     # reconcile and an inotify arm on every file -- where reading one is a query.
     try:
@@ -91,6 +100,18 @@ def index_project(
         scope.enforce(target, pinned, verdict)
     except scope.ScopeError as exc:
         return {"error": str(exc)}
+    if status:
+        # The description has promised "call again for status" from the first
+        # release, and until now the second call re-enrolled: federation.register,
+        # one index.submit per member, a watcher re-arm. A caller asking how far
+        # the build had got paid a fleet write for the answer.
+        try:
+            return _status(target, federation.members_of(target))
+        except projcfg.ConfigError as exc:
+            # _status reads .coderag.yaml for suppressed_by_inherited_excludes,
+            # so a broken config raises on the way out. enroll already answers
+            # this shape rather than an isError envelope with no status attached.
+            return {"root": str(target), "error": str(exc), "last_error": str(exc)}
     if not enabled:
         # Unflagging never deletes an index directory. Both fleet-wide index
         # wipes in this engine's history came from something that deleted store
