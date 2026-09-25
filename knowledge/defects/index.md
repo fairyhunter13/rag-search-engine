@@ -1,5 +1,9 @@
 # Defect
 
+* [The watcher lane skipped the size cap, and one file starved the
+  daemon](the-watcher-lane-skipped-the-size-cap.md) - `index.py` reads watcher paths with
+  `discover.read()`, and only the walk checked `MAX_FILE_BYTES`. A 7.8 MB one-line build file held
+  the GIL in the chunker, and nothing was answered for 15 minutes. `read()` now enforces the cap.
 * [1768 zero-root pins were an answered-empty case the log could not
   name](empty-root-answers-from-clients-nothing-identifies.md) - Of ~1865 zero-root pins only 97
   took the no-capability branch and none took the protocol-era branch. The rest asked and got an
