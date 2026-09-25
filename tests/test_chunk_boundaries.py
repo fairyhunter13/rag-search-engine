@@ -66,3 +66,24 @@ def test_the_shipped_budget_is_two_thousand_and_it_is_what_chunks_a_real_file():
 
     assert len(chunks) > 1
     assert max(nonwhitespace(c.text) for c in chunks) <= config.CHUNK_CHARS
+
+
+def test_a_long_line_is_measured_in_bounded_windows_and_still_located(monkeypatch):
+    """One 7.7 MB line of JSON held the GIL for 20 minutes, because the splitter
+    measured candidates that grew with the file. The windows bound every
+    candidate, and the offset contract still holds across a window seam."""
+    from coderag import chunk
+
+    text = "prefix\n[" + ",".join(f'{{"id":{i},"name":"hôtel {i}"}}' for i in range(4000)) + "]\ntail\n"
+    seen = []
+    monkeypatch.setattr(chunk, "nonwhitespace", lambda s: seen.append(len(s)) or nonwhitespace(s))
+    chunks = chunk_text(text, size=500, overlap=0, header=False)
+
+    assert chunk._longest_line(text) > chunk.LONG_LINE
+    assert max(seen) <= chunk.LONG_LINE
+    offset = 0
+    for c in chunks:
+        assert text[offset:].startswith(c.text)
+        assert text.count("\n", 0, offset) + 1 == c.start_line
+        offset += len(c.text)
+    assert offset == len(text)
