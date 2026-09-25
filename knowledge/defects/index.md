@@ -1,5 +1,9 @@
 # Defect
 
+* [Arming the watch held the GIL past the watchdog, and systemd killed the daemon 7
+  times](the-watch-arm-held-the-gil-past-the-watchdog.md) - watchfiles' `RustNotify` holds the
+  GIL while it walks every watched directory: 7.7 s over 110,827 at load 12, past 90 s at load
+  27-40. No ping went out, and each restart walked again. The watch now arms in a child process.
 * [The watcher lane skipped the size cap, and one file starved the
   daemon](the-watcher-lane-skipped-the-size-cap.md) - `index.py` reads watcher paths with
   `discover.read()`, and only the walk checked `MAX_FILE_BYTES`. A 7.8 MB one-line build file held

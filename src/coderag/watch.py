@@ -21,11 +21,16 @@ been recorded.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
+import os
+import selectors
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
-from watchfiles import watch as _watch
+from watchfiles import Change
 
 from . import config, discover, index, projcfg, prune, registry, runledger
 
@@ -42,6 +47,45 @@ _intent: tuple[tuple[Path, tuple[float, ...]], ...] = ()
 # project. Cleared by the first yield of the next pass, which is the recovery.
 _error: str | None = None
 _lock = threading.Lock()
+
+
+def _watch(*roots: Path, stop_event: threading.Event, debounce: int, rust_timeout: int):
+    """`watchfiles.watch`, run in `coderag.watchchild`: same arguments, same batches.
+
+    Arming walks every directory under every root while `RustNotify` holds the
+    GIL, which stopped this process for 7.7 s over 110,827 directories and past
+    the 90 s watchdog under load. In the child the walk holds the child's GIL.
+    The child writes an empty batch on every timeout, which is `yield_on_timeout`
+    always on. A dead child raises `OSError`, which `_loop` already re-arms on.
+    """
+    child = subprocess.Popen(
+        [sys.executable, "-m", "coderag.watchchild", str(debounce), str(rust_timeout)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+    )
+    try:
+        child.stdin.write(json.dumps([str(root) for root in roots]).encode())
+        child.stdin.close()
+        fd, pending = child.stdout.fileno(), b""
+        with selectors.DefaultSelector() as ready:
+            ready.register(fd, selectors.EVENT_READ)
+            while not stop_event.is_set():
+                if b"\n" not in pending:
+                    # Short, so `stop` never waits out the child's poll.
+                    if ready.select(0.2):
+                        chunk = os.read(fd, 1 << 16)
+                        if not chunk:
+                            raise OSError(f"the watch process exited with status {child.wait()}")
+                        pending += chunk
+                    continue
+                line, pending = pending.split(b"\n", 1)
+                batch = json.loads(line)
+                if isinstance(batch, dict):
+                    raise OSError(batch["error"])
+                yield {(Change(change), path) for change, path in batch}
+    finally:
+        child.kill()
+        child.wait()
 
 
 def _owner(path: Path, roots: list[Path]) -> Path | None:
@@ -162,7 +206,6 @@ def _loop() -> None:
                 stop_event=_stop,
                 debounce=config.WATCH_DEBOUNCE_MS,
                 rust_timeout=config.WATCH_POLL_MS,
-                yield_on_timeout=True,
             ):
                 # Only now. Establishing ~120,000 watches takes seconds, and a
                 # write in that window is lost -- so anything waiting on `armed`
