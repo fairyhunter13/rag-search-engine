@@ -582,3 +582,35 @@ def test_a_dropped_event_says_which_of_the_five_answers_applies(tmp_path):
 
 def test_the_owner_helper_accepts_the_project_root_itself(tmp_path):
     assert watch._owner(Path(tmp_path), [tmp_path]) == tmp_path
+
+
+def _longest_stall_while_arming(arm, root: Path) -> float:
+    """The longest gap a 10 ms heartbeat thread saw while `arm` ran to its first yield."""
+    beats, done = [], threading.Event()
+
+    def heartbeat():
+        while not done.is_set():
+            beats.append(time.perf_counter())
+            time.sleep(0.01)
+
+    threading.Thread(target=heartbeat, daemon=True).start()
+    time.sleep(0.1)
+    stop = threading.Event()
+    for _batch in arm(root, stop_event=stop, debounce=50, rust_timeout=100):
+        break
+    done.set()
+    return max(b - a for a, b in zip(beats, beats[1:], strict=False))
+
+
+def test_arming_a_large_tree_never_stops_the_daemons_threads(tmp_path):
+    """`RustNotify` holds the GIL for the whole arming walk. In-process that
+    stopped every thread for 7.7 s over 110,827 directories, and past the 90 s
+    watchdog under load, so systemd killed the daemon 7 times. The child process
+    holds its own GIL, and this one keeps running."""
+    # 60,000 directories stall an in-process arm for 0.55-0.62 s on this machine,
+    # and the child-process arm for 0.01 s.
+    for i in range(300):
+        for j in range(200):
+            (tmp_path / f"d{i}" / f"e{j}").mkdir(parents=True)
+
+    assert _longest_stall_while_arming(watch._watch, tmp_path) < 0.25
