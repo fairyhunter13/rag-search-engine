@@ -227,8 +227,14 @@ def read(project: Path | str, rel: str) -> FileMeta | None:
         if full.is_symlink():
             return None
         stat = full.stat()
+        # The cap is checked here as well as in the walk, because the watcher lane
+        # calls read() directly and a build can grow a file after the walk saw it.
+        if stat.st_size > config.MAX_FILE_BYTES:
+            return None
         raw = full.read_bytes()
     except (OSError, ValueError):
+        return None
+    if len(raw) > config.MAX_FILE_BYTES:
         return None
 
     if filters.looks_binary(raw):

@@ -291,6 +291,14 @@ def test_a_file_that_vanished_mid_walk_is_skipped_not_fatal(tmp_path):
     assert discover.read(tmp_path, "never-existed.py") is None
 
 
+def test_read_refuses_an_oversized_file_the_watcher_names(tmp_path, monkeypatch):
+    """The watcher lane calls read() with no walk, so the cap has to hold here.
+    A 7.8 MB one-line search.json starved the event loop for 15 minutes."""
+    monkeypatch.setattr(config, "MAX_FILE_BYTES", 100)
+    (tmp_path / "search.json").write_text("x" * 500)
+    assert discover.read(tmp_path, "search.json") is None
+
+
 def test_read_returns_content_with_its_hash_and_language(repo):
     meta = discover.read(repo, "src/app.py")
     assert meta.lang == "python" and meta.n_lines >= 3
