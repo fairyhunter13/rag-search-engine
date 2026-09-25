@@ -35,9 +35,8 @@ from live import HEADERS, Rpc, require_clear_gpu, until
 
 pytestmark = pytest.mark.restart
 
-# Enough files that the pass is still running when the signal arrives, and
-# enough that several BATCH_FILES commits land first -- a store with nothing
-# committed would "survive" a restart trivially.
+# Enough files that several BATCH_FILES commits land before the stop -- a store
+# with nothing committed would "survive" a restart trivially.
 N_FILES = 240
 COMMITTED_BEFORE_KILL = 64
 
@@ -63,13 +62,17 @@ def _fire_search(url: str, probe, repo: Path) -> None:
         client.post(url, content=body, headers=HEADERS | probe._session)
 
 
-def _repo(path: Path) -> Path:
+def _repo(path: Path, functions: int = 1) -> Path:
     path.mkdir(parents=True)
     for i in range(N_FILES):
         (path / f"mod{i:03d}.py").write_text(
-            f'"""Module {i}."""\n\n\ndef handler_{i}(request):\n'
-            f'    """Answer request {i} and record the outcome."""\n'
-            f"    return {{'id': {i}, 'ok': True}}\n"
+            f'"""Module {i}."""\n'
+            + "".join(
+                f'\n\ndef handler_{i}_{j}(request):\n'
+                f'    """Answer request {i}.{j} and record the outcome."""\n'
+                f"    return {{'id': {i}, 'part': {j}, 'ok': True}}\n"
+                for j in range(functions)
+            )
         )
     subprocess.run(["git", "init", "-q"], cwd=path, check=True)
     return path
@@ -159,7 +162,10 @@ def daemon(tmp_path):
 
 
 def test_a_restart_mid_index_drains_the_queue_without_rebuilding(daemon, tmp_path):
-    repo = _repo(tmp_path / "repo")
+    # The worker keeps committing through uvicorn's graceful stop. One function
+    # a file finished the last 176 files in 0.9 s, inside that stop, so the
+    # restart never came mid-pass. Forty take 5.7 s.
+    repo = _repo(tmp_path / "repo", functions=40)
 
     rpc = Rpc(daemon.url)
     rpc.tool("index", root=str(repo))
@@ -168,12 +174,14 @@ def test_a_restart_mid_index_drains_the_queue_without_rebuilding(daemon, tmp_pat
         timeout=300,
         what=f"{COMMITTED_BEFORE_KILL} files committed",
     )
-    before = _store_files(daemon.state)
-    assert len(before) < N_FILES, "the kill has to land mid-pass or this asserts nothing"
 
     daemon.stop()
     rpc.close()
+    before = _store_files(daemon.state)
+    assert len(before) < N_FILES, "the pass finished during the stop, so this asserts nothing"
     killed_at = len(before)
+    # The first daemon's announcement must not answer for the second one.
+    (daemon.state / "progress.json").unlink()
 
     daemon.start()
     until(

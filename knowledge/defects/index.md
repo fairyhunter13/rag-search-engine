@@ -1,5 +1,6 @@
 # Defect
 
+* [The mid-index restart test never restarted mid-pass](the-restart-test-never-restarted-mid-pass.md) - The pass committed all 240 files during uvicorn's graceful stop, so the resume path had no working test. The test failed at random on the first daemon's stale `progress.json`. The fixture now outlasts the stop, and the test counts the store after it.
 * [Arming the watch held the GIL past the watchdog, and systemd killed the daemon 7
   times](the-watch-arm-held-the-gil-past-the-watchdog.md) - watchfiles' `RustNotify` holds the
   GIL while it walks every watched directory: 7.7 s over 110,827 at load 12, past 90 s at load
