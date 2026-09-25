@@ -114,24 +114,55 @@ def chunk_text(
         else TextSplitter
     )
     splitter = kind.from_callback(nonwhitespace, size, overlap=overlap, trim=False)
+    pieces = _windows(text, LONG_LINE) if _longest_line(text) > LONG_LINE else ((0, text),)
 
     chunks: list[Chunk] = []
     cursor, line = 0, 1
-    for offset, body in splitter.chunk_indices(text):
-        # Offsets ascend, so the newline count walks forward once across the
-        # whole file rather than rescanning the prefix for every chunk.
-        line += text.count("\n", cursor, offset)
-        cursor = offset
-        end = line + body.count("\n") - (1 if body.endswith("\n") else 0)
-        chunks.append(
-            Chunk(
-                ord=len(chunks),
-                start_line=line,
-                end_line=max(line, end),
-                n_chars=nonwhitespace(body),
-                sha256=hashlib.sha256(body.encode("utf-8", "replace")).hexdigest(),
-                text=body,
-                header=scope_header(rel_path) if header else "",
+    for base, piece in pieces:
+        for offset, body in splitter.chunk_indices(piece):
+            offset += base
+            # Offsets ascend, so the newline count walks forward once across the
+            # whole file rather than rescanning the prefix for every chunk.
+            line += text.count("\n", cursor, offset)
+            cursor = offset
+            end = line + body.count("\n") - (1 if body.endswith("\n") else 0)
+            chunks.append(
+                Chunk(
+                    ord=len(chunks),
+                    start_line=line,
+                    end_line=max(line, end),
+                    n_chars=nonwhitespace(body),
+                    sha256=hashlib.sha256(body.encode("utf-8", "replace")).hexdigest(),
+                    text=body,
+                    header=scope_header(rel_path) if header else "",
+                )
             )
-        )
     return chunks
+
+
+# A line longer than this is cut into windows before the splitter sees it. On one
+# long line the splitter measures candidates that grow with the file, and a 7.7 MB
+# one-line search.json held the GIL for 20 minutes. A file with short lines never
+# reaches the windows, so its chunks are unchanged.
+LONG_LINE = 32_768
+
+
+def _longest_line(text: str) -> int:
+    longest, start = 0, 0
+    while (end := text.find("\n", start)) >= 0:
+        longest, start = max(longest, end - start), end + 1
+    return max(longest, len(text) - start)
+
+
+def _windows(text: str, width: int):
+    """Contiguous pieces of at most `width` characters, cut after the last newline,
+    comma or space in the second half of each piece, so they concatenate to `text`."""
+    start = 0
+    while start < len(text):
+        end = min(start + width, len(text))
+        if end < len(text):
+            cut = max(text.rfind(sep, start + width // 2, end) for sep in ("\n", ",", " "))
+            if cut >= 0:
+                end = cut + 1
+        yield start, text[start:end]
+        start = end

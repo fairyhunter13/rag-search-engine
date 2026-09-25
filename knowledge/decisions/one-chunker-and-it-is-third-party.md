@@ -173,3 +173,17 @@ Carried risk with its escape hatch: the size callback is Python called from Rust
 search, O(log n) times per chunk over 61,714 files. If it measures badly, fall back to plain
 character capacity at ~2,600 and **record the substitution**. The unit becomes approximate, and
 that has to be said rather than absorbed.
+
+# The carried risk landed, 2026-09-25
+
+It landed on a different input than predicted. On one line of 7.7 MB the splitter has a single
+line boundary to search across, so it measures candidates that grow with the file: the largest
+was 853 KB at 3 MB of input, and the full file ran past 175 s. The Python callback is not the
+cause. Plain character capacity took 2.69 s on a 1.5 MB one-line file, against 2.90 s through the
+callback, so the fallback above would not have helped.
+
+`chunk_text` now cuts any text with a line over `LONG_LINE` (32,768 characters) into windows at
+the last newline, comma or space, and it chunks each window. The real file takes 2.08 s, and every
+chunk stays within 2,000 units. A file with short lines never reaches the windows, so its chunks
+are unchanged and no store is rebuilt. 324 of 141,099 indexed files, 0.23%, have lines that long.
+See [the watcher-lane defect](../defects/the-watcher-lane-skipped-the-size-cap.md).

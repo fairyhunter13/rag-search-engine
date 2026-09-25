@@ -29,3 +29,11 @@ neither lane can pass one. In the watcher lane an over-cap file drops out of `wr
 rows go to `delete`. This is the same shape as [the symlink
 defect](the-git-lane-read-through-a-file-symlink.md): the check lived in one enumerator, and
 `read` is the only place both lanes share.
+
+# The second fix: bounded windows
+
+The cap limits a file's size, not its worst case. Measured on the same file, the time grows with
+the length of the single line: 0.95 s at 1.5 MB, 2.32 s at 3 MB and over 175 s at 7.7 MB. Each
+window of 1.5 MB alone took under 1 s. `chunk_text` now splits a text with a line over
+`LONG_LINE` into windows first, so no candidate outgrows a window. The full file now takes 2.08 s.
+See [the chunker decision](../decisions/one-chunker-and-it-is-third-party.md).
