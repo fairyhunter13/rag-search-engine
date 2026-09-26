@@ -44,6 +44,15 @@ async def test_the_surface_is_exactly_two_tools():
     assert sorted(t.name for t in listed) == ["index", "search"]
 
 
+async def test_only_search_loads_before_a_client_calls_toolsearch():
+    """`search` is the tool a session reaches for on its first turn, and a client
+    that defers an unlisted schema would fail that call. `index` stays deferred:
+    a caller reaches it only after `search` names an unindexed root."""
+    listed = {t.name: t for t in await tools.mcp.list_tools()}
+    assert listed["search"].meta == {"anthropic/alwaysLoad": True}
+    assert not listed["index"].meta
+
+
 async def test_both_tools_carry_a_schema_a_caller_can_read():
     for tool in await tools.mcp.list_tools():
         assert tool.description
