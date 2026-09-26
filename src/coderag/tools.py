@@ -58,9 +58,6 @@ Code retrieval over the current project and the repos it federates.
   in order.
 - `index` is the fix when `search` says a root is not indexed, and the reply
   names it. Any other project, ask the user first.
-- A client that defers a tool schema fails the first call. Where yours does,
-  `ToolSearch` on `select:mcp__coderag__search` loads it, and that load is the
-  first half of the call.
 """
 
 mcp = MCPServer(
@@ -204,6 +201,7 @@ def _batched(answers: list[dict[str, Any]], note: str) -> dict[str, Any]:
     "up to five questions in one call -- a round trip is charged the whole resident context, so "
     "three questions batched cost about a third of three separate calls.",
     structured_output=True,
+    meta={"anthropic/alwaysLoad": True},
 )
 def search_code(
     query: str = "",
