@@ -74,7 +74,7 @@ def alert_text() -> str:
     """Wait, re-check, and only then page.
 
     A daemon that restarts cleanly in five seconds is not an incident, and a
-    desktop notification for every one of those is how an alert gets muted --
+    popup for every one of those is how an alert gets muted --
     after which the outage that mattered is silent too.
     """
     # "coderag down" was wrong once the health unit started using this path: the
@@ -87,7 +87,7 @@ Description=coderag failure alert for %i
 Type=oneshot
 ExecStartPre=/bin/sleep 8
 ExecStart=/bin/sh -c 'systemctl --user is-active --quiet %i || \
-  notify-send -u critical "coderag" "%i failed, re-checked after 8s"'
+  logger -t coderag "%i failed, re-checked after 8s"'
 """
 
 

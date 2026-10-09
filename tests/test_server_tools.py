@@ -834,6 +834,27 @@ def test_prune_forgets_a_row_whose_directory_is_gone(tmp_path, monkeypatch, caps
     assert (held[0] / "index.db").read_bytes() == b"x" * 2048
 
 
+def test_a_vanished_root_is_skipped_without_an_error(tmp_path):
+    """A deleted root keeps its row but stops failing, so the hourly health check
+    has nothing to page about. The worker clears the stale error instead of
+    recording a new one."""
+    gone = tmp_path / "deleted-worktree"
+    gone.mkdir()
+    registry.claim(gone, direct=True)
+    key = str(gone.resolve())
+    registry.record_error(gone, "FileNotFoundError: old")
+    gone.rmdir()
+
+    index._queue.put(index.Job(project=gone.resolve(), reason="reconcile"))
+    index._queue.put(None)
+    index._drain()
+
+    row = registry.get(key)
+    assert row is not None, "a missing root keeps its row"
+    assert row.last_error is None
+    assert not [k for k, e in registry.load().items() if e.enabled and e.last_error]
+
+
 def test_prune_keeps_a_missing_member_a_live_root_still_claims(tmp_path, monkeypatch, capsys):
     """The gate is the claim, not `last_error`, which the hourly sweep clears --
     gating on that would make `--prune` depend on where in the hour it ran. A

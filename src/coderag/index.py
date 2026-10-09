@@ -153,6 +153,14 @@ def _drain() -> None:
             row |= index_project(job.project, job.paths).pop("stage", {})
             _state.done += 1
         except Exception as exc:  # one bad project must not stop the queue
+            if isinstance(exc, FileNotFoundError) and not Path(job.project).is_dir():
+                # An unmounted or deleted root keeps its row (the registry never prunes on a
+                # missing path) but must not page hourly: skip it without an error.
+                row["skipped"] = "root missing"
+                log.info("root missing, skipped: %s", job.project)
+                with contextlib.suppress(Exception):
+                    registry.update(job.project, last_error=None)
+                continue
             _state.failed += 1
             row["error"] = f"{type(exc).__name__}: {exc}"
             log.exception("indexing %s failed", job.project)
